@@ -203,6 +203,10 @@ class EmbeddedResource:
     type: str = "resource"
 
 
+#: Union alias for any content item that can appear in a tool result or message.
+AnyContent = TextContent | ImageContent | EmbeddedResource
+
+
 # ---------------------------------------------------------------------------
 # Tools
 # ---------------------------------------------------------------------------

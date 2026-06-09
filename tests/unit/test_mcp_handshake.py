@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from lauren_mcp._mcp_version import LATEST, STABLE, SUPPORTED
 from lauren_mcp._server._handshake import build_initialize_result, negotiate_version
 from lauren_mcp._types import (
     ClientCapabilities,
@@ -10,7 +11,6 @@ from lauren_mcp._types import (
     InitializeResult,
     ServerCapabilities,
 )
-from lauren_mcp._version import LATEST, STABLE, SUPPORTED
 
 # ---------------------------------------------------------------------------
 # negotiate_version

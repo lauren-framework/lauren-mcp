@@ -70,7 +70,6 @@ where = ["src"]
 [tool.ruff]
 line-length    = 100
 target-version = "py311"
-cache-dir      = "/tmp/ruff-cache-lauren-mcp"
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "SIM"]

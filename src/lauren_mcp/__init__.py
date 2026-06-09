@@ -7,7 +7,9 @@ from importlib.metadata import PackageNotFoundError, version
 from ._bridge import McpServerConfig, McpToolBridge
 from ._client._factory import McpServer
 from ._client._protocol import McpClientProtocol
+from ._mcp_version import LATEST, STABLE, SUPPORTED
 from ._types import (
+    AnyContent,
     ClientCapabilities,
     EmbeddedResource,
     GetPromptParams,
@@ -38,7 +40,6 @@ from ._types import (
     build_error_response,
     parse_message,
 )
-from ._version import LATEST, STABLE, SUPPORTED
 from .server import McpServerModule, mcp_prompt, mcp_resource, mcp_server, mcp_tool
 
 __all__ = [
@@ -66,6 +67,7 @@ __all__ = [
     "TextContent",
     "ImageContent",
     "EmbeddedResource",
+    "AnyContent",
     "ToolSchema",
     "ToolCallParams",
     "ToolResult",

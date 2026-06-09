@@ -6,6 +6,7 @@ import json
 
 import pytest
 
+from lauren_mcp._mcp_version import LATEST, STABLE, SUPPORTED
 from lauren_mcp._types import (
     ImageContent,
     JsonRpcError,
@@ -24,7 +25,6 @@ from lauren_mcp._types import (
     build_error_response,
     parse_message,
 )
-from lauren_mcp._version import LATEST, STABLE, SUPPORTED
 
 # ---------------------------------------------------------------------------
 # TestJsonRpcRequest

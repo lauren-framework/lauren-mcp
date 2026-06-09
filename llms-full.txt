@@ -754,6 +754,17 @@ An embedded resource returned inside a tool call result. `TextResourceContents` 
 
 ---
 
+### AnyContent
+
+```python
+AnyContent = TextContent | ImageContent | EmbeddedResource
+```
+
+Union alias for any content item that can appear in a tool result or message.
+Use this as a type annotation when a value may be any of the three content types.
+
+---
+
 ### PromptArgument
 
 ```python

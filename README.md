@@ -107,9 +107,13 @@ consuming remote MCP tools, schema generation, transport configuration, and more
 
 ```python
 from lauren import Lauren
-from lauren_mcp import mcp_server, mcp_tool, McpServerModule
+from lauren_mcp import mcp_server, mcp_tool, mcp_resource, mcp_prompt, McpServerModule
 
-CATALOGUE = [{"id": 1, "name": "Widget A"}, {"id": 2, "name": "Widget B"}]
+CATALOGUE = [
+    {"id": 1, "name": "Widget A", "price": 9.99},
+    {"id": 2, "name": "Widget B", "price": 14.99},
+    {"id": 3, "name": "Gadget C", "price": 24.99},
+]
 
 @mcp_server("/mcp")
 class CatalogueServer:
@@ -131,15 +135,38 @@ class CatalogueServer:
         """
         return next((i for i in CATALOGUE if i["id"] == item_id), None)
 
+    @mcp_resource("/catalogue/{item_id}")
+    async def item_resource(self, item_id: str) -> str:
+        """Expose a catalogue item as a readable MCP resource.
+
+        Args:
+            item_id: The item ID extracted from the URI path.
+        """
+        item = next((i for i in CATALOGUE if i["id"] == int(item_id)), None)
+        if item is None:
+            return f"Item {item_id} not found."
+        return f"{item['name']} — ${item['price']:.2f}"
+
+    @mcp_prompt()
+    async def recommend(self, budget: str) -> str:
+        """Generate a recommendation prompt for a given budget.
+
+        Args:
+            budget: Customer's maximum budget (e.g. "20").
+        """
+        affordable = [i for i in CATALOGUE if i["price"] <= float(budget)]
+        names = ", ".join(i["name"] for i in affordable) or "none"
+        return f"Recommend a product to a customer with ${budget} budget: {names}"
+
 app = Lauren()
-app.include(McpServerModule.for_root())
+app.include_module(McpServerModule.for_root(CatalogueServer))
 ```
 
 ## Quick start — Client
 
 ```python
 from lauren_mcp import McpServer, McpServerConfig
-from lauren.contrib.ai import AgentModule
+from lauren_ai import AgentModule
 
 mcp_servers = [
     McpServerConfig(
@@ -151,7 +178,7 @@ mcp_servers = [
 ]
 
 # tools available to agent: fs__read_file, fs__write_file, fs__list_directory, ...
-app.include(AgentModule.for_root(model="claude-opus-4-5", mcp_servers=mcp_servers))
+app.include_module(AgentModule.for_root(model="claude-opus-4-5", mcp_servers=mcp_servers))
 ```
 
 ## Documentation

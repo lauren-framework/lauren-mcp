@@ -2,13 +2,13 @@
 
 from __future__ import annotations
 
+from lauren_mcp._mcp_version import LATEST, SUPPORTED
 from lauren_mcp._types import (
     Implementation,
     InitializeParams,
     InitializeResult,
     ServerCapabilities,
 )
-from lauren_mcp._version import LATEST, SUPPORTED
 
 
 def negotiate_version(client_version: str) -> str:

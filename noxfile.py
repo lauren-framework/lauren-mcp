@@ -125,7 +125,7 @@ def lint(session: nox.Session) -> None:
     """Run ruff linter."""
     _install_dev(session)
     # Redirect cache to /tmp so root-owned .ruff_cache doesn't block ci-slave runs.
-    session.run("ruff", "check", "src", "tests", "noxfile.py", "scripts", *session.posargs)
+    session.run("ruff", "check", "--fix", "src", "tests", "noxfile.py", "scripts", *session.posargs)
 
 
 @nox.session(python=PRIMARY_PYTHON, name="format")
@@ -133,7 +133,6 @@ def format_(session: nox.Session) -> None:
     """Run ruff formatter and auto-fix lint issues."""
     _install_dev(session)
     session.run("ruff", "format", "src", "tests", "noxfile.py", "scripts", *session.posargs)
-    session.run("ruff", "check", "--fix", "src", "tests", "noxfile.py", "scripts")
 
 
 @nox.session(python=PRIMARY_PYTHON, name="typecheck")
