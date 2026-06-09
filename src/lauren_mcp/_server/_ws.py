@@ -2,11 +2,10 @@
 
 from __future__ import annotations
 
-import asyncio
 import logging
 from typing import Any
 
-from lauren import on_connect, on_disconnect, ws_controller
+from lauren import WebSocket, on_connect, on_disconnect, ws_controller
 
 from lauren_mcp._server._dispatcher import McpDispatcher
 from lauren_mcp._types import (
@@ -66,9 +65,14 @@ def mcp_ws_controller(
             self._initialized: bool = False
 
         @on_connect
-        async def handle_connect(self, ws: Any) -> None:
-            """Start the message loop when the handshake completes."""
-            asyncio.create_task(self._message_loop(ws))
+        async def handle_connect(self, ws: WebSocket) -> None:
+            """Run the MCP message loop for the lifetime of this connection.
+
+            Awaiting ``_message_loop`` here keeps Lauren's built-in event-
+            routing loop from starting — MCP uses raw JSON-RPC frames, not
+            Lauren's ``event``-keyed dispatch format.
+            """
+            await self._message_loop(ws)
 
         async def _message_loop(self, ws: Any) -> None:
             """Continuously receive frames and dispatch them until the socket closes."""
@@ -154,7 +158,7 @@ def mcp_ws_controller(
             _logger.debug("MCP WS: unhandled notification method=%r", method)
 
         @on_disconnect
-        async def handle_disconnect(self, ws: Any) -> None:
+        async def handle_disconnect(self, ws: WebSocket) -> None:
             """Perform cleanup when the WebSocket connection closes."""
             # Currently no per-connection cleanup beyond what asyncio
             # handles automatically (task cancellation propagates).

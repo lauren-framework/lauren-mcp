@@ -83,10 +83,15 @@ nav:
     - Quick Start: getting-started/quick-start.md
   - Guides:
     - guides/index.md
-    - MCP Server: guides/mcp-server.md
-    - MCP Client: guides/mcp-client.md
-    - Agent Tools: guides/mcp-agent-tools.md
+    - Your First Server: guides/first-server.md
+    - Your First Client: guides/first-client.md
+    - Decorators in Depth: guides/decorators.md
+    - Multiple Servers: guides/multiple-servers.md
+    - Error Handling: guides/error-handling.md
     - Testing: guides/testing.md
+    - MCP Server (full): guides/mcp-server.md
+    - MCP Client (full): guides/mcp-client.md
+    - Agent Tools: guides/mcp-agent-tools.md
   - API Reference:
     - reference/index.md
     - Server API: reference/server.md

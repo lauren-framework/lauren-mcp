@@ -51,7 +51,7 @@ class CatalogueServer:
 
 
 app = Lauren()
-app.include(McpServerModule.for_root())
+app.include_module(McpServerModule.for_root(CatalogueServer))
 
 if __name__ == "__main__":
     import uvicorn
@@ -65,7 +65,7 @@ pip install "lauren-mcp[ws]" uvicorn
 python app.py
 ```
 
-Connect with any MCP client pointed at `ws://localhost:8000/mcp`.
+Connect with any MCP client pointed at `ws://localhost:8000/mcp/ws`.
 
 ---
 
@@ -92,7 +92,7 @@ mcp_servers = [
 ]
 
 app = Lauren()
-app.include(
+app.include_module(
     AgentModule.for_root(
         model="claude-opus-4-5",
         mcp_servers=mcp_servers,
