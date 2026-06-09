@@ -1,7 +1,9 @@
 """Unit tests for lauren_mcp.server._handlers — all six handler factories."""
+
 from __future__ import annotations
 
 import json
+
 import pytest
 
 from lauren_mcp._types import JsonRpcRequest
@@ -14,7 +16,6 @@ from lauren_mcp.server._handlers import (
     make_tools_list_handler,
 )
 from lauren_mcp.server._meta import McpPromptMeta, McpResourceMeta, McpToolMeta
-
 
 # ---------------------------------------------------------------------------
 # Shared fake server
@@ -46,9 +47,7 @@ class FakeServer:
     async def prompt_dict(self, style: str = "formal") -> dict:
         return {
             "description": "A greeting prompt",
-            "messages": [
-                {"role": "user", "content": {"type": "text", "text": f"{style} hello"}}
-            ],
+            "messages": [{"role": "user", "content": {"type": "text", "text": f"{style} hello"}}],
         }
 
 
@@ -181,18 +180,14 @@ class TestMakeToolsCallHandler:
     async def test_returns_dict_with_content_and_is_error(self):
         tools = [_make_tool_meta("greet", "greet")]
         handler = make_tools_call_handler(FAKE, tools)
-        result = await handler(
-            _req("tools/call", {"name": "greet", "arguments": {"name": "Bob"}})
-        )
+        result = await handler(_req("tools/call", {"name": "greet", "arguments": {"name": "Bob"}}))
         assert "content" in result
         assert "isError" in result
 
     async def test_string_result_wrapped_in_text_content(self):
         tools = [_make_tool_meta("greet", "greet")]
         handler = make_tools_call_handler(FAKE, tools)
-        result = await handler(
-            _req("tools/call", {"name": "greet", "arguments": {"name": "Eve"}})
-        )
+        result = await handler(_req("tools/call", {"name": "greet", "arguments": {"name": "Eve"}}))
         content = result["content"]
         assert len(content) == 1
         assert content[0]["type"] == "text"
@@ -201,9 +196,7 @@ class TestMakeToolsCallHandler:
     async def test_is_error_is_false_for_successful_call(self):
         tools = [_make_tool_meta("greet", "greet")]
         handler = make_tools_call_handler(FAKE, tools)
-        result = await handler(
-            _req("tools/call", {"name": "greet", "arguments": {"name": "X"}})
-        )
+        result = await handler(_req("tools/call", {"name": "greet", "arguments": {"name": "X"}}))
         assert result["isError"] is False
 
     async def test_dict_result_wrapped_as_json_string(self):
@@ -219,9 +212,7 @@ class TestMakeToolsCallHandler:
     async def test_list_result_wrapped_as_json_string(self):
         tools = [_make_tool_meta("returns_list_result", "returns_list_result")]
         handler = make_tools_call_handler(FAKE, tools)
-        result = await handler(
-            _req("tools/call", {"name": "returns_list_result", "arguments": {}})
-        )
+        result = await handler(_req("tools/call", {"name": "returns_list_result", "arguments": {}}))
         text = result["content"][0]["text"]
         parsed = json.loads(text)
         assert isinstance(parsed, list)
@@ -244,9 +235,7 @@ class TestMakeToolsCallHandler:
         tools = [_make_tool_meta("returns_list_result", "returns_list_result")]
         handler = make_tools_call_handler(FAKE, tools)
         # returns_list_result takes no args, so empty dict is fine
-        result = await handler(
-            _req("tools/call", {"name": "returns_list_result"})
-        )
+        result = await handler(_req("tools/call", {"name": "returns_list_result"}))
         assert "content" in result
 
 
@@ -277,9 +266,7 @@ class TestMakeResourcesListHandler:
 
     async def test_description_included_when_present(self):
         resources = [
-            _make_resource_meta(
-                "/items/{id}", "items", "get_item", description="Item resource"
-            )
+            _make_resource_meta("/items/{id}", "items", "get_item", description="Item resource")
         ]
         handler = make_resources_list_handler(resources)
         result = await handler(_req("resources/list"))
@@ -287,9 +274,7 @@ class TestMakeResourcesListHandler:
 
     async def test_mime_type_included_when_present(self):
         resources = [
-            _make_resource_meta(
-                "/pages/{uri}", "pages", "get_page", mime_type="text/html"
-            )
+            _make_resource_meta("/pages/{uri}", "pages", "get_page", mime_type="text/html")
         ]
         handler = make_resources_list_handler(resources)
         result = await handler(_req("resources/list"))
@@ -403,9 +388,7 @@ class TestMakePromptsListHandler:
         assert result["prompts"][0]["arguments"] == args
 
     async def test_description_included_when_set(self):
-        prompts = [
-            _make_prompt_meta("greeting", "prompt_string", description="A greeting prompt")
-        ]
+        prompts = [_make_prompt_meta("greeting", "prompt_string", description="A greeting prompt")]
         handler = make_prompts_list_handler(prompts)
         result = await handler(_req("prompts/list"))
         assert result["prompts"][0]["description"] == "A greeting prompt"
@@ -435,14 +418,18 @@ class TestMakePromptsGetHandler:
     async def test_calls_correct_method(self):
         prompts = [_make_prompt_meta("greeting", "prompt_string")]
         handler = make_prompts_get_handler(FAKE, prompts)
-        result = await handler(_req("prompts/get", {"name": "greeting", "arguments": {"topic": "AI"}}))
+        result = await handler(
+            _req("prompts/get", {"name": "greeting", "arguments": {"topic": "AI"}})
+        )
         # prompt_string returns "Tell me about AI"
         assert "AI" in result["messages"][0]["content"]["text"]
 
     async def test_passes_arguments_dict_to_method(self):
         prompts = [_make_prompt_meta("greeting", "prompt_string")]
         handler = make_prompts_get_handler(FAKE, prompts)
-        result = await handler(_req("prompts/get", {"name": "greeting", "arguments": {"topic": "rockets"}}))
+        result = await handler(
+            _req("prompts/get", {"name": "greeting", "arguments": {"topic": "rockets"}})
+        )
         assert "rockets" in result["messages"][0]["content"]["text"]
 
     async def test_returns_dict_with_messages_key_for_string_result(self):
@@ -470,7 +457,9 @@ class TestMakePromptsGetHandler:
     async def test_string_result_wrapped_in_user_message(self):
         prompts = [_make_prompt_meta("greeting", "prompt_string")]
         handler = make_prompts_get_handler(FAKE, prompts)
-        result = await handler(_req("prompts/get", {"name": "greeting", "arguments": {"topic": "test"}}))
+        result = await handler(
+            _req("prompts/get", {"name": "greeting", "arguments": {"topic": "test"}})
+        )
         assert result["messages"][0]["role"] == "user"
         assert result["messages"][0]["content"]["type"] == "text"
 

@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """Generate docs/generated-reference/ pages from lauren_mcp public API."""
+
 from __future__ import annotations
+
 import pathlib
 
 PAGES = {

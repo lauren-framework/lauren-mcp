@@ -673,6 +673,23 @@ Descriptor for a single MCP resource as returned by `resources/list`.
 
 ---
 
+### ResourceContent
+
+```python
+@dataclass
+class ResourceContent:
+    uri: str
+    mimeType: str | None = None
+    text: str | None = None
+    blob: str | None = None   # base-64 encoded binary
+```
+
+The content of a single resource returned inside a `resources/read` response.
+Exactly one of `text` or `blob` is populated.  `text` carries plain-text content;
+`blob` carries arbitrary binary data encoded as base-64.
+
+---
+
 ### PromptSchema
 
 ```python
@@ -917,6 +934,19 @@ class GetPromptResult:
 
 Result envelope from a `prompts/get` response. `messages` contains the rendered prompt
 as a list of role-tagged content blocks, ready to prepend to an LLM conversation.
+
+---
+
+### McpParseError
+
+```python
+class McpParseError(ValueError):
+    ...
+```
+
+Raised by `parse_message()` when a raw JSON string cannot be decoded or does not
+conform to JSON-RPC 2.0 structure (missing `jsonrpc` field, unknown message shape, etc.).
+It is a subclass of `ValueError`.
 
 ---
 

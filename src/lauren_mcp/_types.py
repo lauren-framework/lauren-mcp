@@ -1,11 +1,11 @@
 """MCP wire types as dataclasses — full JSON-RPC 2.0 + MCP protocol shapes."""
+
 from __future__ import annotations
 
 import json
 from dataclasses import dataclass, field
 from enum import IntEnum
 from typing import Any, Literal
-
 
 # ---------------------------------------------------------------------------
 # JSON-RPC 2.0 primitives
@@ -107,11 +107,11 @@ class JsonRpcErrorResponse:
 class McpErrorCode(IntEnum):
     """Standard JSON-RPC and MCP-extension error codes."""
 
-    PARSE_ERROR       = -32700
-    INVALID_REQUEST   = -32600
-    METHOD_NOT_FOUND  = -32601
-    INVALID_PARAMS    = -32602
-    INTERNAL_ERROR    = -32603
+    PARSE_ERROR = -32700
+    INVALID_REQUEST = -32600
+    METHOD_NOT_FOUND = -32601
+    INVALID_PARAMS = -32602
+    INTERNAL_ERROR = -32603
     REQUEST_CANCELLED = -32800
     CONTENT_TOO_LARGE = -32801
 
@@ -229,9 +229,7 @@ class ToolCallParams:
 class ToolResult:
     """Result returned from a ``tools/call`` invocation."""
 
-    content: list[TextContent | ImageContent | EmbeddedResource] = field(
-        default_factory=list
-    )
+    content: list[TextContent | ImageContent | EmbeddedResource] = field(default_factory=list)
     isError: bool = False
 
 
@@ -401,9 +399,7 @@ def parse_message(
 
     jsonrpc = obj.get("jsonrpc")
     if jsonrpc != "2.0":
-        raise McpParseError(
-            f"Missing or invalid 'jsonrpc' field: {jsonrpc!r} (expected '2.0')"
-        )
+        raise McpParseError(f"Missing or invalid 'jsonrpc' field: {jsonrpc!r} (expected '2.0')")
 
     has_method = "method" in obj
     has_id = "id" in obj
@@ -451,9 +447,7 @@ def parse_message(
             jsonrpc=jsonrpc,
         )
 
-    raise McpParseError(
-        f"Cannot determine JSON-RPC message type from fields: {list(obj.keys())}"
-    )
+    raise McpParseError(f"Cannot determine JSON-RPC message type from fields: {list(obj.keys())}")
 
 
 def build_error_response(

@@ -13,12 +13,14 @@ What this tests that nothing else does:
 - disconnect_all() shuts down every subprocess cleanly
 - A broken server (bad command) does not prevent healthy servers from loading
 """
+
 from __future__ import annotations
 
 import asyncio
 import os
 import sys
 import tempfile
+
 import pytest
 
 from lauren_mcp import McpServer, McpServerConfig, McpToolBridge
@@ -31,14 +33,17 @@ pytestmark = pytest.mark.asyncio
 # MockRegistry — records register_mcp_server calls, stores executor closures
 # ---------------------------------------------------------------------------
 
+
 def _make_executor(client, tool_name: str):
     """Closure mirroring what lauren_ai's ToolRegistry would create."""
+
     async def _exec(arguments: dict):
         result = await client.call_tool(tool_name, arguments)
         content = result.get("content", [])
         if content and content[0].get("type") == "text":
             return content[0]["text"]
         return result
+
     return _exec
 
 
@@ -61,6 +66,7 @@ class MockRegistry:
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
+
 
 @pytest.fixture
 def alpha_command(echo_server_command):
@@ -104,28 +110,31 @@ for line in sys.stdin:
         ]})
     elif method == "tools/call":
         args = (msg.get("params") or {}).get("arguments", {})
-        respond(id_, {"content": [{"type": "text", "text": args.get("text", "")}], "isError": False})
+        respond(id_, {"content": [{"type": "text", "text": args.get("text", "")}],
+                      "isError": False})
     elif method == "ping":
         respond(id_, {})
     elif method in ("resources/list", "prompts/list"):
         respond(id_, {method.split("/")[0]: []})
     sys.stdout.flush()
 """
-    f = tempfile.NamedTemporaryFile(mode="w", suffix=".py", delete=False)
-    f.write(script)
-    f.close()
-    yield [sys.executable, f.name]
-    os.unlink(f.name)
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".py", delete=False) as f:
+        f.write(script)
+        fname = f.name
+    yield [sys.executable, fname]
+    os.unlink(fname)
 
 
 @pytest.fixture
 async def two_server_bridge(alpha_command, beta_command):
     """McpToolBridge connecting alpha and beta echo servers, with a MockRegistry."""
     registry = MockRegistry()
-    bridge = McpToolBridge([
-        McpServerConfig(alias="alpha", client=McpServer.stdio(alpha_command)),
-        McpServerConfig(alias="beta",  client=McpServer.stdio(beta_command)),
-    ])
+    bridge = McpToolBridge(
+        [
+            McpServerConfig(alias="alpha", client=McpServer.stdio(alpha_command)),
+            McpServerConfig(alias="beta", client=McpServer.stdio(beta_command)),
+        ]
+    )
     bridge.set_registry(registry)
     await asyncio.wait_for(bridge.connect_all(), timeout=15.0)
     yield bridge, registry
@@ -135,6 +144,7 @@ async def two_server_bridge(alpha_command, beta_command):
 # ---------------------------------------------------------------------------
 # Connection and registration
 # ---------------------------------------------------------------------------
+
 
 class TestBridgeConnection:
     async def test_both_servers_registered_in_registry(self, two_server_bridge):
@@ -160,6 +170,7 @@ class TestBridgeConnection:
 # Namespace separation
 # ---------------------------------------------------------------------------
 
+
 class TestNamespacing:
     async def test_alpha_tool_namespaced_as_alpha_echo(self, two_server_bridge):
         _, registry = two_server_bridge
@@ -179,7 +190,7 @@ class TestNamespacing:
 
     async def test_tool_schemas_carry_original_name(self, two_server_bridge):
         _, registry = two_server_bridge
-        for alias, tools, _ in registry.calls:
+        for _alias, tools, _ in registry.calls:
             for tool in tools:
                 assert isinstance(tool, ToolSchema)
                 # The ToolSchema retains the original name; the registry key is namespaced
@@ -190,44 +201,41 @@ class TestNamespacing:
 # Executor call-through — routes to the correct subprocess
 # ---------------------------------------------------------------------------
 
+
 class TestExecutorCallThrough:
     async def test_alpha_executor_returns_correct_text(self, two_server_bridge):
         _, registry = two_server_bridge
         executor = registry.executors["alpha__echo"]
-        result = await asyncio.wait_for(
-            executor({"text": "hello from alpha"}), timeout=5.0
-        )
+        result = await asyncio.wait_for(executor({"text": "hello from alpha"}), timeout=5.0)
         assert result == "hello from alpha"
 
     async def test_beta_executor_returns_correct_text(self, two_server_bridge):
         _, registry = two_server_bridge
         executor = registry.executors["beta__echo"]
-        result = await asyncio.wait_for(
-            executor({"text": "hello from beta"}), timeout=5.0
-        )
+        result = await asyncio.wait_for(executor({"text": "hello from beta"}), timeout=5.0)
         assert result == "hello from beta"
 
     async def test_alpha_and_beta_executors_are_independent(self, two_server_bridge):
         """Calling alpha's executor must not affect beta's response."""
         _, registry = two_server_bridge
         alpha_exec = registry.executors["alpha__echo"]
-        beta_exec  = registry.executors["beta__echo"]
+        beta_exec = registry.executors["beta__echo"]
 
         r_alpha = await asyncio.wait_for(alpha_exec({"text": "ping-alpha"}), timeout=5.0)
-        r_beta  = await asyncio.wait_for(beta_exec({"text":  "ping-beta"}),  timeout=5.0)
+        r_beta = await asyncio.wait_for(beta_exec({"text": "ping-beta"}), timeout=5.0)
 
         assert r_alpha == "ping-alpha"
-        assert r_beta  == "ping-beta"
+        assert r_beta == "ping-beta"
 
     async def test_concurrent_calls_to_both_executors(self, two_server_bridge):
         """Concurrent calls to both executors succeed and return correct values."""
         _, registry = two_server_bridge
         alpha_exec = registry.executors["alpha__echo"]
-        beta_exec  = registry.executors["beta__echo"]
+        beta_exec = registry.executors["beta__echo"]
 
         results = await asyncio.gather(
             alpha_exec({"text": "concurrent-alpha"}),
-            beta_exec( {"text": "concurrent-beta"}),
+            beta_exec({"text": "concurrent-beta"}),
         )
         assert results[0] == "concurrent-alpha"
         assert results[1] == "concurrent-beta"
@@ -236,9 +244,7 @@ class TestExecutorCallThrough:
         _, registry = two_server_bridge
         executor = registry.executors["alpha__echo"]
         for i in range(5):
-            result = await asyncio.wait_for(
-                executor({"text": f"msg-{i}"}), timeout=5.0
-            )
+            result = await asyncio.wait_for(executor({"text": f"msg-{i}"}), timeout=5.0)
             assert result == f"msg-{i}"
 
 
@@ -246,16 +252,17 @@ class TestExecutorCallThrough:
 # Resilience — broken server does not block healthy servers
 # ---------------------------------------------------------------------------
 
+
 class TestBridgeResilience:
-    async def test_broken_server_does_not_prevent_healthy_server_loading(
-        self, echo_server_command
-    ):
+    async def test_broken_server_does_not_prevent_healthy_server_loading(self, echo_server_command):
         """If one server command is invalid the other still loads."""
         registry = MockRegistry()
-        bridge = McpToolBridge([
-            McpServerConfig(alias="good", client=McpServer.stdio(echo_server_command)),
-            McpServerConfig(alias="bad",  client=McpServer.stdio(["/nonexistent/server"])),
-        ])
+        bridge = McpToolBridge(
+            [
+                McpServerConfig(alias="good", client=McpServer.stdio(echo_server_command)),
+                McpServerConfig(alias="bad", client=McpServer.stdio(["/nonexistent/server"])),
+            ]
+        )
         bridge.set_registry(registry)
 
         # Should not raise even though "bad" will fail to connect
@@ -267,14 +274,14 @@ class TestBridgeResilience:
 
         await bridge.disconnect_all()
 
-    async def test_healthy_executor_still_works_after_sibling_failure(
-        self, echo_server_command
-    ):
+    async def test_healthy_executor_still_works_after_sibling_failure(self, echo_server_command):
         registry = MockRegistry()
-        bridge = McpToolBridge([
-            McpServerConfig(alias="ok",     client=McpServer.stdio(echo_server_command)),
-            McpServerConfig(alias="broken", client=McpServer.stdio(["/nonexistent"])),
-        ])
+        bridge = McpToolBridge(
+            [
+                McpServerConfig(alias="ok", client=McpServer.stdio(echo_server_command)),
+                McpServerConfig(alias="broken", client=McpServer.stdio(["/nonexistent"])),
+            ]
+        )
         bridge.set_registry(registry)
         await asyncio.wait_for(bridge.connect_all(), timeout=15.0)
 
@@ -290,12 +297,15 @@ class TestBridgeResilience:
 # Disconnect
 # ---------------------------------------------------------------------------
 
+
 class TestDisconnect:
     async def test_disconnect_all_completes_without_error(self, alpha_command, beta_command):
-        bridge = McpToolBridge([
-            McpServerConfig(alias="alpha", client=McpServer.stdio(alpha_command)),
-            McpServerConfig(alias="beta",  client=McpServer.stdio(beta_command)),
-        ])
+        bridge = McpToolBridge(
+            [
+                McpServerConfig(alias="alpha", client=McpServer.stdio(alpha_command)),
+                McpServerConfig(alias="beta", client=McpServer.stdio(beta_command)),
+            ]
+        )
         bridge.set_registry(MockRegistry())
         await asyncio.wait_for(bridge.connect_all(), timeout=15.0)
         # Must not raise
@@ -303,15 +313,17 @@ class TestDisconnect:
 
     async def test_disconnect_closes_all_clients(self, alpha_command, beta_command):
         alpha_client = McpServer.stdio(alpha_command)
-        beta_client  = McpServer.stdio(beta_command)
-        bridge = McpToolBridge([
-            McpServerConfig(alias="alpha", client=alpha_client),
-            McpServerConfig(alias="beta",  client=beta_client),
-        ])
+        beta_client = McpServer.stdio(beta_command)
+        bridge = McpToolBridge(
+            [
+                McpServerConfig(alias="alpha", client=alpha_client),
+                McpServerConfig(alias="beta", client=beta_client),
+            ]
+        )
         bridge.set_registry(MockRegistry())
         await asyncio.wait_for(bridge.connect_all(), timeout=15.0)
         await asyncio.wait_for(bridge.disconnect_all(), timeout=10.0)
 
         # After close, further calls should raise
-        with pytest.raises(Exception):
+        with pytest.raises(Exception):  # noqa: B017
             await asyncio.wait_for(alpha_client.list_tools(), timeout=2.0)

@@ -1,8 +1,7 @@
 """Shared fixtures for all tests."""
+
 from __future__ import annotations
 
-import json
-import asyncio
 import pytest
 
 # Echo MCP server script — used by stdio integration tests.
@@ -31,11 +30,15 @@ for line in sys.stdin:
         })
     elif method == "tools/list":
         respond(id_, {"tools": [
-            {"name": "echo", "description": "Echo input back.", "inputSchema": {"type": "object", "properties": {"text": {"type": "string"}}, "required": ["text"]}}
+            {"name": "echo", "description": "Echo input back.",
+             "inputSchema": {"type": "object",
+                             "properties": {"text": {"type": "string"}},
+                             "required": ["text"]}}
         ]})
     elif method == "tools/call":
         args = (msg.get("params") or {}).get("arguments", {})
-        respond(id_, {"content": [{"type": "text", "text": args.get("text", "")}], "isError": False})
+        respond(id_, {"content": [{"type": "text", "text": args.get("text", "")}],
+                      "isError": False})
     elif method == "ping":
         respond(id_, {})
     elif method == "resources/list":
@@ -49,12 +52,12 @@ for line in sys.stdin:
 @pytest.fixture
 def echo_server_command():
     """Return argv list for the echo MCP server subprocess."""
+    import os
     import sys
     import tempfile
-    import os
 
-    f = tempfile.NamedTemporaryFile(mode="w", suffix=".py", delete=False)
-    f.write(ECHO_MCP_SERVER_SCRIPT)
-    f.close()
-    yield [sys.executable, f.name]
-    os.unlink(f.name)
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".py", delete=False) as f:
+        f.write(ECHO_MCP_SERVER_SCRIPT)
+        fname = f.name
+    yield [sys.executable, fname]
+    os.unlink(fname)

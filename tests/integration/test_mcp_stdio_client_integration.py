@@ -1,13 +1,14 @@
 """Integration tests: McpStdioClient with a real Python subprocess MCP server."""
+
 from __future__ import annotations
 
 import asyncio
+
 import pytest
 
 from lauren_mcp import McpServer
-from lauren_mcp._client._stdio import McpStdioClient, McpCallError
+from lauren_mcp._client._stdio import McpStdioClient
 from lauren_mcp._types import ToolSchema
-
 
 # All tests are async and use the real subprocess echo server.
 pytestmark = pytest.mark.asyncio
@@ -147,5 +148,5 @@ class TestClosedClient:
         await asyncio.wait_for(client.connect(), timeout=5.0)
         await client.close()
 
-        with pytest.raises(Exception):
+        with pytest.raises(Exception):  # noqa: B017
             await asyncio.wait_for(client.list_tools(), timeout=2.0)

@@ -1,7 +1,6 @@
 """Unit tests for lauren_mcp._server._handshake."""
-from __future__ import annotations
 
-import pytest
+from __future__ import annotations
 
 from lauren_mcp._server._handshake import build_initialize_result, negotiate_version
 from lauren_mcp._types import (
@@ -12,7 +11,6 @@ from lauren_mcp._types import (
     ServerCapabilities,
 )
 from lauren_mcp._version import LATEST, STABLE, SUPPORTED
-
 
 # ---------------------------------------------------------------------------
 # negotiate_version
@@ -135,7 +133,9 @@ class TestBuildInitializeResult:
 
     def test_instructions_defaults_to_none(self):
         params = _make_params()
-        result = build_initialize_result(params, server_info=_make_server_info(), capabilities=_make_caps())
+        result = build_initialize_result(
+            params, server_info=_make_server_info(), capabilities=_make_caps()
+        )
         assert result.instructions is None
 
     def test_works_with_minimal_capabilities(self):
@@ -152,7 +152,9 @@ class TestBuildInitializeResult:
 
     def test_protocol_version_is_string(self):
         params = _make_params()
-        result = build_initialize_result(params, server_info=_make_server_info(), capabilities=_make_caps())
+        result = build_initialize_result(
+            params, server_info=_make_server_info(), capabilities=_make_caps()
+        )
         assert isinstance(result.protocolVersion, str)
 
     def test_server_info_name_propagated(self):
@@ -163,7 +165,9 @@ class TestBuildInitializeResult:
 
     def test_empty_string_client_version_falls_back_to_latest(self):
         params = _make_params(version="")
-        result = build_initialize_result(params, server_info=_make_server_info(), capabilities=_make_caps())
+        result = build_initialize_result(
+            params, server_info=_make_server_info(), capabilities=_make_caps()
+        )
         assert result.protocolVersion == LATEST
 
     def test_full_capabilities_all_fields_preserved(self):
@@ -180,5 +184,7 @@ class TestBuildInitializeResult:
 
     def test_latest_version_client_gets_latest_back(self):
         params = _make_params(version=LATEST)
-        result = build_initialize_result(params, server_info=_make_server_info(), capabilities=_make_caps())
+        result = build_initialize_result(
+            params, server_info=_make_server_info(), capabilities=_make_caps()
+        )
         assert result.protocolVersion == LATEST

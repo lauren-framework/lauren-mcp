@@ -1,4 +1,5 @@
 """Handler factories that generate async callables for the MCP dispatcher."""
+
 from __future__ import annotations
 
 import json
@@ -6,8 +7,8 @@ import re
 from typing import Any
 
 from lauren_mcp._types import JsonRpcRequest
-from ._meta import McpPromptMeta, McpResourceMeta, McpToolMeta
 
+from ._meta import McpPromptMeta, McpResourceMeta, McpToolMeta
 
 # ---------------------------------------------------------------------------
 # Tools
@@ -169,9 +170,7 @@ def make_prompts_get_handler(server_instance: Any, prompts: list[McpPromptMeta])
         if isinstance(result, str):
             return {
                 "description": meta.description or name,
-                "messages": [
-                    {"role": "user", "content": {"type": "text", "text": result}}
-                ],
+                "messages": [{"role": "user", "content": {"type": "text", "text": result}}],
             }
         elif isinstance(result, dict):
             # Already a GetPromptResult-like dict
@@ -179,9 +178,7 @@ def make_prompts_get_handler(server_instance: Any, prompts: list[McpPromptMeta])
         else:
             return {
                 "description": meta.description or name,
-                "messages": [
-                    {"role": "user", "content": {"type": "text", "text": str(result)}}
-                ],
+                "messages": [{"role": "user", "content": {"type": "text", "text": str(result)}}],
             }
 
     return handler

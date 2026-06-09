@@ -1,4 +1,5 @@
 """McpServer — factory / namespace for constructing MCP clients."""
+
 from __future__ import annotations
 
 from ._protocol import McpClientProtocol

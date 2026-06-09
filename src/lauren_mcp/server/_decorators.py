@@ -1,9 +1,11 @@
 """Decorators: mcp_server, mcp_tool, mcp_resource, mcp_prompt."""
+
 from __future__ import annotations
 
 import inspect
 import typing
-from typing import Any, Callable, TypeVar
+from collections.abc import Callable
+from typing import Any
 
 from ._meta import (
     MCP_PROMPT_META,
@@ -119,8 +121,9 @@ def mcp_server(path: str, *, transport: str = "ws"):
         path: The mount path for the MCP server endpoint (e.g. ``"/mcp"``).
         transport: One of ``"ws"``, ``"sse"``, or ``"both"``.
     """
+
     def decorator(cls: type) -> type:
-        from lauren import injectable, Scope
+        from lauren import Scope, injectable
 
         injectable(scope=Scope.SINGLETON)(cls)
         setattr(cls, MCP_SERVER_META, McpServerMeta(path=path, transport=transport))
@@ -136,6 +139,7 @@ def mcp_tool(*, name: str | None = None, description: str | None = None):
         name: Override the tool name (defaults to the method name).
         description: Override the tool description (defaults to docstring).
     """
+
     def decorator(fn: Callable) -> Callable:
         auto_name, auto_desc, schema = _build_schema(fn)
         resolved_name = name if name is not None else auto_name
@@ -167,6 +171,7 @@ def mcp_resource(
         description: Human-readable description (defaults to docstring).
         mime_type: Optional MIME type hint (e.g. ``"text/plain"``).
     """
+
     def decorator(fn: Callable) -> Callable:
         resolved_name = name if name is not None else fn.__name__
         resolved_desc = description if description is not None else _extract_description(fn)
@@ -190,14 +195,10 @@ def mcp_prompt(name: str | None = None, *, description: str | None = None):
         name: Prompt name (defaults to the method name).
         description: Human-readable description (defaults to docstring).
     """
+
     def decorator(fn: Callable) -> Callable:
         resolved_name = name if name is not None else fn.__name__
         resolved_desc = description if description is not None else _extract_description(fn)
-
-        try:
-            hints = typing.get_type_hints(fn)
-        except Exception:
-            hints = {}
 
         sig = inspect.signature(fn)
         arguments: list[dict] = []

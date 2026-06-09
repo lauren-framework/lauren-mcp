@@ -1,12 +1,13 @@
 """MCP client over stdio (subprocess) transport."""
+
 from __future__ import annotations
 
 import asyncio
 import json
 import logging
-import signal
 from asyncio.subprocess import DEVNULL, PIPE
-from typing import Any, Callable
+from collections.abc import Callable
+from typing import Any
 
 from lauren_mcp._types import (
     Implementation,
@@ -19,6 +20,7 @@ from lauren_mcp._types import (
     ToolSchema,
     parse_message,
 )
+
 from ._protocol import McpClientProtocol
 
 _logger = logging.getLogger(__name__)
@@ -93,7 +95,7 @@ class McpStdioClient(McpClientProtocol):
         """Terminate the subprocess and cancel the reader task."""
         if self._reader_task and not self._reader_task.done():
             self._reader_task.cancel()
-            try:
+            try:  # noqa: SIM105
                 await self._reader_task
             except (asyncio.CancelledError, Exception):
                 pass
@@ -105,7 +107,7 @@ class McpStdioClient(McpClientProtocol):
                 proc.terminate()
                 try:
                     await asyncio.wait_for(proc.wait(), timeout=3.0)
-                except asyncio.TimeoutError:
+                except TimeoutError:
                     proc.kill()
                     await proc.wait()
             except ProcessLookupError:

@@ -1,20 +1,29 @@
 """McpServerModule — Lauren DI module factory for MCP servers."""
+
 from __future__ import annotations
 
-from lauren import injectable, module, post_construct, Scope
+from lauren import module, post_construct
+
+from lauren_mcp._server._dispatcher import McpDispatcher
+from lauren_mcp._server._handshake import build_initialize_result
+from lauren_mcp._server._session import SseSessionStore
+from lauren_mcp._server._sse import mcp_http_sse_controller
+from lauren_mcp._server._ws import mcp_ws_controller
 from lauren_mcp._types import (
     ClientCapabilities,
     Implementation,
     InitializeParams,
-    InitializeResult,
     ServerCapabilities,
 )
-from lauren_mcp._server._dispatcher import McpDispatcher
-from lauren_mcp._server._handshake import build_initialize_result
-from lauren_mcp._server._session import SseSessionStore
-from lauren_mcp._server._ws import mcp_ws_controller
-from lauren_mcp._server._sse import mcp_http_sse_controller
 
+from ._handlers import (
+    make_prompts_get_handler,
+    make_prompts_list_handler,
+    make_resources_list_handler,
+    make_resources_read_handler,
+    make_tools_call_handler,
+    make_tools_list_handler,
+)
 from ._meta import (
     MCP_PROMPT_META,
     MCP_RESOURCE_META,
@@ -24,14 +33,6 @@ from ._meta import (
     McpResourceMeta,
     McpServerMeta,
     McpToolMeta,
-)
-from ._handlers import (
-    make_prompts_get_handler,
-    make_prompts_list_handler,
-    make_resources_list_handler,
-    make_resources_read_handler,
-    make_tools_call_handler,
-    make_tools_list_handler,
 )
 
 
@@ -186,10 +187,9 @@ class McpServerModule:
 
                 async def _initialize_handler(params: dict | None) -> dict:
                     from lauren_mcp._types import (
-                        ClientCapabilities,
-                        InitializeParams,
                         Implementation,
                     )
+
                     params = params or {}
                     client_caps_raw = params.get("capabilities") or {}
                     client_info_raw = params.get("clientInfo") or {}
@@ -291,6 +291,8 @@ class McpServerModule:
                     dispatcher.register("prompts/get", _prompts_get)
 
         _McpModule.__name__ = f"McpModule[{server_cls.__name__}]"
-        _McpModule.__qualname__ = f"McpServerModule.for_root.<locals>._McpModule[{server_cls.__name__}]"
+        _McpModule.__qualname__ = (
+            f"McpServerModule.for_root.<locals>._McpModule[{server_cls.__name__}]"
+        )
 
         return _McpModule

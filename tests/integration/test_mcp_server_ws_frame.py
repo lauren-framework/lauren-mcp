@@ -4,21 +4,18 @@ We obtain the controller class via ``mcp_ws_controller()``, instantiate it
 with a mock dispatcher, then call ``_handle_frame(mock_ws, raw)`` directly
 so we can test protocol behaviour at the frame level without a running server.
 """
+
 from __future__ import annotations
 
-import asyncio
 import json
+from unittest.mock import AsyncMock, MagicMock
+
 import pytest
-from unittest.mock import AsyncMock, MagicMock, call
 
 from lauren_mcp._server._dispatcher import McpDispatcher
 from lauren_mcp._server._ws import mcp_ws_controller
 from lauren_mcp._types import (
-    JsonRpcRequest,
-    JsonRpcResponse,
-    JsonRpcErrorResponse,
     McpErrorCode,
-    build_error_response,
 )
 
 pytestmark = pytest.mark.asyncio
@@ -80,7 +77,11 @@ class TestInitializeFirst:
         dispatcher._register_builtins()
 
         async def _init(params):
-            return {"protocolVersion": "2024-11-05", "capabilities": {}, "serverInfo": {"name": "t", "version": "1"}}
+            return {
+                "protocolVersion": "2024-11-05",
+                "capabilities": {},
+                "serverInfo": {"name": "t", "version": "1"},
+            }
 
         dispatcher.register("initialize", _init)
         ctrl = make_controller_instance(dispatcher)
@@ -149,7 +150,6 @@ class TestCancelRequest:
     async def test_cancel_request_calls_dispatcher_cancel(self):
         mock_dispatcher = MagicMock()
         mock_dispatcher.cancel = MagicMock(return_value=False)
-        ctrl = make_controller_instance.__wrapped__ if hasattr(make_controller_instance, "__wrapped__") else None
         # Build manually with mock dispatcher
         ctrl_cls = mcp_ws_controller("/mcp")
         instance = ctrl_cls.__new__(ctrl_cls)
@@ -347,7 +347,8 @@ class TestLargePayload:
 
         large_text = "x" * 1000
         payload = rpc_request(
-            "tools/call", id_=99,
+            "tools/call",
+            id_=99,
             params={"name": "echo_large", "arguments": {"text": large_text}},
         )
         await ctrl._handle_frame(ws, payload)

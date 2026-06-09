@@ -1,10 +1,10 @@
 """MCP client over HTTP + Server-Sent Events (SSE) transport."""
+
 from __future__ import annotations
 
 import asyncio
 import json
 import logging
-from typing import Any
 
 from ._base_remote import _McpBaseRemoteClient
 from ._stdio import McpCallError
@@ -17,6 +17,7 @@ _logger = logging.getLogger(__name__)
 try:
     import httpx  # type: ignore[import]
     import httpx_sse  # type: ignore[import]
+
     _SSE_AVAILABLE = True
 except ImportError:
     _SSE_AVAILABLE = False
@@ -112,23 +113,21 @@ class McpHttpSseClient(_McpBaseRemoteClient):
                 asyncio.shield(session_ready),
                 timeout=self._startup_timeout,
             )
-        except asyncio.TimeoutError:
-            raise McpCallError(
-                "Timed out waiting for SSE endpoint event", code=-32000
-            )
+        except TimeoutError:
+            raise McpCallError("Timed out waiting for SSE endpoint event", code=-32000) from None
 
     async def _close_connection(self) -> None:
         """Cancel the SSE reader task and close the HTTP client."""
         if self._reader_task and not self._reader_task.done():
             self._reader_task.cancel()
-            try:
+            try:  # noqa: SIM105
                 await self._reader_task
             except (asyncio.CancelledError, Exception):
                 pass
             self._reader_task = None
 
         if self._http_client is not None:
-            try:
+            try:  # noqa: SIM105
                 await self._http_client.aclose()
             except Exception:
                 pass
@@ -185,9 +184,7 @@ class McpHttpSseClient(_McpBaseRemoteClient):
                         # Extract session_id from the payload
                         try:
                             data = json.loads(event.data)
-                            self._session_id = data.get("session_id") or data.get(
-                                "sessionId"
-                            )
+                            self._session_id = data.get("session_id") or data.get("sessionId")
                         except (json.JSONDecodeError, AttributeError):
                             # Fallback: treat raw data as session_id string
                             self._session_id = event.data.strip()
@@ -201,9 +198,7 @@ class McpHttpSseClient(_McpBaseRemoteClient):
                             self._dispatch_message(raw)
                         continue
 
-                    _logger.debug(
-                        "MCP SSE client: unhandled event type=%r", event.event
-                    )
+                    _logger.debug("MCP SSE client: unhandled event type=%r", event.event)
 
         except asyncio.CancelledError:
             raise

@@ -1,24 +1,19 @@
 """Unit tests for _McpBaseRemoteClient, McpWebSocketClient, McpHttpSseClient."""
+
 from __future__ import annotations
 
 import asyncio
 import json
-import unittest.mock as mock
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
 from lauren_mcp._client._base_remote import _McpBaseRemoteClient
 from lauren_mcp._client._stdio import McpCallError
 from lauren_mcp._types import (
-    Implementation,
-    JsonRpcErrorResponse,
-    JsonRpcError,
     JsonRpcNotification,
-    JsonRpcResponse,
 )
-
 
 # ---------------------------------------------------------------------------
 # Concrete test subclass that replaces all abstract methods with mocks
@@ -85,7 +80,6 @@ class TestMcpBaseRemoteClient:
         """_handshake must send an initialize request."""
         client = _ConcreteClient()
         # Simulate server responding to initialize right away
-        loop = asyncio.get_running_loop()
 
         async def _fake_handshake() -> None:
             # Schedule a response for id=0 (the initialize request)
@@ -119,7 +113,6 @@ class TestMcpBaseRemoteClient:
     async def test_request_increments_next_id(self):
         """Each _request call should increment _next_id."""
         client = _ConcreteClient()
-        loop = asyncio.get_running_loop()
 
         async def _make_request_and_resolve(expected_id: int) -> None:
             async def _deliver():
@@ -448,7 +441,7 @@ class TestMcpWebSocketClient:
 
         # Create a real task so cancellation is observable
         async def _noop():
-            try:
+            try:  # noqa: SIM105
                 await asyncio.sleep(100)
             except asyncio.CancelledError:
                 pass

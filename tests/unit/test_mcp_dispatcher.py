@@ -1,18 +1,19 @@
 """Unit tests for McpDispatcher — instantiated directly, bypassing Lauren DI."""
+
 from __future__ import annotations
 
 import asyncio
+
 import pytest
-from unittest.mock import AsyncMock, MagicMock
 
 # McpDispatcher uses @injectable and @post_construct from lauren.
 # For unit tests we instantiate it directly and manually call _register_builtins
 # so the ping handler is registered without needing the full DI container.
 from lauren_mcp._server._dispatcher import McpDispatcher
 from lauren_mcp._types import (
+    JsonRpcErrorResponse,
     JsonRpcRequest,
     JsonRpcResponse,
-    JsonRpcErrorResponse,
     McpErrorCode,
 )
 
@@ -258,8 +259,7 @@ class TestConcurrentDispatches:
             d.register(f"op_{i}", await make_handler(i))
 
         tasks = [
-            asyncio.create_task(d.dispatch(make_request(f"op_{i}", id_=i + 100)))
-            for i in range(3)
+            asyncio.create_task(d.dispatch(make_request(f"op_{i}", id_=i + 100))) for i in range(3)
         ]
 
         # Release in reverse order to verify independence

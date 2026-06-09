@@ -1,4 +1,5 @@
 """McpServerConfig and McpToolBridge — connects MCP clients to the ToolRegistry."""
+
 from __future__ import annotations
 
 import asyncio
@@ -83,7 +84,7 @@ class McpToolBridge:
         for task in self._watch_tasks:
             task.cancel()
         for cfg in self._servers:
-            try:
+            try:  # noqa: SIM105
                 await cfg.client.close()
             except Exception:  # noqa: BLE001
                 pass

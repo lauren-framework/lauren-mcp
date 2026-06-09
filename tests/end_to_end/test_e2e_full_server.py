@@ -8,6 +8,7 @@ The test connects with McpStdioClient and exercises every protocol method.
 Nothing is mocked: decorator metadata, schema generation, JSON serialisation,
 subprocess I/O, client parsing, and result typing all run for real.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -15,11 +16,12 @@ import os
 import sys
 import tempfile
 import textwrap
+
 import pytest
 
 from lauren_mcp import McpServer
 from lauren_mcp._client._stdio import McpStdioClient
-from lauren_mcp._types import ToolSchema, ResourceSchema, PromptSchema
+from lauren_mcp._types import PromptSchema, ResourceSchema, ToolSchema
 
 pytestmark = pytest.mark.asyncio
 
@@ -149,14 +151,15 @@ _MATH_SERVER_SCRIPT = textwrap.dedent("""\
 # Fixtures
 # ---------------------------------------------------------------------------
 
+
 @pytest.fixture
 def math_server_command():
     """Return argv that launches the MathServer over stdin/stdout."""
-    f = tempfile.NamedTemporaryFile(mode="w", suffix=".py", delete=False)
-    f.write(_MATH_SERVER_SCRIPT)
-    f.close()
-    yield [sys.executable, f.name]
-    os.unlink(f.name)
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".py", delete=False) as f:
+        f.write(_MATH_SERVER_SCRIPT)
+        fname = f.name
+    yield [sys.executable, fname]
+    os.unlink(fname)
 
 
 @pytest.fixture
@@ -171,6 +174,7 @@ async def math_client(math_server_command):
 # ---------------------------------------------------------------------------
 # Tool discovery
 # ---------------------------------------------------------------------------
+
 
 class TestToolDiscovery:
     async def test_list_tools_returns_two_tools(self, math_client):
@@ -224,11 +228,10 @@ class TestToolDiscovery:
 # Tool invocation
 # ---------------------------------------------------------------------------
 
+
 class TestToolInvocation:
     async def test_add_3_plus_4_returns_7(self, math_client):
-        result = await asyncio.wait_for(
-            math_client.call_tool("add", {"a": 3, "b": 4}), timeout=5.0
-        )
+        result = await asyncio.wait_for(math_client.call_tool("add", {"a": 3, "b": 4}), timeout=5.0)
         content = result.get("content", [])
         text = next(c["text"] for c in content if c.get("type") == "text")
         assert "7" in text
@@ -264,9 +267,7 @@ class TestToolInvocation:
         assert result.get("isError") is False
 
     async def test_content_list_is_nonempty(self, math_client):
-        result = await asyncio.wait_for(
-            math_client.call_tool("add", {"a": 1, "b": 1}), timeout=5.0
-        )
+        result = await asyncio.wait_for(math_client.call_tool("add", {"a": 1, "b": 1}), timeout=5.0)
         assert len(result.get("content", [])) >= 1
 
     async def test_sequential_calls_return_independent_results(self, math_client):
@@ -281,6 +282,7 @@ class TestToolInvocation:
 # ---------------------------------------------------------------------------
 # Resource discovery and reading
 # ---------------------------------------------------------------------------
+
 
 class TestResources:
     async def test_list_resources_returns_one_resource(self, math_client):
@@ -298,15 +300,11 @@ class TestResources:
         assert any("data" in u for u in uris)
 
     async def test_read_resource_returns_value_of_key(self, math_client):
-        result = await asyncio.wait_for(
-            math_client.read_resource("/data/hello"), timeout=5.0
-        )
+        result = await asyncio.wait_for(math_client.read_resource("/data/hello"), timeout=5.0)
         # result is raw dict from resources/read response
         contents = result.get("contents", [])
         assert len(contents) >= 1
-        text_values = [
-            c.get("text", "") for c in contents if "text" in c
-        ]
+        text_values = [c.get("text", "") for c in contents if "text" in c]
         assert any("value_of_hello" in t for t in text_values)
 
     async def test_read_resource_different_keys_give_different_values(self, math_client):
@@ -321,6 +319,7 @@ class TestResources:
 # ---------------------------------------------------------------------------
 # Prompt discovery and retrieval
 # ---------------------------------------------------------------------------
+
 
 class TestPrompts:
     async def test_list_prompts_returns_one_prompt(self, math_client):
@@ -348,9 +347,7 @@ class TestPrompts:
             math_client.get_prompt("summarise", {"topic": "quantum computing"}), timeout=5.0
         )
         messages = result.get("messages", [])
-        assert any(
-            "quantum computing" in str(m) for m in messages
-        )
+        assert any("quantum computing" in str(m) for m in messages)
 
     async def test_get_prompt_message_role_is_user(self, math_client):
         result = await asyncio.wait_for(
@@ -363,6 +360,7 @@ class TestPrompts:
 # ---------------------------------------------------------------------------
 # Ping
 # ---------------------------------------------------------------------------
+
 
 class TestPing:
     async def test_ping_completes_without_error(self, math_client):

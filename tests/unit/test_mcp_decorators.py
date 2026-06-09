@@ -1,6 +1,7 @@
 """Unit tests for mcp_server, mcp_tool, mcp_resource, mcp_prompt decorators
 and McpServerModule.for_root().
 """
+
 from __future__ import annotations
 
 import pytest
@@ -22,7 +23,6 @@ from lauren_mcp.server._meta import (
     McpToolMeta,
 )
 from lauren_mcp.server._module import McpServerModule
-
 
 # ---------------------------------------------------------------------------
 # TestMcpServerDecorator

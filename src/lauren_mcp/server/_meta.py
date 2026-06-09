@@ -1,14 +1,15 @@
 """Metadata dataclasses attached to MCP-decorated classes and methods."""
+
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any
 
 # Attribute names used to store metadata on decorated objects
-MCP_SERVER_META   = "__mcp_server_meta__"
-MCP_TOOL_META     = "__mcp_tool_meta__"
+MCP_SERVER_META = "__mcp_server_meta__"
+MCP_TOOL_META = "__mcp_tool_meta__"
 MCP_RESOURCE_META = "__mcp_resource_meta__"
-MCP_PROMPT_META   = "__mcp_prompt_meta__"
+MCP_PROMPT_META = "__mcp_prompt_meta__"
 
 
 @dataclass
@@ -46,5 +47,5 @@ class McpPromptMeta:
 
     name: str
     description: str | None
-    arguments: list[dict]   # [{name, description, required}]
+    arguments: list[dict]  # [{name, description, required}]
     method_name: str

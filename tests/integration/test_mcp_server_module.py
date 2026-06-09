@@ -3,20 +3,19 @@
 These tests instantiate McpDispatcher directly and wire up handlers manually
 so we can verify the full dispatch round-trip without a Lauren DI container.
 """
+
 from __future__ import annotations
 
 import pytest
 
 from lauren_mcp._server._dispatcher import McpDispatcher
 from lauren_mcp._types import (
+    JsonRpcErrorResponse,
     JsonRpcRequest,
     JsonRpcResponse,
-    JsonRpcErrorResponse,
     McpErrorCode,
-    ServerCapabilities,
-    Implementation,
 )
-from lauren_mcp.server._decorators import mcp_server, mcp_tool, mcp_resource, mcp_prompt
+from lauren_mcp.server._decorators import mcp_prompt, mcp_resource, mcp_server, mcp_tool
 from lauren_mcp.server._meta import (
     MCP_SERVER_META,
     McpServerMeta,
@@ -65,6 +64,7 @@ class ToolsOnlyServer:
 @mcp_server("/mcp-empty")
 class EmptyServer:
     """A server with no tools, resources, or prompts."""
+
     pass
 
 
@@ -126,17 +126,20 @@ class TestForRootValidation:
 
     def test_module_has_lauren_module_meta(self):
         from lauren.decorators import MODULE_META
+
         mod = McpServerModule.for_root(ToolsOnlyServer)
         assert hasattr(mod, MODULE_META)
 
     def test_module_providers_include_dispatcher(self):
         from lauren.decorators import MODULE_META
+
         mod = McpServerModule.for_root(CalcServer)
         meta = getattr(mod, MODULE_META)
         assert McpDispatcher in meta.providers
 
     def test_module_providers_include_server_class(self):
         from lauren.decorators import MODULE_META
+
         mod = McpServerModule.for_root(CalcServer)
         meta = getattr(mod, MODULE_META)
         assert CalcServer in meta.providers
@@ -155,53 +158,99 @@ class TestServerCapabilities:
     async def test_capabilities_include_tools_when_tools_present(self):
         """A server with tools should have tools in auto-inferred capabilities."""
         dispatcher, _ = build_wired_dispatcher(CalcServer)
-        resp = await dispatcher.dispatch(make_req("initialize", id_=1, params={
-            "protocolVersion": "2024-11-05",
-            "capabilities": {},
-            "clientInfo": {"name": "t", "version": "0"},
-        }))
+        resp = await dispatcher.dispatch(
+            make_req(
+                "initialize",
+                id_=1,
+                params={
+                    "protocolVersion": "2024-11-05",
+                    "capabilities": {},
+                    "clientInfo": {"name": "t", "version": "0"},
+                },
+            )
+        )
         assert isinstance(resp, JsonRpcResponse)
         assert "tools" in resp.result.get("capabilities", {})
 
     async def test_capabilities_include_resources_when_resources_present(self):
         dispatcher, _ = build_wired_dispatcher(CalcServer)
-        resp = await dispatcher.dispatch(make_req("initialize", id_=2, params={
-            "protocolVersion": "2024-11-05", "capabilities": {}, "clientInfo": {"name": "t", "version": "0"},
-        }))
+        resp = await dispatcher.dispatch(
+            make_req(
+                "initialize",
+                id_=2,
+                params={
+                    "protocolVersion": "2024-11-05",
+                    "capabilities": {},
+                    "clientInfo": {"name": "t", "version": "0"},
+                },
+            )
+        )
         assert isinstance(resp, JsonRpcResponse)
         assert "resources" in resp.result.get("capabilities", {})
 
     async def test_capabilities_include_prompts_when_prompts_present(self):
         dispatcher, _ = build_wired_dispatcher(CalcServer)
-        resp = await dispatcher.dispatch(make_req("initialize", id_=3, params={
-            "protocolVersion": "2024-11-05", "capabilities": {}, "clientInfo": {"name": "t", "version": "0"},
-        }))
+        resp = await dispatcher.dispatch(
+            make_req(
+                "initialize",
+                id_=3,
+                params={
+                    "protocolVersion": "2024-11-05",
+                    "capabilities": {},
+                    "clientInfo": {"name": "t", "version": "0"},
+                },
+            )
+        )
         assert isinstance(resp, JsonRpcResponse)
         assert "prompts" in resp.result.get("capabilities", {})
 
     async def test_capabilities_no_tools_when_no_tool_methods(self):
         dispatcher, _ = build_wired_dispatcher(EmptyServer)
-        resp = await dispatcher.dispatch(make_req("initialize", id_=4, params={
-            "protocolVersion": "2024-11-05", "capabilities": {}, "clientInfo": {"name": "t", "version": "0"},
-        }))
+        resp = await dispatcher.dispatch(
+            make_req(
+                "initialize",
+                id_=4,
+                params={
+                    "protocolVersion": "2024-11-05",
+                    "capabilities": {},
+                    "clientInfo": {"name": "t", "version": "0"},
+                },
+            )
+        )
         assert isinstance(resp, JsonRpcResponse)
         caps = resp.result.get("capabilities", {})
         assert "tools" not in caps
 
     async def test_capabilities_no_resources_when_no_resource_methods(self):
         dispatcher, _ = build_wired_dispatcher(ToolsOnlyServer)
-        resp = await dispatcher.dispatch(make_req("initialize", id_=5, params={
-            "protocolVersion": "2024-11-05", "capabilities": {}, "clientInfo": {"name": "t", "version": "0"},
-        }))
+        resp = await dispatcher.dispatch(
+            make_req(
+                "initialize",
+                id_=5,
+                params={
+                    "protocolVersion": "2024-11-05",
+                    "capabilities": {},
+                    "clientInfo": {"name": "t", "version": "0"},
+                },
+            )
+        )
         assert isinstance(resp, JsonRpcResponse)
         caps = resp.result.get("capabilities", {})
         assert "resources" not in caps
 
     async def test_capabilities_no_prompts_when_no_prompt_methods(self):
         dispatcher, _ = build_wired_dispatcher(ToolsOnlyServer)
-        resp = await dispatcher.dispatch(make_req("initialize", id_=6, params={
-            "protocolVersion": "2024-11-05", "capabilities": {}, "clientInfo": {"name": "t", "version": "0"},
-        }))
+        resp = await dispatcher.dispatch(
+            make_req(
+                "initialize",
+                id_=6,
+                params={
+                    "protocolVersion": "2024-11-05",
+                    "capabilities": {},
+                    "clientInfo": {"name": "t", "version": "0"},
+                },
+            )
+        )
         assert isinstance(resp, JsonRpcResponse)
         caps = resp.result.get("capabilities", {})
         assert "prompts" not in caps
@@ -263,20 +312,26 @@ class TestDispatchRoundTrips:
 
     async def test_tools_call_add_returns_correct_result(self):
         dispatcher, _ = build_wired_dispatcher(CalcServer)
-        resp = await dispatcher.dispatch(make_req(
-            "tools/call", id_=21,
-            params={"name": "add", "arguments": {"a": 5, "b": 3}},
-        ))
+        resp = await dispatcher.dispatch(
+            make_req(
+                "tools/call",
+                id_=21,
+                params={"name": "add", "arguments": {"a": 5, "b": 3}},
+            )
+        )
         assert isinstance(resp, JsonRpcResponse)
         content = resp.result.get("content", [])
         assert any("8" in item.get("text", "") for item in content if item.get("type") == "text")
 
     async def test_tools_call_unknown_tool_returns_internal_error(self):
         dispatcher, _ = build_wired_dispatcher(CalcServer)
-        resp = await dispatcher.dispatch(make_req(
-            "tools/call", id_=22,
-            params={"name": "NONEXISTENT", "arguments": {}},
-        ))
+        resp = await dispatcher.dispatch(
+            make_req(
+                "tools/call",
+                id_=22,
+                params={"name": "NONEXISTENT", "arguments": {}},
+            )
+        )
         assert isinstance(resp, JsonRpcErrorResponse)
         assert resp.error.code == McpErrorCode.INTERNAL_ERROR
 
@@ -320,6 +375,7 @@ class TestTransportControllers:
     def test_ws_transport_produces_ws_controller_in_module(self):
         from lauren.decorators import MODULE_META
         from lauren.websockets import WS_CONTROLLER_META
+
         mod = McpServerModule.for_root(ToolsOnlyServer, transport="ws")
         meta = getattr(mod, MODULE_META)
         # Should have exactly 1 controller (WS only)
@@ -331,8 +387,7 @@ class TestTransportControllers:
         assert ws_meta.path.endswith("/ws")
 
     def test_sse_transport_produces_sse_controller_in_module(self):
-        from lauren.decorators import MODULE_META, CONTROLLER_META
-        from lauren.websockets import WS_CONTROLLER_META
+        from lauren.decorators import CONTROLLER_META, MODULE_META
 
         @mcp_server("/mcp-test-sse")
         class SseTestServer:

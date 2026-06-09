@@ -1,4 +1,5 @@
 """Abstract base class defining the MCP client protocol."""
+
 from __future__ import annotations
 
 from abc import ABC, abstractmethod

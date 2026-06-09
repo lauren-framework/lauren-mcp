@@ -1,14 +1,14 @@
 """MCP initialize handshake helpers — version negotiation and result building."""
+
 from __future__ import annotations
 
 from lauren_mcp._types import (
+    Implementation,
     InitializeParams,
     InitializeResult,
     ServerCapabilities,
-    Implementation,
-    ClientCapabilities,
 )
-from lauren_mcp._version import SUPPORTED, LATEST
+from lauren_mcp._version import LATEST, SUPPORTED
 
 
 def negotiate_version(client_version: str) -> str:

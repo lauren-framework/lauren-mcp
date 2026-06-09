@@ -3,16 +3,18 @@
 These tests instantiate McpDispatcher directly (no Lauren DI container),
 call ``_register_builtins()`` manually, then exercise ``dispatch()`` end-to-end.
 """
+
 from __future__ import annotations
 
 import asyncio
+
 import pytest
 
 from lauren_mcp._server._dispatcher import McpDispatcher
 from lauren_mcp._types import (
+    JsonRpcErrorResponse,
     JsonRpcRequest,
     JsonRpcResponse,
-    JsonRpcErrorResponse,
     McpErrorCode,
 )
 
@@ -52,11 +54,15 @@ class TestInitializeHandler:
             }
 
         d.register("initialize", _init)
-        req = make_req("initialize", id_=1, params={
-            "protocolVersion": "2024-11-05",
-            "capabilities": {},
-            "clientInfo": {"name": "test", "version": "0.0.1"},
-        })
+        req = make_req(
+            "initialize",
+            id_=1,
+            params={
+                "protocolVersion": "2024-11-05",
+                "capabilities": {},
+                "clientInfo": {"name": "test", "version": "0.0.1"},
+            },
+        )
         resp = await d.dispatch(req)
         assert isinstance(resp, JsonRpcResponse)
         assert resp.jsonrpc == "2.0"
@@ -65,7 +71,11 @@ class TestInitializeHandler:
         d = make_dispatcher()
 
         async def _init(params):
-            return {"protocolVersion": "2024-11-05", "capabilities": {}, "serverInfo": {"name": "s", "version": "1.0"}}
+            return {
+                "protocolVersion": "2024-11-05",
+                "capabilities": {},
+                "serverInfo": {"name": "s", "version": "1.0"},
+            }
 
         d.register("initialize", _init)
         resp = await d.dispatch(make_req("initialize", id_=2))
@@ -76,7 +86,11 @@ class TestInitializeHandler:
         d = make_dispatcher()
 
         async def _init(params):
-            return {"protocolVersion": "2024-11-05", "capabilities": {"tools": {}}, "serverInfo": {"name": "s", "version": "1"}}
+            return {
+                "protocolVersion": "2024-11-05",
+                "capabilities": {"tools": {}},
+                "serverInfo": {"name": "s", "version": "1"},
+            }
 
         d.register("initialize", _init)
         resp = await d.dispatch(make_req("initialize", id_=3))
@@ -87,7 +101,11 @@ class TestInitializeHandler:
         d = make_dispatcher()
 
         async def _init(params):
-            return {"protocolVersion": "2024-11-05", "capabilities": {}, "serverInfo": {"name": "myserver", "version": "2.0"}}
+            return {
+                "protocolVersion": "2024-11-05",
+                "capabilities": {},
+                "serverInfo": {"name": "myserver", "version": "2.0"},
+            }
 
         d.register("initialize", _init)
         resp = await d.dispatch(make_req("initialize", id_=4))
@@ -151,7 +169,9 @@ class TestToolsCall:
             raise ValueError(f"Unknown tool: {name!r}")
 
         d.register("tools/call", _tools_call)
-        resp = await d.dispatch(make_req("tools/call", id_=20, params={"name": "add", "arguments": {"a": 3, "b": 4}}))
+        resp = await d.dispatch(
+            make_req("tools/call", id_=20, params={"name": "add", "arguments": {"a": 3, "b": 4}})
+        )
         assert isinstance(resp, JsonRpcResponse)
         content = resp.result["content"]
         assert len(content) >= 1
@@ -165,7 +185,9 @@ class TestToolsCall:
             raise ValueError("Unknown tool: 'nonexistent'")
 
         d.register("tools/call", _tools_call)
-        resp = await d.dispatch(make_req("tools/call", id_=21, params={"name": "nonexistent", "arguments": {}}))
+        resp = await d.dispatch(
+            make_req("tools/call", id_=21, params={"name": "nonexistent", "arguments": {}})
+        )
         assert isinstance(resp, JsonRpcErrorResponse)
         assert resp.error.code == McpErrorCode.INTERNAL_ERROR
 
@@ -283,14 +305,14 @@ class TestConcurrentDispatches:
                 await gates[n].wait()
                 results.append(n)
                 return {"index": n}
+
             return handler
 
         for i in range(5):
             d.register(f"op_{i}", make_handler(i))
 
         tasks = [
-            asyncio.create_task(d.dispatch(make_req(f"op_{i}", id_=i + 100)))
-            for i in range(5)
+            asyncio.create_task(d.dispatch(make_req(f"op_{i}", id_=i + 100))) for i in range(5)
         ]
 
         # Release in reverse order
@@ -311,7 +333,9 @@ class TestConcurrentDispatches:
 
         d.register("echo_id", echo_id)
         tasks = [
-            asyncio.create_task(d.dispatch(make_req("echo_id", id_=i + 200, params={"my_id": i + 200})))
+            asyncio.create_task(
+                d.dispatch(make_req("echo_id", id_=i + 200, params={"my_id": i + 200}))
+            )
             for i in range(5)
         ]
         responses = await asyncio.gather(*tasks)

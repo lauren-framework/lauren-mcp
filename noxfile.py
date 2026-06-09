@@ -1,8 +1,9 @@
 """Nox sessions for lauren-mcp."""
+
 from __future__ import annotations
 
-import shutil
 import pathlib
+import shutil
 
 import nox
 
@@ -10,11 +11,12 @@ PRIMARY_PYTHON = "3.12"
 SUPPORTED_PYTHONS = ["3.11", "3.12", "3.13", "3.14"]
 
 nox.options.sessions = ["lint", "tests", "format", "build", "build_check", "llms_check", "prek"]
-
+nox.options.reuse_venv = "yes"
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def _install_dev(session: nox.Session) -> None:
     session.run("uv", "sync", "--extra", "dev", "--active", external=True)
@@ -27,6 +29,7 @@ def _install_all(session: nox.Session) -> None:
 # ---------------------------------------------------------------------------
 # Test sessions
 # ---------------------------------------------------------------------------
+
 
 @nox.session(python=SUPPORTED_PYTHONS, name="tests")
 def tests(session: nox.Session) -> None:
@@ -57,7 +60,13 @@ def tests_extras(session: nox.Session) -> None:
         session.log(f"--- Testing extra: {extra!r} ---")
         if extra:
             session.run(
-                "uv", "sync", "--extra", extra, "--extra", "dev", "--active",
+                "uv",
+                "sync",
+                "--extra",
+                extra,
+                "--extra",
+                "dev",
+                "--active",
                 external=True,
             )
         else:
@@ -70,7 +79,8 @@ def tests_extras(session: nox.Session) -> None:
         if extra == "":
             # in the bare case, importing the ws transport module must raise ImportError
             session.run(
-                "python", "-c",
+                "python",
+                "-c",
                 (
                     "import importlib, sys; "
                     "spec = importlib.util.find_spec('lauren_mcp._client._ws'); "
@@ -79,7 +89,7 @@ def tests_extras(session: nox.Session) -> None:
                     "r = subprocess.run([sys.executable, '-c', "
                     "    'from lauren_mcp._client._ws import WsClient'], "
                     "    capture_output=True); "
-                    "assert r.returncode != 0, 'Expected ImportError for bare install but got returncode 0'; "
+                    "assert r.returncode != 0, 'Expected ImportError for bare install but got returncode 0'; "  # noqa: E501
                     "print('OK: WsClient raises ImportError in bare install')"
                 ),
                 external=False,
@@ -89,6 +99,7 @@ def tests_extras(session: nox.Session) -> None:
 # ---------------------------------------------------------------------------
 # Coverage
 # ---------------------------------------------------------------------------
+
 
 @nox.session(python=PRIMARY_PYTHON, name="coverage")
 def coverage(session: nox.Session) -> None:
@@ -108,10 +119,12 @@ def coverage(session: nox.Session) -> None:
 # Linting / formatting / type-checking
 # ---------------------------------------------------------------------------
 
+
 @nox.session(python=PRIMARY_PYTHON, name="lint")
 def lint(session: nox.Session) -> None:
     """Run ruff linter."""
     _install_dev(session)
+    # Redirect cache to /tmp so root-owned .ruff_cache doesn't block ci-slave runs.
     session.run("ruff", "check", "src", "tests", "noxfile.py", "scripts", *session.posargs)
 
 
@@ -134,6 +147,7 @@ def typecheck(session: nox.Session) -> None:
 # Auxiliary checks
 # ---------------------------------------------------------------------------
 
+
 @nox.session(python=PRIMARY_PYTHON, name="llms_check")
 def llms_check(session: nox.Session) -> None:
     """Verify that llms-full.txt covers all public symbols."""
@@ -152,6 +166,7 @@ def prek(session: nox.Session) -> None:
 # Docs
 # ---------------------------------------------------------------------------
 
+
 @nox.session(python=PRIMARY_PYTHON, name="docs")
 def docs(session: nox.Session) -> None:
     """Build the MkDocs documentation (strict mode)."""
@@ -169,6 +184,7 @@ def docs_serve(session: nox.Session) -> None:
 # ---------------------------------------------------------------------------
 # Build & release
 # ---------------------------------------------------------------------------
+
 
 @nox.session(python=PRIMARY_PYTHON, name="build")
 def build(session: nox.Session) -> None:
@@ -190,6 +206,7 @@ def build_check(session: nox.Session) -> None:
 # ---------------------------------------------------------------------------
 # Clean
 # ---------------------------------------------------------------------------
+
 
 @nox.session(python=False, name="clean")
 def clean(session: nox.Session) -> None:

@@ -1,21 +1,23 @@
 """WebSocket transport controller factory for MCP over WebSockets."""
+
 from __future__ import annotations
 
 import asyncio
 import logging
 from typing import Any
 
-from lauren import ws_controller, on_connect, on_disconnect, injectable, Scope
+from lauren import on_connect, on_disconnect, ws_controller
+
 from lauren_mcp._server._dispatcher import McpDispatcher
 from lauren_mcp._types import (
-    parse_message,
+    JsonRpcErrorResponse,
     JsonRpcNotification,
     JsonRpcRequest,
     JsonRpcResponse,
-    JsonRpcErrorResponse,
-    build_error_response,
     McpErrorCode,
     McpParseError,
+    build_error_response,
+    parse_message,
 )
 
 _logger = logging.getLogger(__name__)
@@ -110,25 +112,20 @@ def mcp_ws_controller(
                     err = build_error_response(
                         id=msg.id,
                         code=McpErrorCode.INVALID_REQUEST,
-                        message=(
-                            "Server has not been initialized. "
-                            "Send 'initialize' first."
-                        ),
+                        message=("Server has not been initialized. Send 'initialize' first."),
                     )
                     await ws.send_text(err.to_json())
                     return
 
-                response: JsonRpcResponse | JsonRpcErrorResponse = (
-                    await self._dispatcher.dispatch(msg)
+                response: JsonRpcResponse | JsonRpcErrorResponse = await self._dispatcher.dispatch(
+                    msg
                 )
                 await ws.send_text(response.to_json())
                 return
 
             # JsonRpcResponse / JsonRpcErrorResponse arriving on the server
             # side are unexpected — log and ignore.
-            _logger.warning(
-                "MCP WS server received a response frame (unexpected): %s", raw[:200]
-            )
+            _logger.warning("MCP WS server received a response frame (unexpected): %s", raw[:200])
 
         async def _handle_notification(self, notification: JsonRpcNotification) -> None:
             """Handle a JSON-RPC notification from the client."""

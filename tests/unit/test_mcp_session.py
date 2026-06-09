@@ -1,11 +1,10 @@
 """Unit tests for lauren_mcp._server._session.SseSessionStore."""
+
 from __future__ import annotations
 
 import asyncio
-import pytest
 
 from lauren_mcp._server._session import SseSessionStore
-
 
 # ---------------------------------------------------------------------------
 # Helpers

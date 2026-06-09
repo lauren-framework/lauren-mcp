@@ -1,14 +1,15 @@
 """Unit tests for McpStdioClient using mocked subprocess."""
+
 from __future__ import annotations
 
 import asyncio
 import json
+from unittest.mock import AsyncMock, MagicMock, patch
+
 import pytest
-from unittest.mock import AsyncMock, MagicMock, patch, call
 
-from lauren_mcp._client._stdio import McpStdioClient, McpCallError
+from lauren_mcp._client._stdio import McpCallError, McpStdioClient
 from lauren_mcp._types import ToolSchema
-
 
 # ---------------------------------------------------------------------------
 # Helper: MockProcess
@@ -57,9 +58,20 @@ class MockProcess:
         self.returncode: int | None = None
         self._terminate_called = False
         self._kill_called = False
+        self._stdout_reader = MagicMock()
+
+        # Always sleep before reading so that Python 3.11's extra wait_for
+        # call_soon hops don't cause _read_loop to consume the next line
+        # before the test code can register the matching pending future.
+        # The sleep lives here (not in _readline) so it applies even when
+        # tests override proc._readline with a patched function.
+        async def _forward():
+            await asyncio.sleep(0.01)
+            return await self._readline()
+
+        self._stdout_reader.readline = _forward
 
     async def _readline(self) -> bytes:
-        await asyncio.sleep(0)  # yield control
         if self._line_index < len(self._lines):
             line = self._lines[self._line_index]
             self._line_index += 1
@@ -70,9 +82,7 @@ class MockProcess:
 
     @property
     def stdout(self):
-        reader = MagicMock()
-        reader.readline = self._readline
-        return reader
+        return self._stdout_reader
 
     def terminate(self):
         self._terminate_called = True
@@ -91,15 +101,17 @@ def _make_line(obj: dict) -> bytes:
 
 
 def _init_resp(id_: int) -> bytes:
-    return _make_line({
-        "jsonrpc": "2.0",
-        "id": id_,
-        "result": {
-            "protocolVersion": "2024-11-05",
-            "capabilities": {"tools": {}},
-            "serverInfo": {"name": "test-server", "version": "1.0"},
-        },
-    })
+    return _make_line(
+        {
+            "jsonrpc": "2.0",
+            "id": id_,
+            "result": {
+                "protocolVersion": "2024-11-05",
+                "capabilities": {"tools": {}},
+                "serverInfo": {"name": "test-server", "version": "1.0"},
+            },
+        }
+    )
 
 
 def _tools_list_resp(id_: int, tools: list[dict]) -> bytes:
@@ -107,19 +119,23 @@ def _tools_list_resp(id_: int, tools: list[dict]) -> bytes:
 
 
 def _call_result(id_: int, content: list[dict]) -> bytes:
-    return _make_line({
-        "jsonrpc": "2.0",
-        "id": id_,
-        "result": {"content": content, "isError": False},
-    })
+    return _make_line(
+        {
+            "jsonrpc": "2.0",
+            "id": id_,
+            "result": {"content": content, "isError": False},
+        }
+    )
 
 
 def _error_resp(id_: int, code: int, message: str) -> bytes:
-    return _make_line({
-        "jsonrpc": "2.0",
-        "id": id_,
-        "error": {"code": code, "message": message},
-    })
+    return _make_line(
+        {
+            "jsonrpc": "2.0",
+            "id": id_,
+            "error": {"code": code, "message": message},
+        }
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -139,9 +155,9 @@ class TestMcpStdioClientConnect:
             "asyncio.create_subprocess_exec",
             new=AsyncMock(return_value=proc),
         ) as mock_exec:
-            try:
+            try:  # noqa: SIM105
                 await asyncio.wait_for(client.connect(), timeout=2.0)
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 pass
             mock_exec.assert_called_once()
             call_args = mock_exec.call_args[0]
@@ -154,9 +170,9 @@ class TestMcpStdioClientConnect:
         proc = MockProcess(response_lines=[_init_resp(0)])
 
         with patch("asyncio.create_subprocess_exec", new=AsyncMock(return_value=proc)):
-            try:
+            try:  # noqa: SIM105
                 await asyncio.wait_for(client.connect(), timeout=2.0)
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 pass
 
         written = proc.stdin.get_lines()
@@ -169,9 +185,9 @@ class TestMcpStdioClientConnect:
         proc = MockProcess(response_lines=[_init_resp(0)])
 
         with patch("asyncio.create_subprocess_exec", new=AsyncMock(return_value=proc)):
-            try:
+            try:  # noqa: SIM105
                 await asyncio.wait_for(client.connect(), timeout=2.0)
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 pass
 
         written = proc.stdin.get_lines()
@@ -180,13 +196,17 @@ class TestMcpStdioClientConnect:
 
     @pytest.mark.asyncio
     async def test_connect_raises_on_timeout(self):
-        client = McpStdioClient(["python", "server.py"], startup_timeout=0.01)
+        # startup_timeout must be shorter than _forward's sleep(0.01) so the
+        # timeout fires before any response is delivered.
+        client = McpStdioClient(["python", "server.py"], startup_timeout=0.001)
         # Give no responses — will timeout
         proc = MockProcess(response_lines=[])
 
-        with patch("asyncio.create_subprocess_exec", new=AsyncMock(return_value=proc)):
-            with pytest.raises(asyncio.TimeoutError):
-                await client.connect()
+        with (
+            patch("asyncio.create_subprocess_exec", new=AsyncMock(return_value=proc)),
+            pytest.raises(asyncio.TimeoutError),
+        ):
+            await client.connect()
 
 
 class TestMcpStdioClientListTools:
@@ -198,10 +218,12 @@ class TestMcpStdioClientListTools:
             "description": "Echo input",
             "inputSchema": {"type": "object", "properties": {"text": {"type": "string"}}},
         }
-        proc = MockProcess(response_lines=[
-            _init_resp(0),
-            _tools_list_resp(1, [tool_dict]),
-        ])
+        proc = MockProcess(
+            response_lines=[
+                _init_resp(0),
+                _tools_list_resp(1, [tool_dict]),
+            ]
+        )
 
         with patch("asyncio.create_subprocess_exec", new=AsyncMock(return_value=proc)):
             await asyncio.wait_for(client.connect(), timeout=2.0)
@@ -215,10 +237,12 @@ class TestMcpStdioClientListTools:
     @pytest.mark.asyncio
     async def test_list_tools_returns_empty_list(self):
         client = McpStdioClient(["python", "server.py"])
-        proc = MockProcess(response_lines=[
-            _init_resp(0),
-            _tools_list_resp(1, []),
-        ])
+        proc = MockProcess(
+            response_lines=[
+                _init_resp(0),
+                _tools_list_resp(1, []),
+            ]
+        )
 
         with patch("asyncio.create_subprocess_exec", new=AsyncMock(return_value=proc)):
             await asyncio.wait_for(client.connect(), timeout=2.0)
@@ -231,16 +255,16 @@ class TestMcpStdioClientCallTool:
     @pytest.mark.asyncio
     async def test_call_tool_sends_correct_params(self):
         client = McpStdioClient(["python", "server.py"])
-        proc = MockProcess(response_lines=[
-            _init_resp(0),
-            _call_result(1, [{"type": "text", "text": "hello"}]),
-        ])
+        proc = MockProcess(
+            response_lines=[
+                _init_resp(0),
+                _call_result(1, [{"type": "text", "text": "hello"}]),
+            ]
+        )
 
         with patch("asyncio.create_subprocess_exec", new=AsyncMock(return_value=proc)):
             await asyncio.wait_for(client.connect(), timeout=2.0)
-            await asyncio.wait_for(
-                client.call_tool("echo", {"text": "hello"}), timeout=2.0
-            )
+            await asyncio.wait_for(client.call_tool("echo", {"text": "hello"}), timeout=2.0)
 
         written = proc.stdin.get_lines()
         tool_call = next(m for m in written if m.get("method") == "tools/call")
@@ -251,10 +275,12 @@ class TestMcpStdioClientCallTool:
     async def test_call_tool_returns_content_list(self):
         client = McpStdioClient(["python", "server.py"])
         content = [{"type": "text", "text": "world"}]
-        proc = MockProcess(response_lines=[
-            _init_resp(0),
-            _call_result(1, content),
-        ])
+        proc = MockProcess(
+            response_lines=[
+                _init_resp(0),
+                _call_result(1, content),
+            ]
+        )
 
         with patch("asyncio.create_subprocess_exec", new=AsyncMock(return_value=proc)):
             await asyncio.wait_for(client.connect(), timeout=2.0)
@@ -280,15 +306,12 @@ class TestMcpStdioClientConcurrency:
         }
         sent_ids: list[int] = []
 
-        original_send = None
-
         async def fake_send(obj):
             if obj.get("method") in ("initialize", "notifications/initialized"):
                 return
             req_id = obj.get("id")
             if req_id in response_map:
                 sent_ids.append(req_id)
-                loop = asyncio.get_running_loop()
                 fut = client._pending.get(req_id)
                 if fut and not fut.done():
                     fut.set_result(response_map[req_id]["result"])
@@ -313,10 +336,12 @@ class TestMcpStdioClientErrors:
     @pytest.mark.asyncio
     async def test_error_response_raises_mcp_call_error(self):
         client = McpStdioClient(["python", "server.py"])
-        proc = MockProcess(response_lines=[
-            _init_resp(0),
-            _error_resp(1, -32601, "Method not found"),
-        ])
+        proc = MockProcess(
+            response_lines=[
+                _init_resp(0),
+                _error_resp(1, -32601, "Method not found"),
+            ]
+        )
 
         with patch("asyncio.create_subprocess_exec", new=AsyncMock(return_value=proc)):
             await asyncio.wait_for(client.connect(), timeout=2.0)
@@ -334,11 +359,13 @@ class TestMcpStdioClientErrors:
     async def test_malformed_json_from_server_ignored_not_raised(self):
         """Malformed JSON lines should be skipped, not crash the client."""
         client = McpStdioClient(["python", "server.py"])
-        proc = MockProcess(response_lines=[
-            _init_resp(0),
-            b"NOT VALID JSON\n",
-            _tools_list_resp(1, []),
-        ])
+        proc = MockProcess(
+            response_lines=[
+                _init_resp(0),
+                b"NOT VALID JSON\n",
+                _tools_list_resp(1, []),
+            ]
+        )
 
         with patch("asyncio.create_subprocess_exec", new=AsyncMock(return_value=proc)):
             await asyncio.wait_for(client.connect(), timeout=2.0)
@@ -376,14 +403,15 @@ class TestMcpStdioClientClose:
         """When the subprocess exits (EOF), pending futures must be failed."""
         client = McpStdioClient(["python", "server.py"], max_retries=0)
         # Only the init response; no response to tools/list
-        proc = MockProcess(response_lines=[
-            _init_resp(0),
-            # EOF immediately after init
-        ])
+        proc = MockProcess(
+            response_lines=[
+                _init_resp(0),
+                # EOF immediately after init
+            ]
+        )
 
         # Make readline return EOF immediately after init
         call_count = 0
-        orig_readline = proc._readline
 
         async def patched_readline():
             nonlocal call_count
@@ -397,7 +425,7 @@ class TestMcpStdioClientClose:
         with patch("asyncio.create_subprocess_exec", new=AsyncMock(return_value=proc)):
             await asyncio.wait_for(client.connect(), timeout=2.0)
             # Now try to list tools — server exits, future should fail
-            with pytest.raises(Exception):  # McpCallError or RuntimeError
+            with pytest.raises(Exception):  # noqa: B017 — McpCallError or TimeoutError
                 await asyncio.wait_for(client.list_tools(), timeout=2.0)
 
 
@@ -484,14 +512,18 @@ class TestMcpStdioClientListResources:
     async def test_list_resources_returns_resource_schemas(self):
         client = McpStdioClient(["python", "server.py"])
         resource = {"uri": "file:///data.txt", "name": "data", "description": "The data"}
-        proc = MockProcess(response_lines=[
-            _init_resp(0),
-            _make_line({
-                "jsonrpc": "2.0",
-                "id": 1,
-                "result": {"resources": [resource]},
-            }),
-        ])
+        proc = MockProcess(
+            response_lines=[
+                _init_resp(0),
+                _make_line(
+                    {
+                        "jsonrpc": "2.0",
+                        "id": 1,
+                        "result": {"resources": [resource]},
+                    }
+                ),
+            ]
+        )
 
         with patch("asyncio.create_subprocess_exec", new=AsyncMock(return_value=proc)):
             await asyncio.wait_for(client.connect(), timeout=2.0)
@@ -506,10 +538,12 @@ class TestMcpStdioClientPing:
     @pytest.mark.asyncio
     async def test_ping_sends_ping_method(self):
         client = McpStdioClient(["python", "server.py"])
-        proc = MockProcess(response_lines=[
-            _init_resp(0),
-            _make_line({"jsonrpc": "2.0", "id": 1, "result": {}}),
-        ])
+        proc = MockProcess(
+            response_lines=[
+                _init_resp(0),
+                _make_line({"jsonrpc": "2.0", "id": 1, "result": {}}),
+            ]
+        )
 
         with patch("asyncio.create_subprocess_exec", new=AsyncMock(return_value=proc)):
             await asyncio.wait_for(client.connect(), timeout=2.0)

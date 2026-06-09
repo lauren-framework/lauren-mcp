@@ -1,10 +1,10 @@
 """MCP client over WebSocket transport."""
+
 from __future__ import annotations
 
 import asyncio
 import json
 import logging
-from typing import Any
 
 from ._base_remote import _McpBaseRemoteClient
 from ._stdio import McpCallError
@@ -16,8 +16,9 @@ _logger = logging.getLogger(__name__)
 # Raising happens lazily in __init__ so the module can always be imported.
 # ---------------------------------------------------------------------------
 try:
-    import websockets  # type: ignore[import]
+    import websockets  # type: ignore[import]  # noqa: F401
     import websockets.asyncio.client as ws_client  # type: ignore[import]
+
     _WS_AVAILABLE = True
 except ImportError:
     _WS_AVAILABLE = False
@@ -96,14 +97,14 @@ class McpWebSocketClient(_McpBaseRemoteClient):
         """Cancel the reader task and close the WebSocket."""
         if self._reader_task and not self._reader_task.done():
             self._reader_task.cancel()
-            try:
+            try:  # noqa: SIM105
                 await self._reader_task
             except (asyncio.CancelledError, Exception):
                 pass
             self._reader_task = None
 
         if self._ws is not None:
-            try:
+            try:  # noqa: SIM105
                 await self._ws.close()
             except Exception:
                 pass
@@ -123,7 +124,8 @@ class McpWebSocketClient(_McpBaseRemoteClient):
         try:
             async for message in ws:
                 raw: str = (
-                    message if isinstance(message, str)
+                    message
+                    if isinstance(message, str)
                     else message.decode("utf-8", errors="replace")
                 )
                 if raw.strip():

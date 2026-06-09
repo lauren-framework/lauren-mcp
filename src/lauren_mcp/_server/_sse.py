@@ -1,25 +1,27 @@
 """HTTP + SSE transport controller factory for MCP over Server-Sent Events."""
+
 from __future__ import annotations
 
 import json
 import logging
 import secrets
-from typing import Any, AsyncGenerator
+from collections.abc import AsyncGenerator
 
 from lauren import controller, get, post
-from lauren.types import Request, Response
 from lauren.sse import EventStream, ServerSentEvent
+from lauren.types import Request, Response
+
 from lauren_mcp._server._dispatcher import McpDispatcher
 from lauren_mcp._server._session import SseSessionStore
 from lauren_mcp._types import (
-    parse_message,
+    JsonRpcErrorResponse,
     JsonRpcNotification,
     JsonRpcRequest,
     JsonRpcResponse,
-    JsonRpcErrorResponse,
-    build_error_response,
     McpErrorCode,
     McpParseError,
+    build_error_response,
+    parse_message,
 )
 
 _logger = logging.getLogger(__name__)
@@ -108,9 +110,7 @@ def mcp_http_sse_controller(base_path: str) -> type:
             session_id: str | None = request.headers.get(_SESSION_HEADER)
             if not session_id:
                 return Response(
-                    body=json.dumps(
-                        {"error": f"Missing '{_SESSION_HEADER}' header"}
-                    ).encode(),
+                    body=json.dumps({"error": f"Missing '{_SESSION_HEADER}' header"}).encode(),
                     status=400,
                     headers=[("content-type", "application/json")],
                 )
@@ -118,9 +118,7 @@ def mcp_http_sse_controller(base_path: str) -> type:
             queue = self._sessions.get(session_id)
             if queue is None:
                 return Response(
-                    body=json.dumps(
-                        {"error": f"Unknown session: {session_id!r}"}
-                    ).encode(),
+                    body=json.dumps({"error": f"Unknown session: {session_id!r}"}).encode(),
                     status=404,
                     headers=[("content-type", "application/json")],
                 )
@@ -157,8 +155,8 @@ def mcp_http_sse_controller(base_path: str) -> type:
                 return Response(body=b"", status=202)
 
             if isinstance(msg, JsonRpcRequest):
-                response: JsonRpcResponse | JsonRpcErrorResponse = (
-                    await self._dispatcher.dispatch(msg)
+                response: JsonRpcResponse | JsonRpcErrorResponse = await self._dispatcher.dispatch(
+                    msg
                 )
                 await queue.put(response.to_json())
                 return Response(body=b"", status=202)

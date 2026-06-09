@@ -1,23 +1,24 @@
 """Shared ABC mixin for remote (network) MCP transports (WebSocket and HTTP+SSE)."""
+
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
 from abc import abstractmethod
-from typing import Any, Callable
+from collections.abc import Callable
+from typing import Any
 
 from lauren_mcp._types import (
     Implementation,
     JsonRpcErrorResponse,
     JsonRpcNotification,
-    JsonRpcRequest,
     JsonRpcResponse,
     PromptSchema,
     ResourceSchema,
     ToolSchema,
     parse_message,
 )
+
 from ._protocol import McpClientProtocol
 from ._stdio import McpCallError  # reuse the same error class
 

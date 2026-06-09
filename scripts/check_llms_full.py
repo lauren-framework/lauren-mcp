@@ -7,6 +7,7 @@ Exit codes:
   1 - one or more symbols missing from llms-full.txt
   2 - error (import failure, file not found, etc.)
 """
+
 from __future__ import annotations
 
 import pathlib
@@ -56,8 +57,7 @@ def main() -> int:
 
     if llms_full_path is None:
         print(
-            "ERROR: llms-full.txt not found. Checked:\n"
-            + "\n".join(f"  {c}" for c in candidates),
+            "ERROR: llms-full.txt not found. Checked:\n" + "\n".join(f"  {c}" for c in candidates),
             file=sys.stderr,
         )
         return 2
@@ -93,6 +93,7 @@ def main() -> int:
         if not found:
             # Fallback: bare word occurrence at word boundary
             import re  # noqa: PLC0415
+
             if re.search(rf"\b{re.escape(symbol)}\b", llms_content):
                 found = True
         if not found:

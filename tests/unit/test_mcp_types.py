@@ -1,33 +1,30 @@
 """Unit tests for lauren_mcp._types and _version."""
+
 from __future__ import annotations
 
 import json
+
 import pytest
+
 from lauren_mcp._types import (
-    JsonRpcRequest,
-    JsonRpcNotification,
-    JsonRpcResponse,
+    ImageContent,
     JsonRpcError,
     JsonRpcErrorResponse,
+    JsonRpcNotification,
+    JsonRpcRequest,
+    JsonRpcResponse,
     McpErrorCode,
     McpParseError,
-    TextContent,
-    ImageContent,
-    ToolSchema,
-    ToolResult,
-    ResourceSchema,
-    PromptSchema,
     PromptArgument,
-    parse_message,
+    PromptSchema,
+    ResourceSchema,
+    TextContent,
+    ToolResult,
+    ToolSchema,
     build_error_response,
-    ServerCapabilities,
-    ClientCapabilities,
-    Implementation,
-    InitializeParams,
-    InitializeResult,
+    parse_message,
 )
 from lauren_mcp._version import LATEST, STABLE, SUPPORTED
-
 
 # ---------------------------------------------------------------------------
 # TestJsonRpcRequest

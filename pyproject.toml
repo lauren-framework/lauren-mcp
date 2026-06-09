@@ -46,6 +46,7 @@ dev  = [
     "mkdocstrings[python]>=0.27",
     "griffe>=1.0",
     "setuptools-scm>=8.0",
+    "build>=1.0",
     "twine>=5.0",
 ]
 
@@ -69,6 +70,7 @@ lauren = { path = "../lauren-framework", editable = true }
 [tool.ruff]
 line-length    = 100
 target-version = "py311"
+cache-dir      = "/tmp/ruff-cache-lauren-mcp"
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "SIM"]

@@ -1,10 +1,10 @@
 """SSE session store — maps session_id to asyncio.Queue[str]."""
+
 from __future__ import annotations
 
 import asyncio
-from typing import Optional
 
-from lauren import injectable, Scope
+from lauren import Scope, injectable
 
 
 @injectable(scope=Scope.SINGLETON)
@@ -37,7 +37,7 @@ class SseSessionStore:
         self._sessions[session_id] = q
         return q
 
-    def get(self, session_id: str) -> Optional[asyncio.Queue[str | None]]:
+    def get(self, session_id: str) -> asyncio.Queue[str | None] | None:
         """Return the queue for *session_id*, or ``None`` if not found."""
         return self._sessions.get(session_id)
 

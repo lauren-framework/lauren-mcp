@@ -1,14 +1,17 @@
 """MCP request dispatcher — routes JSON-RPC requests to registered handlers."""
+
 from __future__ import annotations
 
 import asyncio
-from typing import Any, Awaitable, Callable
+from collections.abc import Awaitable, Callable
+from typing import Any
 
-from lauren import injectable, Scope, post_construct
+from lauren import Scope, injectable, post_construct
+
 from lauren_mcp._types import (
+    JsonRpcErrorResponse,
     JsonRpcRequest,
     JsonRpcResponse,
-    JsonRpcErrorResponse,
     McpErrorCode,
     build_error_response,
 )
@@ -51,9 +54,7 @@ class McpDispatcher:
         """
         self._handlers[method] = handler
 
-    async def dispatch(
-        self, request: JsonRpcRequest
-    ) -> JsonRpcResponse | JsonRpcErrorResponse:
+    async def dispatch(self, request: JsonRpcRequest) -> JsonRpcResponse | JsonRpcErrorResponse:
         """Dispatch *request* to its registered handler.
 
         The handler is wrapped in an ``asyncio.Task`` so it can be
@@ -74,9 +75,7 @@ class McpDispatcher:
                 message=f"Method not found: {request.method!r}",
             )
 
-        params: dict[str, Any] | None = (
-            request.params if isinstance(request.params, dict) else None
-        )
+        params: dict[str, Any] | None = request.params if isinstance(request.params, dict) else None
 
         task: asyncio.Task[Any] = asyncio.create_task(handler(params))
 

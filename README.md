@@ -1,37 +1,98 @@
-# lauren-mcp
+<p align="center">
+  <img src="https://raw.githubusercontent.com/lauren-framework/lauren-assets/refs/heads/main/framework/lauren-logo-only.png" width=40%></img>
+</p>
+<div align="center">
+  <h1><i>lauren-mcp</i></h1>
+</div>
+<p align="center">
+    <em>Model Context Protocol server and client for Lauren applications — expose any Lauren service as an MCP tool endpoint, and wire remote MCP tools into a Lauren AI agent in a single line.</em>
+</p>
+<p align="center">
+<a href="https://github.com/lauren-framework/lauren-mcp/actions/workflows/tests.yml?query=branch%3Amain+event%3Apush">
+    <img src="https://github.com/lauren-framework/lauren-mcp/actions/workflows/tests.yml/badge.svg?branch=main&event=push" alt="Test">
+</a>
+<a href="https://github.com/lauren-framework/lauren-mcp/actions/workflows/lint.yml?query=branch%3Amain+event%3Apush">
+    <img src="https://github.com/lauren-framework/lauren-mcp/actions/workflows/lint.yml/badge.svg?branch=main&event=push" alt="Lint">
+</a>
+<a href="https://github.com/lauren-framework/lauren-mcp/actions/workflows/codeql.yml?query=branch%3Amain">
+    <img src="https://github.com/lauren-framework/lauren-mcp/actions/workflows/codeql.yml/badge.svg?branch=main" alt="CodeQL">
+</a>
+<a href="https://codecov.io/gh/lauren-framework/lauren-mcp">
+    <img src="https://img.shields.io/codecov/c/github/lauren-framework/lauren-mcp?color=%2334D058&label=coverage" alt="Coverage">
+</a>
+<a href="https://pypi.org/project/lauren-mcp">
+    <img src="https://img.shields.io/pypi/v/lauren-mcp?color=%2334D058&label=pypi%20package" alt="Package version">
+</a>
+<a href="https://pypi.org/project/lauren-mcp">
+    <img src="https://img.shields.io/pypi/pyversions/lauren-mcp.svg?color=%2334D058" alt="Supported Python versions">
+</a>
+<a href="https://pypi.org/project/lauren-mcp">
+    <img src="https://img.shields.io/pypi/dm/lauren-mcp.svg?color=%2334D058&label=downloads" alt="Downloads">
+</a>
+<a href="https://github.com/lauren-framework/lauren-mcp/blob/main/LICENSE">
+    <img src="https://img.shields.io/github/license/lauren-framework/lauren-mcp.svg?color=%2334D058" alt="License">
+</a>
+<a href="https://github.com/astral-sh/ruff">
+    <img src="https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/ruff/main/assets/badge/v2.json" alt="Ruff">
+</a>
+<a href="https://mypy.readthedocs.io/en/stable/">
+    <img src="https://img.shields.io/badge/types-mypy-blue.svg" alt="Checked with mypy">
+</a>
+<a href="https://github.com/j178/prek">
+    <img src="https://img.shields.io/badge/pre--commit-prek-FAB040.svg?logo=pre-commit&logoColor=white" alt="prek">
+</a>
+<a href="https://github.com/lauren-framework/lauren-mcp/discussions">
+    <img src="https://img.shields.io/github/discussions/lauren-framework/lauren-mcp?color=%2334D058&label=discussions" alt="Discussions">
+</a>
+<a href="https://github.com/lauren-framework/lauren-mcp/stargazers">
+    <img src="https://img.shields.io/github/stars/lauren-framework/lauren-mcp.svg?style=social&label=Star" alt="GitHub Stars">
+</a>
+</p>
 
-> Model Context Protocol server and client for the Lauren web framework.
+---
 
-[![Tests](https://github.com/lauren-framework/lauren-mcp/actions/workflows/tests.yml/badge.svg)](https://github.com/lauren-framework/lauren-mcp/actions/workflows/tests.yml)
-[![Lint](https://github.com/lauren-framework/lauren-mcp/actions/workflows/lint.yml/badge.svg)](https://github.com/lauren-framework/lauren-mcp/actions/workflows/lint.yml)
-[![codecov](https://codecov.io/gh/lauren-framework/lauren-mcp/branch/main/graph/badge.svg)](https://codecov.io/gh/lauren-framework/lauren-mcp)
-[![PyPI](https://img.shields.io/pypi/v/lauren-mcp)](https://pypi.org/project/lauren-mcp/)
-[![Python](https://img.shields.io/pypi/pyversions/lauren-mcp)](https://pypi.org/project/lauren-mcp/)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-[![Ruff](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/ruff/main/assets/badge/v2.json)](https://github.com/astral-sh/ruff)
-[![Mypy](https://www.mypy-lang.org/static/mypy_badge.svg)](https://mypy-lang.org/)
+**Documentation**: <a href="https://mcp.lauren-py.dev" target="_blank">https://mcp.lauren-py.dev</a>
 
-`lauren-mcp` extends the [Lauren](https://github.com/lauren-framework/lauren-framework)
-web framework with first-class support for the
-[Model Context Protocol (MCP)](https://modelcontextprotocol.io/). It lets you:
+**Source Code**: <a href="https://github.com/lauren-framework/lauren-mcp" target="_blank">https://github.com/lauren-framework/lauren-mcp</a>
 
-- **Expose** any Lauren service as an MCP server so AI clients can discover and call
-  its tools over WebSocket or HTTP+SSE.
-- **Consume** any remote MCP server (stdio, WebSocket, or HTTP+SSE) and wire its tools
-  into a Lauren AI agent with automatic namespacing.
+---
+
+## For AI Agents & Coding Assistants
+
+### Install all skills in one command
+
+```bash
+# Claude Code, Cursor, Copilot, Continue, Codex CLI — auto-detected
+npx skills add lauren-framework/lauren-mcp
+```
+
+This copies all SKILL.md context packs into your agent's global skills
+directory (`~/.claude/skills/`, `~/.cursor/skills/`, etc.).  The next time your
+agent opens a Lauren project it has pre-loaded expertise on wiring MCP servers,
+consuming remote MCP tools, schema generation, transport configuration, and more.
+
+| Resource | What it contains |
+|---|---|
+| [`llms.txt`](https://raw.githubusercontent.com/lauren-framework/lauren-mcp/refs/heads/main/llms.txt) | 2 KB package overview — start here |
+| [`llms-full.txt`](https://raw.githubusercontent.com/lauren-framework/lauren-mcp/refs/heads/main/llms-full.txt) | Complete API reference — all 40+ symbols, signatures, common errors |
+| [`AGENTS.md`](https://github.com/lauren-framework/lauren-mcp/blob/main/AGENTS.md) | Agent rules, by-task lookup, file ownership, common errors, definition of done |
+| [`CLAUDE.md`](https://github.com/lauren-framework/lauren-mcp/blob/main/CLAUDE.md) | Conventions, commands, golden rules |
+| [`skills/`](https://github.com/lauren-framework/lauren-mcp/tree/main/skills/) | Copy-paste skill guides for common tasks |
+
+---
 
 ## Features
 
 - `@mcp_server`, `@mcp_tool`, `@mcp_resource`, `@mcp_prompt` decorators with
   automatic JSON Schema generation from Python type annotations
-- Three client transports: stdio subprocess, WebSocket, HTTP+SSE
+- Three client transports: **stdio subprocess**, **WebSocket**, **HTTP+SSE**
 - `McpServerConfig` + `AgentModule.for_root(mcp_servers=[...])` for zero-boilerplate
   agent tool integration
 - Tool namespacing (`alias__tool_name`) prevents collisions across multiple MCP servers
 - Automatic system prompt injection listing all available MCP tools
 - Exponential backoff reconnect for the WebSocket client
-- DI-aware tool dispatch — DI parameters are excluded from the generated JSON Schema
-- 100% typed (mypy strict), 80%+ test coverage
+- DI-aware tool dispatch — `Depends(...)` parameters excluded from generated JSON Schema
+- 100% typed (mypy strict), 418 tests across Python 3.11–3.14
 
 ## Installation
 

@@ -1,9 +1,11 @@
 """Unit tests for McpToolBridge and McpServerConfig."""
+
 from __future__ import annotations
 
 import asyncio
+from unittest.mock import AsyncMock, MagicMock
+
 import pytest
-from unittest.mock import AsyncMock, MagicMock, patch
 
 from lauren_mcp._bridge import McpServerConfig, McpToolBridge
 from lauren_mcp._types import ToolSchema
@@ -75,6 +77,7 @@ class TestMcpToolBridgeConnectAll:
     async def test_connect_all_namespaces_tool_names_logged(self, caplog):
         """Tools should be logged with alias__tool_name format."""
         import logging
+
         tools = [make_tool("echo")]
         client = make_mock_client(tools=tools)
         bridge = McpToolBridge(servers=[McpServerConfig(alias="myalias", client=client)])
@@ -88,6 +91,7 @@ class TestMcpToolBridgeConnectAll:
     @pytest.mark.asyncio
     async def test_connect_all_logs_info_on_success(self, caplog):
         import logging
+
         tools = [make_tool("tool1"), make_tool("tool2")]
         client = make_mock_client(tools=tools)
         bridge = McpToolBridge(servers=[McpServerConfig(alias="my-svc", client=client)])
@@ -101,6 +105,7 @@ class TestMcpToolBridgeConnectAll:
     @pytest.mark.asyncio
     async def test_connect_all_logs_error_on_failure(self, caplog):
         import logging
+
         client = make_mock_client()
         client.connect = AsyncMock(side_effect=RuntimeError("connection refused"))
         bridge = McpToolBridge(servers=[McpServerConfig(alias="bad-svc", client=client)])
