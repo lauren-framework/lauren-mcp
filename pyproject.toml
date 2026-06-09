@@ -64,8 +64,8 @@ local_scheme     = "dirty-tag"
 [tool.setuptools.packages.find]
 where = ["src"]
 
-[tool.uv.sources]
-lauren = { path = "../lauren-framework", editable = true }
+# [tool.uv.sources]
+# lauren = { path = "../lauren-framework", editable = true }
 
 [tool.ruff]
 line-length    = 100
