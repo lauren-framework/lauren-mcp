@@ -158,7 +158,10 @@ def llms_check(session: nox.Session) -> None:
 def prek(session: nox.Session) -> None:
     """Run prek pre-release checks."""
     _install_dev(session)
-    session.run("prek", *session.posargs)
+    # --all-files avoids the git stash step (which requires writing git objects
+    # that may be owned by root in this environment).
+    args = session.posargs or ("--all-files",)
+    session.run("prek", "run", *args)
 
 
 # ---------------------------------------------------------------------------

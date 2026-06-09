@@ -204,7 +204,7 @@ class TestServerReferenceDecorators:
         assert meta.name == "catalogue_search"
 
     def test_mcp_tool_required_vs_optional_schema(self, ref_client):
-        # Verified via actual server: limit has default → not required; query has no default → required
+        # limit has a default → not required; query has no default → required
         async def _check():
             tools = await asyncio.wait_for(ref_client.list_tools(), timeout=5.0)
             search = next(t for t in tools if t.name == "catalogue_search")
@@ -359,7 +359,7 @@ class TestClientReferenceProtocol:
         c = McpServer.stdio(ref_server_cmd, max_retries=0, startup_timeout=10.0)
         await asyncio.wait_for(c.connect(), timeout=10.0)
         await c.close()
-        with pytest.raises(Exception):
+        with pytest.raises(Exception):  # noqa: B017
             await asyncio.wait_for(c.list_tools(), timeout=2.0)
 
 
@@ -419,7 +419,7 @@ class TestClientReferenceMcpToolBridge:
         bridge = McpToolBridge([McpServerConfig(alias="ref", client=client)])
         await asyncio.wait_for(bridge.connect_all(), timeout=15.0)
         await bridge.disconnect_all()
-        with pytest.raises(Exception):
+        with pytest.raises(Exception):  # noqa: B017
             await asyncio.wait_for(client.list_tools(), timeout=2.0)
 
 
