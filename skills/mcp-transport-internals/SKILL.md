@@ -1,8 +1,8 @@
 ---
 skill: mcp-transport-internals
-version: 1.0.0
-tags: [mcp, internals, dispatcher, sse, session-store, transport, lauren-mcp]
-summary: Understand McpDispatcher body-based routing, SseSessionStore, and _McpBaseRemoteClient internals.
+version: 2.0.0
+tags: [mcp, internals, dispatcher, sse, session-store, transport, ws, lauren-mcp]
+summary: Understand McpDispatcher body-based routing, SseSessionStore, the WS gateway, and _McpBaseRemoteClient.
 ---
 
 # Skill: MCP Transport Internals
@@ -11,162 +11,170 @@ summary: Understand McpDispatcher body-based routing, SseSessionStore, and _McpB
 
 Use this skill when you need to:
 - Understand how incoming JSON-RPC messages are routed to handler methods
-- Implement a custom transport or extend an existing one
 - Debug SSE session lifecycle issues
-- Understand the shared base class all three client transports inherit from
+- Understand the shared base class all remote client transports inherit from
+- Work on the WebSocket gateway or SSE controller
 
 ---
 
 ## `McpDispatcher` — body-based routing
 
-`McpDispatcher` (in `src/lauren_mcp/_server/_dispatcher.py`) is the central routing
-engine for the server side. It receives a raw JSON-RPC message (already parsed from the
-wire) and dispatches it to the right handler method based on `method`.
-
-```
-Incoming message (WebSocket frame / HTTP POST body / stdin line)
-    │
-    ▼
-parse_message(data) → JsonRpcRequest | JsonRpcNotification
-    │
-    ▼
-McpDispatcher.dispatch(message, session)
-    │
-    ├─ "initialize"         → _handle_initialize()
-    ├─ "tools/list"         → _handle_tools_list()
-    ├─ "tools/call"         → _handle_tool_call()
-    ├─ "resources/list"     → _handle_resources_list()
-    ├─ "resources/read"     → _handle_resource_read()
-    ├─ "prompts/list"       → _handle_prompts_list()
-    ├─ "prompts/get"        → _handle_prompt_get()
-    └─ unknown method       → build_error_response(METHOD_NOT_FOUND)
-```
-
-### Key design decision: body-based routing
-
-The dispatcher inspects `message.method` — a field in the JSON-RPC body — not the
-HTTP path or WebSocket subprotocol. This makes all three transports share the same
-dispatcher code with zero duplication.
+`McpDispatcher` (`src/lauren_mcp/_server/_dispatcher.py`) is the central routing
+engine.  It is a `@injectable(scope=Scope.SINGLETON)`.
 
 ```python
-# src/lauren_mcp/_server/_dispatcher.py (simplified)
+# Simplified
 class McpDispatcher:
-    async def dispatch(
-        self,
-        message: JsonRpcRequest | JsonRpcNotification,
-        session: McpSession,
-    ) -> JsonRpcResponse | JsonRpcErrorResponse | None:
-        handler = self._handlers.get(message.method)
+    _handlers: dict[str, AsyncHandler]  # method_name → coroutine
+    _in_flight: dict[str | int, asyncio.Task[Any]]
+
+    def register(self, method: str, handler: AsyncHandler) -> None: ...
+
+    async def dispatch(self, request: JsonRpcRequest) -> JsonRpcResponse | JsonRpcErrorResponse:
+        handler = self._handlers.get(request.method)
         if handler is None:
-            if isinstance(message, JsonRpcNotification):
-                return None  # notifications are fire-and-forget
-            return build_error_response(
-                message.id,
-                McpErrorCode.METHOD_NOT_FOUND,
-                f"Method not found: {message.method!r}",
-            )
-        return await handler(message, session)
+            return build_error_response(request.id, McpErrorCode.METHOD_NOT_FOUND, ...)
+        task = asyncio.create_task(handler(params))
+        self._in_flight[request.id] = task
+        result = await task
+        return JsonRpcResponse(id=request.id, result=result)
+
+    def cancel(self, request_id: str | int) -> bool: ...
 ```
+
+Handlers are registered by `_McpHandlerRegistrar._register_handlers()` in its
+`@post_construct` hook.  That hook runs when `TestClient(app)` or the first real
+request triggers the Lauren lifecycle.
+
+**Key**: routing is body-based (`message.method`), not path-based.
 
 ---
 
-## `SseSessionStore` — HTTP+SSE session management
+## WebSocket gateway — `mcp_ws_controller`
 
-SSE transport uses a two-request pattern:
-1. `GET /mcp/sse` — client opens an SSE stream; the server assigns a `session_id`.
-2. `POST /mcp/sse` — client sends JSON-RPC messages with `?session_id=...` in the query.
+`mcp_ws_controller(path)` (`src/lauren_mcp/_server/_ws.py`) returns a Lauren
+`@ws_controller` class mounted at `{path}/ws`.
 
-`SseSessionStore` (in `src/lauren_mcp/_server/_session.py`) maintains the mapping
-between session IDs and open SSE response queues.
-
-```
-GET /mcp/sse
-    │
-    ▼
-SseSessionStore.create_session()
-    │ returns session_id
-    ▼
-Client stores session_id; server holds an asyncio.Queue for this session
-
-POST /mcp/sse?session_id=abc
-    │
-    ▼
-SseSessionStore.get_queue(session_id)  →  Queue
-    │
-    ▼
-McpDispatcher.dispatch(message, session)
-    │
-    ▼
-response placed in Queue → SSE event written to GET stream
-```
-
-Sessions are automatically removed after `session_timeout` seconds of inactivity
-(configurable in `McpServerModule.for_root(session_timeout=300.0)`).
-
----
-
-## `_McpBaseRemoteClient` — shared client base
-
-All three transport clients (`_StdioClient`, `_WsClient`, `_HttpSseClient`) inherit
-from `_McpBaseRemoteClient` (in `src/lauren_mcp/_client/`).
-
-The base class provides:
-- The MCP handshake sequence (`initialize` → `initialized` notification)
-- A pending-request registry: maps `id` → `asyncio.Future`
-- `_send(request)` / `_receive(response)` hooks called by subclasses
-- `list_tools`, `call_tool`, `list_resources`, `read_resource`, `list_prompts`,
-  `get_prompt` implementations that call `_send` and await the future
+**Lifecycle quirk**: Lauren calls `ws.accept()` only after `@on_connect` returns.
+Our message loop never returns, so we call `await ws.accept()` explicitly before
+entering the loop:
 
 ```python
-# Pseudocode — base class skeleton
-class _McpBaseRemoteClient:
-    _pending: dict[int | str, asyncio.Future]
+@on_connect
+async def handle_connect(self, ws: WebSocket) -> None:
+    await ws.accept()           # must be explicit — Lauren can't do it for us
+    await self._message_loop(ws)  # blocks until connection closes
 
-    async def _send(self, request: JsonRpcRequest) -> None:
-        """Implemented by subclass — writes to the transport."""
-        raise NotImplementedError
-
-    def _receive(self, data: str | bytes) -> None:
-        """Called by subclass when a message arrives from the server."""
-        msg = parse_message(data)
-        if isinstance(msg, JsonRpcResponse | JsonRpcErrorResponse):
-            future = self._pending.pop(msg.id, None)
-            if future:
-                future.set_result(msg)
-
-    async def call_tool(self, name: str, arguments: dict) -> list[...]:
-        future = asyncio.get_event_loop().create_future()
-        req_id = self._next_id()
-        self._pending[req_id] = future
-        await self._send(JsonRpcRequest(
-            jsonrpc="2.0", id=req_id,
-            method="tools/call",
-            params={"name": name, "arguments": arguments},
-        ))
-        response = await asyncio.wait_for(future, timeout=self._timeout)
-        if isinstance(response, JsonRpcErrorResponse):
-            raise McpToolError(response.error.message)
-        return _parse_tool_result(response.result)
+async def _message_loop(self, ws: Any) -> None:
+    while True:
+        raw: str = await ws.receive_text()   # blocks on each frame
+        await self._handle_frame(ws, raw)
 ```
 
-### Subclass responsibilities
+This also prevents Lauren's built-in event-routing loop from starting (MCP uses
+raw JSON-RPC frames, not Lauren's `event`-keyed dispatch format).
 
-| Subclass | Transport | `connect()` | `_send()` |
-|---|---|---|---|
-| `_StdioClient` | subprocess stdin/stdout | `asyncio.create_subprocess_exec` | write to `proc.stdin` |
-| `_WsClient` | WebSocket | `websockets.connect()` | `ws.send()` |
-| `_HttpSseClient` | HTTP + SSE | `httpx.AsyncClient` + SSE stream | `httpx.post()` |
+Protocol enforcement:
+- Requests before `notifications/initialized` → `INVALID_REQUEST` (-32600)
+- Unknown methods → `METHOD_NOT_FOUND` (-32601)
+- `$/cancelRequest` notification → `dispatcher.cancel(id)`
+
+---
+
+## SSE transport — two-endpoint pattern
+
+`mcp_http_sse_controller(base_path)` (`src/lauren_mcp/_server/_sse.py`) exposes:
+
+```
+GET  {base_path}/sse   → opens SSE stream; sends "endpoint" event with session_id
+POST {base_path}/      → receives JSON-RPC; identified by "mcp-session-id" header
+```
+
+```python
+# GET /mcp/sse — first event carries the session_id
+yield ServerSentEvent(event="endpoint", data=json.dumps({"session_id": session_id}))
+# subsequent events carry JSON-RPC responses from the queue
+while True:
+    payload = await queue.get()
+    yield ServerSentEvent(event="message", data=payload)
+
+# POST /mcp/ — dispatches and pushes response to queue
+session_id = request.headers.get("mcp-session-id")   # header, not query param
+queue = self._sessions.get(session_id)                # None → 404
+response = await self._dispatcher.dispatch(msg)
+await queue.put(response.to_json())
+return Response(body=b"", status=202)
+```
+
+POST responses:
+- Missing `mcp-session-id` header → 400
+- Unknown session_id → 404
+- Malformed JSON → 202 (PARSE_ERROR response queued)
+- Notification → 202 (no queue write)
+- Request → 202 (response JSON queued)
+
+---
+
+## `SseSessionStore` — session registry
+
+`SseSessionStore` (`src/lauren_mcp/_server/_session.py`) is a `@injectable(Singleton)`.
+
+```python
+class SseSessionStore:
+    _queues: dict[str, asyncio.Queue[str]]
+
+    def create(self, session_id: str) -> asyncio.Queue[str]: ...
+    def get(self, session_id: str) -> asyncio.Queue[str] | None: ...
+    def remove(self, session_id: str) -> None: ...
+```
+
+Sessions are created in `GET /sse` and removed in the generator's `finally` block.
+In tests, resolve the store with `await app.container.resolve(SseSessionStore)` to
+create sessions manually without opening an SSE stream.
+
+---
+
+## `_McpBaseRemoteClient` — shared client logic
+
+All remote clients (`McpWebSocketClient`, `McpHttpSseClient`) inherit from
+`_McpBaseRemoteClient` (`src/lauren_mcp/_client/_base_remote.py`).
+
+```python
+class _McpBaseRemoteClient(McpClientProtocol):
+    _pending: dict[int, asyncio.Future[Any]]  # id → future
+    _next_id: int
+
+    async def _request(self, method: str, params: Any = None) -> Any:
+        req_id = self._next_id; self._next_id += 1
+        fut = loop.create_future()
+        self._pending[req_id] = fut
+        await self._send_raw({"jsonrpc":"2.0","id":req_id,"method":method,"params":params})
+        return await fut
+
+    def _dispatch_message(self, raw: str) -> None:
+        msg = parse_message(raw)
+        if isinstance(msg, (JsonRpcResponse, JsonRpcErrorResponse)):
+            fut = self._pending.pop(msg.id, None)
+            if fut and not fut.done():
+                if isinstance(msg, JsonRpcResponse): fut.set_result(msg.result)
+                else: fut.set_exception(McpCallError(msg.error.message, msg.error.code))
+```
+
+`list_tools()`, `call_tool()` etc. all call `await self._request(...)`.
+
+`McpStdioClient` is separate and does NOT inherit from `_McpBaseRemoteClient` — it
+uses the same pending-future pattern but reads from subprocess stdout directly.
 
 ---
 
 ## Adding a new transport
 
-To implement a fourth transport (e.g. Unix socket):
-
-1. Create `src/lauren_mcp/_client/_unix.py` with a class inheriting `_McpBaseRemoteClient`.
-2. Override `connect()` to open the Unix socket and start a read loop that calls `_receive()`.
-3. Override `_send()` to write JSON-RPC messages to the socket.
-4. Add a `McpServer.unix(path)` class method that returns an instance of your new class.
-5. Guard the import with a try/except if it depends on a platform-specific module.
-6. Add a `unix` extra to `pyproject.toml` if needed.
-7. Write unit tests mocking the socket and integration tests against a real server.
+1. Create `src/lauren_mcp/_client/_newtransport.py` extending `_McpBaseRemoteClient`.
+2. Implement `connect()` to open the connection and start a read loop that calls
+   `self._dispatch_message(raw)` for each received frame.
+3. Implement `_send_raw(obj: dict[str, Any]) -> None` to serialise and write.
+4. Add `McpServer.newtransport(...)` in `_client/_factory.py`.
+5. Guard with `try: import ...; _AVAIL=True except ImportError: _AVAIL=False` and
+   raise informative `ImportError` in `__init__` if not available.
+6. Add optional extra to `pyproject.toml`.
+7. Update `docs/reference/client.md`, `llms-full.txt`, `llms.txt`, and this skill.

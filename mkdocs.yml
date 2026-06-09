@@ -85,6 +85,7 @@ nav:
     - guides/index.md
     - Your First Server: guides/first-server.md
     - Your First Client: guides/first-client.md
+    - Using with Lauren: guides/using-with-lauren.md
     - Decorators in Depth: guides/decorators.md
     - Multiple Servers: guides/multiple-servers.md
     - Error Handling: guides/error-handling.md

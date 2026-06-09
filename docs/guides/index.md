@@ -8,6 +8,7 @@ Practical, task-oriented guides for every major feature of `lauren-mcp`.
 |---|---|
 | [Your First Server](first-server.md) | Step-by-step: build a server with tools, resources, and prompts; deploy with Lauren |
 | [Your First Client](first-client.md) | Connect, discover, and call tools from any MCP server |
+| [Using with Lauren](using-with-lauren.md) | End-to-end guide: HTTP controllers, DI injection, guards, interceptors, middleware, SSE |
 
 ## Decorators and features
 

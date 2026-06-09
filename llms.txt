@@ -17,52 +17,96 @@ tools into a Lauren AI agent with automatic namespacing.
 
 ```
 pip install lauren-mcp               # core: wire types + server decorators + stdio client
-pip install "lauren-mcp[ws]"         # + WebSocket client
-pip install "lauren-mcp[http]"       # + HTTP+SSE client
+pip install "lauren-mcp[ws]"         # + WebSocket client (requires websockets)
+pip install "lauren-mcp[http]"       # + HTTP+SSE client (requires httpx + httpx-sse)
 pip install "lauren-mcp[all]"        # all transports
 ```
 
 ## Key concepts
 
-- `@mcp_server(path)` — register a class as an MCP server
+- `@mcp_server(path, *, transport="ws")` — register a class as an MCP server
 - `@mcp_tool()` — expose an async method as an MCP tool (JSON Schema from type hints)
-- `@mcp_resource(uri)` — expose a URI-addressable resource
+- `@mcp_resource(uri_template)` — expose a URI-addressable resource
 - `@mcp_prompt()` — expose a parameterised prompt template
-- `McpServerModule.for_root()` — mount all `@mcp_server` classes into a Lauren app
+- `McpServerModule.for_root(server_cls, *, transport="ws")` — build a Lauren `@module`
 - `McpServer.stdio/ws/http` — factory methods returning `McpClientProtocol`
+- `McpCallError` — raised when the server returns a JSON-RPC error response
 - `McpServerConfig(alias, client)` — config for one remote MCP server
-- `McpToolBridge` — adapts remote tools for use inside a Lauren agent
+- `McpToolBridge([configs])` — lifecycle manager for a list of McpServerConfig
 - Tool namespacing: `{alias}__{tool_name}` prevents collisions
 
 ## Wire protocol
 
 JSON-RPC 2.0 over three transports:
 
-| Transport | Extra | Endpoint |
+| Transport | Extra | Endpoint path |
 |---|---|---|
 | stdio | (none) | subprocess stdin/stdout |
 | WebSocket | `[ws]` | `{path}/ws` |
-| HTTP+SSE | `[http]` | `{path}/sse` |
+| HTTP+SSE | `[http]` | `{path}` (GET = SSE stream, POST = messages) |
 
 ## Public API (`__all__`)
 
 Server: `mcp_server`, `mcp_tool`, `mcp_resource`, `mcp_prompt`, `McpServerModule`
 
-Client: `McpServer`, `McpClientProtocol`, `McpServerConfig`, `McpToolBridge`
+Client: `McpServer`, `McpClientProtocol`, `McpCallError`, `McpServerConfig`,
+`McpToolBridge`
 
 Wire types: `JsonRpcRequest`, `JsonRpcNotification`, `JsonRpcResponse`,
-`JsonRpcErrorResponse`, `McpErrorCode`, `parse_message`, `build_error_response`,
-`ToolSchema`, `ResourceSchema`, `PromptSchema`, `TextContent`, `ImageContent`,
-`EmbeddedResource`, `PromptArgument`, `PromptMessage`, `InitializeParams`,
-`InitializeResult`, `ClientCapabilities`, `ServerCapabilities`, `Implementation`,
-`ToolCallParams`, `ToolResult`, `ReadResourceParams`, `ReadResourceResult`,
+`JsonRpcErrorResponse`, `McpErrorCode`, `McpParseError`,
+`parse_message`, `build_error_response`,
+`ToolSchema`, `ResourceSchema`, `PromptSchema`,
+`TextContent`, `ImageContent`, `EmbeddedResource`, `AnyContent`,
+`PromptArgument`, `PromptMessage`,
+`InitializeParams`, `InitializeResult`,
+`ClientCapabilities`, `ServerCapabilities`, `Implementation`,
+`ToolCallParams`, `ToolResult`,
+`ReadResourceParams`, `ReadResourceResult`,
 `GetPromptParams`, `GetPromptResult`
 
 Version constants: `LATEST`, `STABLE`, `SUPPORTED`
+
+## Using with Lauren
+
+```python
+from lauren import LaurenFactory, module
+from lauren_mcp import mcp_server, mcp_tool, McpServerModule
+
+@mcp_server("/mcp")
+class MyServer:
+    @mcp_tool()
+    async def greet(self, name: str) -> str:
+        """Greet someone. Args: name: Person's name."""
+        return f"Hello, {name}!"
+
+@module(imports=[McpServerModule.for_root(MyServer)])
+class AppModule:
+    pass
+
+app = LaurenFactory.create(AppModule)
+# WebSocket at ws://host/mcp/ws
+```
+
+## Connecting a client
+
+```python
+import asyncio
+from lauren_mcp import McpServer, McpCallError
+
+async def main():
+    client = McpServer.stdio(["python", "-m", "my_server"])
+    await client.connect()
+    tools = await client.list_tools()
+    result = await client.call_tool("greet", {"name": "World"})
+    print(result["content"][0]["text"])  # raw dict return
+    await client.close()
+
+asyncio.run(main())
+```
 
 ## Links
 
 - Documentation: https://mcp.lauren-py.dev
 - Source: https://github.com/lauren-framework/lauren-mcp
 - PyPI: https://pypi.org/project/lauren-mcp/
-- llms-full.txt: https://mcp.lauren-py.dev/llms-full.txt
+- llms-full.txt: https://raw.githubusercontent.com/lauren-framework/lauren-mcp/refs/heads/main/llms-full.txt

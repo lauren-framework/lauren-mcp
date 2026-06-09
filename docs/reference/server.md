@@ -204,6 +204,9 @@ class McpServerModule:
         transport: str = "ws",
         server_info: Implementation | None = None,
         capabilities: ServerCapabilities | None = None,
+        providers: list | None = None,
+        imports: list | None = None,
+        exports: list | None = None,
     ) -> type:
         ...
 ```
@@ -219,6 +222,9 @@ registers all MCP handler coroutines.
 | `transport` | `str` | `"ws"` | `"ws"`, `"sse"`, or `"both"` |
 | `server_info` | `Implementation \| None` | `None` | Override name/version in handshake |
 | `capabilities` | `ServerCapabilities \| None` | `None` | Override auto-detected capabilities |
+| `providers` | `list \| None` | `None` | Extra Lauren providers visible to *server_cls* via constructor injection |
+| `imports` | `list \| None` | `None` | Extra `@module` classes whose exports become visible to *server_cls* |
+| `exports` | `list \| None` | `None` | Provider types to re-export so the importing module can see them |
 
 **Raises**: `TypeError` if *server_cls* is not decorated with `@mcp_server`.
 

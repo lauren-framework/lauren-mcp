@@ -1,8 +1,8 @@
 ---
 skill: using-mcp-client
-version: 1.0.0
+version: 2.0.0
 tags: [mcp, client, transport, stdio, websocket, http, sse, lauren-mcp]
-summary: Connect to a remote MCP server over stdio, WebSocket, or HTTP+SSE.
+summary: Connect to a remote MCP server over stdio, WebSocket, or HTTP+SSE and call its tools.
 ---
 
 # Skill: Using MCP Client
@@ -12,43 +12,56 @@ summary: Connect to a remote MCP server over stdio, WebSocket, or HTTP+SSE.
 Use this skill when you need to:
 - Connect to an external MCP server from within a Lauren application
 - Call MCP tools, read resources, or retrieve prompts from a remote server
-- Choose the right transport for your deployment (stdio vs WebSocket vs HTTP+SSE)
+- Choose the right transport for your deployment
 
 ## Transport 1: stdio (no extra deps)
 
-Best for local subprocesses and scripts. No install extras required.
+Best for local subprocesses. No install extras required.
 
 ```python
-from lauren_mcp import McpServer
+import asyncio, json
+from lauren_mcp import McpServer, McpCallError
 
-client = McpServer.stdio(
-    ["python", "-m", "my_mcp_server"],
-    env={"MY_VAR": "value"},
-    cwd="/path/to/server",
-    timeout=30.0,
-)
+async def main():
+    client = McpServer.stdio(
+        ["python", "-m", "my_mcp_server"],
+        max_retries=3,           # restart subprocess on unexpected exit
+        startup_timeout=10.0,    # seconds to wait for initialize handshake
+    )
+    await client.connect()
 
-async with client:
-    # List available tools
+    # Discover tools
     tools = await client.list_tools()
-    print([t.name for t in tools])
+    print([t.name for t in tools])         # list[ToolSchema]
 
-    # Call a tool
+    # Call a tool — returns raw dict
     result = await client.call_tool("search", {"query": "coffee"})
-    print(result[0].text)
+    content = result.get("content", [])
+    if content and content[0].get("type") == "text":
+        print(content[0]["text"])
 
-    # Read a resource
-    res = await client.read_resource("items://42")
-    print(res.contents[0].text)
+    # dict/list results are JSON-encoded in text
+    items = json.loads(content[0]["text"])
 
-    # Get a prompt
-    prompt = await client.get_prompt("summary", {"topic": "sales"})
-    print(prompt.messages[0].content.text)
+    # Read a resource — returns raw dict
+    res = await client.read_resource("/items/42")
+    print(res.get("contents", [{}])[0].get("text", ""))
+
+    # Get a prompt — returns raw dict
+    prompt_result = await client.get_prompt("summary", {"topic": "sales"})
+    messages = prompt_result.get("messages", [])
+    print(messages[0].get("content", {}).get("text", ""))
+
+    await client.close()
+
+asyncio.run(main())
 ```
 
 ## Transport 2: WebSocket (`[ws]` extra)
 
-Best for persistent bidirectional connections. Install: `pip install "lauren-mcp[ws]"`
+```bash
+pip install "lauren-mcp[ws]"
+```
 
 ```python
 from lauren_mcp import McpServer
@@ -56,75 +69,88 @@ from lauren_mcp import McpServer
 client = McpServer.ws(
     "wss://api.example.com/mcp/ws",
     headers={"Authorization": "Bearer my-token"},
-    ping_interval=20.0,
-    reconnect=True,
-    reconnect_delay=1.0,
-    reconnect_max_delay=30.0,
-    timeout=30.0,
+    max_retries=3,
+    startup_timeout=10.0,
 )
-
-async with client:
-    tools = await client.list_tools()
-    result = await client.call_tool("search", {"query": "widget"})
-    print(result[0].text)
+await client.connect()
+result = await client.call_tool("search", {"query": "widget"})
+await client.close()
 ```
-
-The WebSocket client reconnects automatically by default (`reconnect=True`).
 
 ## Transport 3: HTTP + SSE (`[http]` extra)
 
-Best for stateless or browser-friendly deployments. Install: `pip install "lauren-mcp[http]"`
+```bash
+pip install "lauren-mcp[http]"
+```
 
 ```python
 from lauren_mcp import McpServer
 
 client = McpServer.http(
-    "https://api.example.com/mcp/sse",
+    "https://api.example.com/mcp",
     headers={"X-Api-Key": "secret"},
-    timeout=30.0,
-    sse_timeout=None,  # no read timeout on the SSE stream
+    max_retries=3,
+    startup_timeout=10.0,
 )
-
-async with client:
-    tools = await client.list_tools()
-    result = await client.call_tool("add", {"a": 3.0, "b": 4.0})
-    print(result[0].text)
+await client.connect()
+tools = await client.list_tools()
+await client.close()
 ```
 
-## Common patterns
+## Connection lifecycle
 
-### Reusable client fixture (pytest)
+```python
+client = McpServer.stdio([...])
+await client.connect()    # runs initialize handshake
+# ... make requests ...
+await client.close()      # graceful shutdown
+```
+
+There is **no** async context manager (`async with client:`) — always call
+`connect()` and `close()` explicitly.
+
+## Error handling
+
+```python
+from lauren_mcp import McpServer, McpCallError
+import asyncio
+
+client = McpServer.stdio(["python", "server.py"], max_retries=0)
+try:
+    await asyncio.wait_for(client.connect(), timeout=10.0)
+except asyncio.TimeoutError:
+    print("Server did not respond in time")
+    return
+
+try:
+    result = await client.call_tool("risky_tool", {"input": "data"})
+    if result.get("isError"):
+        print("Tool reported an error:", result["content"])
+except McpCallError as exc:
+    print(f"Server error (code {exc.code}): {exc}")
+finally:
+    await client.close()
+```
+
+## Checking available tools before calling
+
+```python
+tools = await client.list_tools()
+available = {t.name for t in tools}
+if "search" in available:
+    result = await client.call_tool("search", {"query": "test"})
+```
+
+## pytest fixture
 
 ```python
 import pytest
 from lauren_mcp import McpServer
 
 @pytest.fixture
-async def mcp_client():
-    client = McpServer.stdio(["python", "tests/fixtures/echo_server.py"])
-    async with client:
-        yield client
-```
-
-### Checking for available tools before calling
-
-```python
-async with client:
-    available = {t.name for t in await client.list_tools()}
-    if "search" in available:
-        result = await client.call_tool("search", {"query": "test"})
-```
-
-### Error handling
-
-```python
-from lauren_mcp import McpToolError, McpConnectionError
-
-async with client:
-    try:
-        result = await client.call_tool("risky_tool", {"input": "data"})
-    except McpToolError as e:
-        print(f"Tool returned an error: {e}")
-    except McpConnectionError as e:
-        print(f"Lost connection: {e}")
+async def mcp_client(echo_server_command):   # echo_server_command from conftest
+    c = McpServer.stdio(echo_server_command, max_retries=0, startup_timeout=10.0)
+    await c.connect()
+    yield c
+    await c.close()
 ```

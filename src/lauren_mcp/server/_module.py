@@ -48,6 +48,9 @@ class McpServerModule:
         transport: str = "ws",
         server_info: Implementation | None = None,
         capabilities: ServerCapabilities | None = None,
+        providers: list[Any] | None = None,
+        imports: list[Any] | None = None,
+        exports: list[Any] | None = None,
     ) -> type:
         """Build a Lauren ``@module`` that wires *server_cls* into the MCP stack.
 
@@ -69,6 +72,31 @@ class McpServerModule:
             When ``None`` the capabilities are inferred from which
             ``@mcp_tool`` / ``@mcp_resource`` / ``@mcp_prompt`` methods the
             class exposes.
+        providers:
+            Extra Lauren providers to add to the generated module.  Use this
+            to make services visible to *server_cls* via constructor injection.
+            Example::
+
+                @injectable(scope=Scope.SINGLETON)
+                class MyService: ...
+
+                McpServerModule.for_root(MyServer, providers=[MyService])
+
+        imports:
+            Extra Lauren ``@module`` classes to import into the generated module.
+            Use this to re-use modules that export services needed by *server_cls*::
+
+                @module(providers=[MyService], exports=[MyService])
+                class ServiceModule: ...
+
+                McpServerModule.for_root(MyServer, imports=[ServiceModule])
+
+        exports:
+            Extra types to export from the generated module so that parent
+            modules that import it can see additional providers::
+
+                McpServerModule.for_root(MyServer, providers=[MyService],
+                                         exports=[MyService])
 
         Returns
         -------
@@ -309,8 +337,21 @@ class McpServerModule:
         # 8. Build the @module class — a thin container; all lifecycle
         #    logic lives in _McpHandlerRegistrar above.
         # ------------------------------------------------------------------
+        # Combine built-in providers with any user-supplied extra providers.
+        _all_providers = [
+            server_cls,
+            McpDispatcher,
+            SseSessionStore,
+            _McpHandlerRegistrar,
+            *(providers or []),
+        ]
+        _all_imports = list(imports or [])
+        _all_exports = list(exports or [])
+
         @module(
-            providers=[server_cls, McpDispatcher, SseSessionStore, _McpHandlerRegistrar],
+            providers=_all_providers,
+            imports=_all_imports,
+            exports=_all_exports,
             controllers=controllers,
         )
         class _McpModule:
