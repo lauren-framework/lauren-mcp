@@ -66,12 +66,18 @@ def mcp_ws_controller(
 
         @on_connect
         async def handle_connect(self, ws: WebSocket) -> None:
-            """Run the MCP message loop for the lifetime of this connection.
+            """Accept the connection and run the MCP message loop.
 
-            Awaiting ``_message_loop`` here keeps Lauren's built-in event-
-            routing loop from starting — MCP uses raw JSON-RPC frames, not
-            Lauren's ``event``-keyed dispatch format.
+            Explicitly accepting before entering the loop prevents a
+            deadlock with Lauren's auto-accept logic: Lauren calls
+            ``ws.accept()`` *after* ``@on_connect`` returns, but our loop
+            never returns, so we must accept first.
+
+            Awaiting ``_message_loop`` here also keeps Lauren's built-in
+            event-routing loop from starting — MCP uses raw JSON-RPC
+            frames, not Lauren's ``event``-keyed dispatch format.
             """
+            await ws.accept()
             await self._message_loop(ws)
 
         async def _message_loop(self, ws: Any) -> None:

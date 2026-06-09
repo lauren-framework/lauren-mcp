@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from lauren import module, post_construct
+from lauren import Scope, injectable, module, post_construct
 
 from lauren_mcp._server._dispatcher import McpDispatcher
 from lauren_mcp._server._handshake import build_initialize_result
@@ -160,14 +160,18 @@ class McpServerModule:
         _server_cls = server_cls
 
         # ------------------------------------------------------------------
-        # 7. Build the @module class
+        # 7. Build the handler-registrar injectable.
+        #
+        # Lauren's @module class body is NOT instantiated by the DI
+        # container — lifecycle hooks must live on @injectable providers
+        # inside ``providers=[...]``.  We generate a unique singleton class
+        # per ``for_root()`` call and add it to the providers list so the
+        # DI container constructs it (injecting dispatcher + server) and
+        # then fires its @post_construct to register all MCP handlers.
         # ------------------------------------------------------------------
-        @module(
-            providers=[server_cls, McpDispatcher, SseSessionStore],
-            controllers=controllers,
-        )
-        class _McpModule:
-            """Auto-generated Lauren module for MCP server integration."""
+        @injectable(scope=Scope.SINGLETON)
+        class _McpHandlerRegistrar:
+            """Singleton that wires handler coroutines onto the dispatcher."""
 
             def __init__(
                 self,
@@ -188,7 +192,7 @@ class McpServerModule:
                 _sc = _resolved_caps
 
                 async def _initialize_handler(params: dict[str, Any] | None) -> dict[str, Any]:
-                    from lauren_mcp._types import (
+                    from lauren_mcp._types import (  # noqa: PLC0415
                         Implementation,
                     )
 
@@ -238,12 +242,10 @@ class McpServerModule:
 
                 # --- tools ---
                 if _tools:
-                    # The dispatcher passes params dict; wrap our handlers
-                    # which take a JsonRpcRequest-like object.
                     _tl_inner = make_tools_list_handler(_tools)
                     _tc_inner = make_tools_call_handler(srv, _tools)
 
-                    from lauren_mcp._types import JsonRpcRequest as _Req
+                    from lauren_mcp._types import JsonRpcRequest as _Req  # noqa: PLC0415
 
                     async def _tools_list(params: dict[str, Any] | None) -> dict[str, Any]:
                         req = _Req(method="tools/list", params=params)
@@ -261,7 +263,7 @@ class McpServerModule:
                     _rl_inner = make_resources_list_handler(_resources)
                     _rr_inner = make_resources_read_handler(srv, _resources)
 
-                    from lauren_mcp._types import JsonRpcRequest as _Req2
+                    from lauren_mcp._types import JsonRpcRequest as _Req2  # noqa: PLC0415
 
                     async def _resources_list(params: dict[str, Any] | None) -> dict[str, Any]:
                         req = _Req2(method="resources/list", params=params)
@@ -279,7 +281,7 @@ class McpServerModule:
                     _pl_inner = make_prompts_list_handler(_prompts)
                     _pg_inner = make_prompts_get_handler(srv, _prompts)
 
-                    from lauren_mcp._types import JsonRpcRequest as _Req3
+                    from lauren_mcp._types import JsonRpcRequest as _Req3  # noqa: PLC0415
 
                     async def _prompts_list(params: dict[str, Any] | None) -> dict[str, Any]:
                         req = _Req3(method="prompts/list", params=params)
@@ -292,9 +294,33 @@ class McpServerModule:
                     dispatcher.register("prompts/list", _prompts_list)
                     dispatcher.register("prompts/get", _prompts_get)
 
+        # With ``from __future__ import annotations`` all annotations are
+        # stored as strings.  Lauren's DI evaluates them via
+        # ``typing.get_type_hints()``, which looks up names in the module
+        # globals — ``server_cls`` is a local, so it won't be found.
+        # Override the annotation with the actual class object so the DI
+        # compiler can locate the provider.
+        _McpHandlerRegistrar.__init__.__annotations__["server_instance"] = server_cls
+
+        _McpHandlerRegistrar.__name__ = f"McpHandlerRegistrar[{server_cls.__name__}]"
+        _McpHandlerRegistrar.__qualname__ = _McpHandlerRegistrar.__name__
+
+        # ------------------------------------------------------------------
+        # 8. Build the @module class — a thin container; all lifecycle
+        #    logic lives in _McpHandlerRegistrar above.
+        # ------------------------------------------------------------------
+        @module(
+            providers=[server_cls, McpDispatcher, SseSessionStore, _McpHandlerRegistrar],
+            controllers=controllers,
+        )
+        class _McpModule:
+            """Auto-generated Lauren module for MCP server integration."""
+
         _McpModule.__name__ = f"McpModule[{server_cls.__name__}]"
         _McpModule.__qualname__ = (
             f"McpServerModule.for_root.<locals>._McpModule[{server_cls.__name__}]"
         )
+        # Expose the registrar for tests that need to wire handlers without DI.
+        _McpModule._handler_registrar_cls = _McpHandlerRegistrar  # type: ignore[attr-defined]
 
         return _McpModule

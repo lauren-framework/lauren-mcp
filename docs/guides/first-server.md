@@ -227,8 +227,70 @@ async def create_book(
 
 ---
 
+## 8. Deploying with Lauren
+
+In production, mount your server inside a Lauren ASGI application and serve
+it with uvicorn:
+
+```python
+# app.py
+from lauren import LaurenFactory, module
+from lauren_mcp import McpServerModule
+# ... BookServer defined above ...
+
+@module(imports=[McpServerModule.for_root(BookServer)])
+class AppModule:
+    pass
+
+app = LaurenFactory.create(AppModule)
+```
+
+```bash
+pip install "lauren-mcp[ws]" uvicorn
+uvicorn app:app --port 8000
+```
+
+MCP clients connect at:
+
+| Transport | URL |
+|---|---|
+| WebSocket | `ws://localhost:8000/mcp/ws` |
+| HTTP + SSE | `http://localhost:8000/mcp` |
+
+For in-process testing (no subprocess, no network), use Lauren's
+`WsTestClient`:
+
+```python
+import asyncio
+from lauren import LaurenFactory, module
+from lauren.testing import TestClient, WsTestClient
+from lauren_mcp import McpServerModule
+
+@module(imports=[McpServerModule.for_root(BookServer)])
+class AppModule: pass
+
+app = LaurenFactory.create(AppModule)
+TestClient(app)          # triggers @post_construct (registers handlers)
+
+async def test_via_ws():
+    async with WsTestClient(app).connect("/mcp/ws") as ws:
+        await ws.send_json({"jsonrpc": "2.0", "id": 1, "method": "initialize",
+                            "params": {"protocolVersion": "2025-03-26",
+                                       "capabilities": {},
+                                       "clientInfo": {"name": "t", "version": "1"}}})
+        resp = await asyncio.wait_for(ws.receive_json(), timeout=3.0)
+        assert "result" in resp
+        await ws.send_json({"jsonrpc": "2.0", "method": "notifications/initialized"})
+        await ws.send_json({"jsonrpc": "2.0", "id": 2, "method": "tools/list"})
+        resp = await asyncio.wait_for(ws.receive_json(), timeout=3.0)
+        print([t["name"] for t in resp["result"]["tools"]])
+```
+
+---
+
 ## Next steps
 
 - **[Your First MCP Client](first-client.md)** — connect to any server
 - **[Decorators in depth](decorators.md)** — all options for `@mcp_tool`, `@mcp_resource`, `@mcp_prompt`
 - **[Testing your server](testing.md)** — unit and integration test patterns
+- **[MCP Server guide](mcp-server.md)** — full API reference for the server decorators

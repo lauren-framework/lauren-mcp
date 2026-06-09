@@ -1,30 +1,29 @@
 # MCP Client Guide
 
-This guide covers connecting to remote MCP servers using `lauren-mcp`'s three transport
-modes: stdio, WebSocket, and HTTP+SSE.
+This guide covers connecting to MCP servers using `lauren-mcp`'s three
+transport modes: **stdio** (subprocess), **WebSocket**, and **HTTP + SSE**.
 
 ---
 
 ## `McpServer` factory
 
-`McpServer` is the entry point for creating client connections. It exposes three
-class-method factories, one per transport:
+`McpServer` is the entry point for all client connections:
 
 ```python
 from lauren_mcp import McpServer
 
-# stdio subprocess
+# stdio — spawn a local subprocess
 client = McpServer.stdio(["npx", "-y", "@modelcontextprotocol/server-filesystem", "/tmp"])
 
-# WebSocket
+# WebSocket — connect to a running Lauren app
 client = McpServer.ws("ws://localhost:8000/mcp/ws")
 
-# HTTP + SSE
-client = McpServer.http("http://localhost:8000/mcp/sse")
+# HTTP + SSE — connect to a running Lauren app
+client = McpServer.http("http://localhost:8000/mcp")
 ```
 
-All three return an `McpClientProtocol` instance. The connection is not established until
-you enter the async context manager (or call `connect()` explicitly).
+All three return an `McpClientProtocol` object.  Call `await client.connect()`
+before making requests and `await client.close()` when done.
 
 ---
 
@@ -36,34 +35,34 @@ Starts a subprocess and communicates over its stdin/stdout.
 McpServer.stdio(
     command: list[str],
     *,
-    env: dict[str, str] | None = None,
-    cwd: str | None = None,
-    timeout: float = 30.0,
+    max_retries: int = 3,
+    startup_timeout: float = 10.0,
 ) -> McpClientProtocol
 ```
 
-**Parameters**
-
-| Name | Type | Default | Description |
+| Argument | Type | Default | Description |
 |---|---|---|---|
-| `command` | `list[str]` | required | Command + arguments to start the MCP server subprocess |
-| `env` | `dict[str, str] \| None` | `None` | Extra environment variables; merged with the current process environment |
-| `cwd` | `str \| None` | `None` | Working directory for the subprocess |
-| `timeout` | `float` | `30.0` | Seconds to wait for the subprocess to complete the MCP handshake |
+| `command` | `list[str]` | required | Command + arguments for the subprocess |
+| `max_retries` | `int` | `3` | How many times to restart on unexpected exit |
+| `startup_timeout` | `float` | `10.0` | Seconds to wait for the `initialize` handshake |
 
 **Example**
 
 ```python
-client = McpServer.stdio(
-    ["python", "-m", "my_mcp_server"],
-    env={"DEBUG": "1"},
-    cwd="/path/to/server",
-)
-async with client:
-    tools = await client.list_tools()
-```
+import asyncio
+from lauren_mcp import McpServer
 
-No extra dependencies are required for stdio — it is part of the core install.
+async def main():
+    client = McpServer.stdio(
+        ["npx", "-y", "@modelcontextprotocol/server-filesystem", "/tmp"]
+    )
+    await client.connect()
+    tools = await client.list_tools()
+    print([t.name for t in tools])
+    await client.close()
+
+asyncio.run(main())
+```
 
 ---
 
@@ -71,142 +70,198 @@ No extra dependencies are required for stdio — it is part of the core install.
 
 Connects to an MCP server over a persistent WebSocket connection.
 
+**Requires**: `pip install "lauren-mcp[ws]"`
+
 ```python
 McpServer.ws(
     url: str,
     *,
     headers: dict[str, str] | None = None,
-    ping_interval: float = 20.0,
-    reconnect: bool = True,
-    reconnect_delay: float = 1.0,
-    reconnect_max_delay: float = 30.0,
-    timeout: float = 30.0,
+    max_retries: int = 3,
+    startup_timeout: float = 10.0,
 ) -> McpClientProtocol
 ```
 
-**Requires**: `pip install "lauren-mcp[ws]"` (the `websockets` package).
-
-**Parameters**
-
-| Name | Type | Default | Description |
+| Argument | Type | Default | Description |
 |---|---|---|---|
-| `url` | `str` | required | WebSocket URL, e.g. `ws://host/mcp/ws` or `wss://host/mcp/ws` |
-| `headers` | `dict[str, str] \| None` | `None` | Extra HTTP headers sent during the upgrade (use for auth tokens) |
-| `ping_interval` | `float` | `20.0` | Seconds between keepalive pings |
-| `reconnect` | `bool` | `True` | Automatically reconnect on unexpected disconnection |
-| `reconnect_delay` | `float` | `1.0` | Initial delay before first reconnect attempt |
-| `reconnect_max_delay` | `float` | `30.0` | Maximum delay between reconnect attempts (exponential backoff) |
-| `timeout` | `float` | `30.0` | Seconds to wait for the handshake to complete |
+| `url` | `str` | required | WebSocket URL, e.g. `ws://host/mcp/ws` |
+| `headers` | `dict[str, str] \| None` | `None` | Extra HTTP headers (e.g. auth tokens) |
+| `max_retries` | `int` | `3` | Reconnect attempts on disconnect |
+| `startup_timeout` | `float` | `10.0` | Seconds to wait for handshake |
 
 **Example**
 
 ```python
 client = McpServer.ws(
-    "wss://api.example.com/mcp/ws",
+    "ws://localhost:8000/mcp/ws",
     headers={"Authorization": "Bearer my-token"},
 )
-async with client:
-    result = await client.call_tool("search", {"query": "coffee"})
+await client.connect()
+result = await client.call_tool("search", {"query": "widget"})
+await client.close()
 ```
 
 ---
 
 ## `McpServer.http`
 
-Connects to an MCP server over HTTP with Server-Sent Events for server-to-client
-messages.
+Connects to an MCP server over HTTP + Server-Sent Events.
+
+**Requires**: `pip install "lauren-mcp[http]"`
 
 ```python
 McpServer.http(
     url: str,
     *,
     headers: dict[str, str] | None = None,
-    timeout: float = 30.0,
-    sse_timeout: float | None = None,
+    max_retries: int = 3,
+    startup_timeout: float = 10.0,
 ) -> McpClientProtocol
-```
-
-**Requires**: `pip install "lauren-mcp[http]"` (the `httpx` and `httpx-sse` packages).
-
-**Parameters**
-
-| Name | Type | Default | Description |
-|---|---|---|---|
-| `url` | `str` | required | Base SSE URL, e.g. `http://host/mcp/sse` |
-| `headers` | `dict[str, str] \| None` | `None` | Extra HTTP headers for every request (use for auth tokens) |
-| `timeout` | `float` | `30.0` | Per-request timeout in seconds |
-| `sse_timeout` | `float \| None` | `None` | SSE stream read timeout; `None` means no timeout |
-
-**Example**
-
-```python
-client = McpServer.http(
-    "https://api.example.com/mcp/sse",
-    headers={"X-Api-Key": "secret"},
-)
-async with client:
-    resources = await client.list_resources()
 ```
 
 ---
 
 ## `McpClientProtocol` methods
 
-All three transports return an object that implements `McpClientProtocol`:
+All three transports return the same interface.
 
-### `connect() / disconnect()`
+### `connect()` / `close()`
 
 ```python
-await client.connect()    # establishes connection, runs MCP handshake
-await client.disconnect() # gracefully closes connection
+await client.connect()   # initialise handshake
+await client.close()     # graceful shutdown
 ```
 
-Both are called automatically when using the async context manager.
+### `list_tools() → list[ToolSchema]`
 
-### `list_tools() -> list[ToolSchema]`
-
-Returns the server's current tool manifest.
+Returns the server's tool catalogue.  Each `ToolSchema` has `.name`,
+`.description`, and `.inputSchema` (a JSON Schema dict).
 
 ```python
 tools = await client.list_tools()
 for tool in tools:
     print(tool.name, "—", tool.description)
+    print("  schema:", tool.inputSchema)
 ```
 
-### `call_tool(name: str, arguments: dict) -> list[TextContent | ImageContent | EmbeddedResource]`
+### `call_tool(name, arguments) → dict`
 
-Calls a tool and returns its content blocks.
+Calls a tool and returns a raw dict with `"content"` and `"isError"` keys.
+The `"content"` list contains objects with `{"type": "text", "text": "..."}`.
 
 ```python
 result = await client.call_tool("search", {"query": "blue widgets"})
-# result is a list of TextContent or ImageContent objects
-text = result[0].text  # for TextContent
+
+# Check for tool-level errors
+if result.get("isError"):
+    print("Tool error:", result)
+
+# Extract the first text item
+content = result.get("content", [])
+if content and content[0].get("type") == "text":
+    print(content[0]["text"])
+
+# When the tool returns a dict/list, it's JSON-encoded in the text field
+import json
+items = json.loads(content[0]["text"])
 ```
 
-### `list_resources() -> list[ResourceSchema]`
+### `list_resources() → list[ResourceSchema]`
 
-Returns the server's current resource manifest.
-
-### `read_resource(uri: str) -> ReadResourceResult`
-
-Reads a resource by URI.
+Returns the server's resource catalogue.  Each `ResourceSchema` has `.uri`,
+`.name`, `.description`, and `.mimeType`.
 
 ```python
-res = await client.read_resource("items://42")
-print(res.contents[0].text)
+resources = await client.list_resources()
+for r in resources:
+    print(r.name, "—", r.uri)
 ```
 
-### `list_prompts() -> list[PromptSchema]`
+### `read_resource(uri) → dict`
 
-Returns the server's prompt manifest.
-
-### `get_prompt(name: str, arguments: dict | None = None) -> GetPromptResult`
-
-Retrieves a rendered prompt.
+Reads a resource by URI.  Returns a raw dict with `"contents"` list.
 
 ```python
-prompt_result = await client.get_prompt("catalogue_summary_prompt", {"focus": "gadgets"})
-print(prompt_result.messages[0].content.text)
+result = await client.read_resource("/items/42")
+contents = result.get("contents", [])
+if contents:
+    print(contents[0].get("text", ""))
+```
+
+### `list_prompts() → list[PromptSchema]`
+
+Returns the server's prompt catalogue.
+
+### `get_prompt(name, arguments) → dict`
+
+Retrieves a rendered prompt.  Returns a raw dict with `"messages"` list.
+
+```python
+result = await client.get_prompt("catalogue_summary", {"focus": "gadgets"})
+messages = result.get("messages", [])
+if messages:
+    text = messages[0].get("content", {}).get("text", "")
+    print(text)
+```
+
+### `ping()`
+
+Checks that the connection is alive; raises `McpCallError` on failure.
+
+```python
+await client.ping()
+```
+
+---
+
+## Error handling
+
+```python
+from lauren_mcp._client._stdio import McpCallError
+import asyncio
+
+try:
+    result = await client.call_tool("divide", {"a": 1, "b": 0})
+except McpCallError as exc:
+    print(f"Tool failed (code {exc.code}): {exc}")
+except asyncio.TimeoutError:
+    print("Request timed out")
+```
+
+`McpCallError` is raised when the server returns a JSON-RPC error response.
+`asyncio.TimeoutError` is raised when `startup_timeout` is exceeded during
+`connect()`.
+
+---
+
+## Authentication headers
+
+```python
+# Bearer token (WebSocket or HTTP)
+client = McpServer.ws(
+    "wss://api.example.com/mcp/ws",
+    headers={"Authorization": "Bearer eyJ..."},
+)
+
+client = McpServer.http(
+    "https://api.example.com/mcp",
+    headers={"X-Api-Key": "sk-..."},
+)
+```
+
+---
+
+## Retry on disconnect
+
+The `max_retries` parameter controls how many times the stdio client
+restarts after an unexpected subprocess exit:
+
+```python
+# Never retry — raise immediately on exit
+client = McpServer.stdio(["python", "server.py"], max_retries=0)
+
+# Retry up to 5 times
+client = McpServer.stdio(["python", "server.py"], max_retries=5)
 ```
 
 ---
@@ -216,72 +271,11 @@ print(prompt_result.messages[0].content.text)
 ```
 McpServer.ws(url) → McpClientProtocol (not yet connected)
     │
-    ▼ async with client: (or await client.connect())
+    ▼  await client.connect()
     │
-    ├─ TCP/TLS connect
-    ├─ MCP initialize handshake (capabilities exchange)
-    ├─ Ready: list_tools / call_tool / etc.
-    │
-    ▼ exit context (or await client.disconnect())
-    └─ graceful close
+    ├── TCP / TLS connect
+    ├── MCP initialize handshake (capabilities exchange)
+    └── Ready: list_tools / call_tool / etc.
+
+    await client.close()  → graceful shutdown
 ```
-
-If `reconnect=True` (WebSocket only), any unexpected disconnection triggers exponential
-backoff reconnect attempts in the background. Calls made during a reconnect window will
-raise `McpConnectionError` — callers should implement retry logic for production use.
-
----
-
-## Error handling
-
-| Exception | When raised |
-|---|---|
-| `McpConnectionError` | Cannot connect to or lost connection to the server |
-| `McpHandshakeError` | Protocol version mismatch during initialize |
-| `McpToolNotFoundError` | `call_tool` name not in server's tool list |
-| `McpToolError` | Server returned an error response for a tool call |
-| `McpTimeoutError` | Operation exceeded the configured timeout |
-
-All exceptions derive from `lauren_mcp.McpError`.
-
----
-
-## Authentication headers
-
-Pass authentication credentials via the `headers` parameter:
-
-```python
-# Bearer token
-client = McpServer.ws("wss://api.example.com/mcp/ws", headers={"Authorization": "Bearer token"})
-
-# API key
-client = McpServer.http("https://api.example.com/mcp/sse", headers={"X-Api-Key": "key"})
-
-# Basic auth (pre-encoded)
-import base64
-creds = base64.b64encode(b"user:pass").decode()
-client = McpServer.ws("wss://api.example.com/mcp/ws", headers={"Authorization": f"Basic {creds}"})
-```
-
-For stdio servers, pass credentials via `env`:
-
-```python
-client = McpServer.stdio(
-    ["python", "-m", "my_server"],
-    env={"API_KEY": "secret"},
-)
-```
-
----
-
-## Reconnect behaviour (WebSocket)
-
-When `reconnect=True` (default), the WebSocket client uses exponential backoff:
-
-1. Disconnected → wait `reconnect_delay` seconds → attempt reconnect
-2. On failure → wait `min(delay * 2, reconnect_max_delay)` → retry
-3. On success → reset delay to `reconnect_delay`
-
-The reconnect loop runs until the context manager exits or `disconnect()` is called.
-Pending `call_tool` awaits that were in-flight at disconnect time will raise
-`McpConnectionError`.

@@ -95,11 +95,13 @@ def build_wired_dispatcher(server_cls: type, **for_root_kwargs) -> tuple[McpDisp
     dispatcher = McpDispatcher()
     dispatcher._register_builtins()
     server_instance = server_cls()
-    # Instantiate the module (bypassing DI) and call the post_construct
-    mod_instance = mod_cls.__new__(mod_cls)
-    mod_instance._dispatcher = dispatcher
-    mod_instance._server_instance = server_instance
-    mod_instance._register_handlers()
+    # Bypass DI: instantiate the handler registrar directly and call its post_construct.
+    # The registrar class is stored on the module by for_root() for exactly this use.
+    registrar_cls = mod_cls._handler_registrar_cls  # type: ignore[attr-defined]
+    registrar = registrar_cls.__new__(registrar_cls)
+    registrar._dispatcher = dispatcher
+    registrar._server_instance = server_instance
+    registrar._register_handlers()
     return dispatcher, server_instance
 
 
