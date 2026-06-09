@@ -31,7 +31,7 @@ class McpToolBridge:
     def __init__(self, servers: list[McpServerConfig]) -> None:
         self._servers = servers
         self._registry: Any = None  # set via set_registry before connect_all
-        self._watch_tasks: list[asyncio.Task] = []
+        self._watch_tasks: list[asyncio.Task[None]] = []
 
     def set_registry(self, registry: Any) -> None:
         """Attach a ToolRegistry (or any object with register_mcp_server) to this bridge.

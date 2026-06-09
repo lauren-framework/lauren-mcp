@@ -5,6 +5,9 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+from typing import Any
+
+from lauren_mcp._types import Implementation
 
 from ._base_remote import _McpBaseRemoteClient
 from ._stdio import McpCallError
@@ -15,8 +18,8 @@ _logger = logging.getLogger(__name__)
 # Optional dependency guard
 # ---------------------------------------------------------------------------
 try:
-    import httpx  # type: ignore[import]
-    import httpx_sse  # type: ignore[import]
+    import httpx
+    import httpx_sse
 
     _SSE_AVAILABLE = True
 except ImportError:
@@ -60,7 +63,7 @@ class McpHttpSseClient(_McpBaseRemoteClient):
         headers: dict[str, str] | None = None,
         max_retries: int = 3,
         startup_timeout: float = 10.0,
-        client_info=None,
+        client_info: Implementation | None = None,
     ) -> None:
         if not _SSE_AVAILABLE:
             raise ImportError(
@@ -75,7 +78,7 @@ class McpHttpSseClient(_McpBaseRemoteClient):
         )
         self._url = url.rstrip("/")
         self._session_id: str | None = None
-        self._http_client: httpx.AsyncClient | None = None  # type: ignore[name-defined]
+        self._http_client: httpx.AsyncClient | None = None
 
     # ------------------------------------------------------------------
     # Public lifecycle
@@ -104,7 +107,7 @@ class McpHttpSseClient(_McpBaseRemoteClient):
         self._session_id = None
 
         # Signal used to unblock _handshake until session_id is known
-        session_ready: asyncio.Future = asyncio.get_running_loop().create_future()
+        session_ready: asyncio.Future[str] = asyncio.get_running_loop().create_future()
         self._reader_task = asyncio.create_task(self._sse_loop(session_ready))
 
         # Wait until the SSE endpoint event delivers the session_id
@@ -135,7 +138,7 @@ class McpHttpSseClient(_McpBaseRemoteClient):
 
         self._session_id = None
 
-    async def _send_raw(self, obj: dict) -> None:
+    async def _send_raw(self, obj: dict[str, Any]) -> None:
         """POST a JSON-RPC message to ``{url}/`` with the session-id header."""
         if self._http_client is None:
             raise McpCallError("HTTP client not connected", code=-32000)
@@ -163,7 +166,7 @@ class McpHttpSseClient(_McpBaseRemoteClient):
     # SSE reader loop
     # ------------------------------------------------------------------
 
-    async def _sse_loop(self, session_ready: asyncio.Future) -> None:
+    async def _sse_loop(self, session_ready: asyncio.Future[str]) -> None:
         """Connect to ``{url}/sse``, extract the session_id, then relay messages.
 
         The first SSE event must be of type ``endpoint`` and contain a JSON
@@ -174,7 +177,7 @@ class McpHttpSseClient(_McpBaseRemoteClient):
         if client is None:
             return
         try:
-            async with httpx_sse.aconnect_sse(  # type: ignore[attr-defined]
+            async with httpx_sse.aconnect_sse(
                 client,
                 "GET",
                 f"{self._url}/sse",

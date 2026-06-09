@@ -5,6 +5,9 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+from typing import Any
+
+from lauren_mcp._types import Implementation
 
 from ._base_remote import _McpBaseRemoteClient
 from ._stdio import McpCallError
@@ -16,8 +19,8 @@ _logger = logging.getLogger(__name__)
 # Raising happens lazily in __init__ so the module can always be imported.
 # ---------------------------------------------------------------------------
 try:
-    import websockets  # type: ignore[import]  # noqa: F401
-    import websockets.asyncio.client as ws_client  # type: ignore[import]
+    import websockets  # noqa: F401
+    import websockets.asyncio.client as ws_client
 
     _WS_AVAILABLE = True
 except ImportError:
@@ -50,7 +53,7 @@ class McpWebSocketClient(_McpBaseRemoteClient):
         headers: dict[str, str] | None = None,
         max_retries: int = 3,
         startup_timeout: float = 10.0,
-        client_info=None,
+        client_info: Implementation | None = None,
     ) -> None:
         if not _WS_AVAILABLE:
             raise ImportError(
@@ -110,7 +113,7 @@ class McpWebSocketClient(_McpBaseRemoteClient):
                 pass
             self._ws = None
 
-    async def _send_raw(self, obj: dict) -> None:
+    async def _send_raw(self, obj: dict[str, Any]) -> None:
         """Serialise *obj* to JSON and send it as a WebSocket text frame."""
         if self._ws is None:
             raise McpCallError("WebSocket not connected", code=-32000)

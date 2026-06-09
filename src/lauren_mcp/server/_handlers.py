@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import re
+from collections.abc import Callable, Coroutine
 from typing import Any
 
 from lauren_mcp._types import JsonRpcRequest
@@ -15,7 +16,10 @@ from ._meta import McpPromptMeta, McpResourceMeta, McpToolMeta
 # ---------------------------------------------------------------------------
 
 
-def make_tools_list_handler(tools: list[McpToolMeta]):
+_Handler = Callable[[JsonRpcRequest], Coroutine[Any, Any, dict[str, Any]]]
+
+
+def make_tools_list_handler(tools: list[McpToolMeta]) -> _Handler:
     """Return an async handler for ``tools/list``."""
     schemas = [
         {
@@ -26,21 +30,21 @@ def make_tools_list_handler(tools: list[McpToolMeta]):
         for t in tools
     ]
 
-    async def handler(req: JsonRpcRequest) -> dict:
+    async def handler(req: JsonRpcRequest) -> dict[str, Any]:
         return {"tools": schemas}
 
     return handler
 
 
-def make_tools_call_handler(server_instance: Any, tools: list[McpToolMeta]):
+def make_tools_call_handler(server_instance: Any, tools: list[McpToolMeta]) -> _Handler:
     """Return an async handler for ``tools/call``.
 
     Dispatches to ``server_instance.<method_name>(**arguments)``.
     """
     tool_map = {t.name: t for t in tools}
 
-    async def handler(req: JsonRpcRequest) -> dict:
-        params = req.params or {}
+    async def handler(req: JsonRpcRequest) -> dict[str, Any]:
+        params: dict[str, Any] = req.params if isinstance(req.params, dict) else {}
         name = params.get("name")
         arguments = params.get("arguments") or {}
         if name not in tool_map:
@@ -64,7 +68,7 @@ def make_tools_call_handler(server_instance: Any, tools: list[McpToolMeta]):
 # ---------------------------------------------------------------------------
 
 
-def make_resources_list_handler(resources: list[McpResourceMeta]):
+def make_resources_list_handler(resources: list[McpResourceMeta]) -> _Handler:
     """Return an async handler for ``resources/list``."""
     schemas = [
         {
@@ -76,13 +80,13 @@ def make_resources_list_handler(resources: list[McpResourceMeta]):
         for r in resources
     ]
 
-    async def handler(req: JsonRpcRequest) -> dict:
+    async def handler(req: JsonRpcRequest) -> dict[str, Any]:
         return {"resources": schemas}
 
     return handler
 
 
-def _compile_uri_pattern(template: str) -> re.Pattern:
+def _compile_uri_pattern(template: str) -> re.Pattern[str]:
     """Compile a URI template like ``/items/{id}`` to a named-group regex."""
     escaped = re.escape(template)
     # re.escape turns { → \{ and } → \} — unescape those, then replace
@@ -91,7 +95,7 @@ def _compile_uri_pattern(template: str) -> re.Pattern:
     return re.compile(f"^{pattern}$")
 
 
-def make_resources_read_handler(server_instance: Any, resources: list[McpResourceMeta]):
+def make_resources_read_handler(server_instance: Any, resources: list[McpResourceMeta]) -> _Handler:
     """Return an async handler for ``resources/read``.
 
     Matches the requested URI against compiled URI-template patterns and
@@ -99,8 +103,8 @@ def make_resources_read_handler(server_instance: Any, resources: list[McpResourc
     """
     compiled = [(r, _compile_uri_pattern(r.uri_template)) for r in resources]
 
-    async def handler(req: JsonRpcRequest) -> dict:
-        params = req.params or {}
+    async def handler(req: JsonRpcRequest) -> dict[str, Any]:
+        params: dict[str, Any] = req.params if isinstance(req.params, dict) else {}
         uri = params.get("uri", "")
         for meta, pattern in compiled:
             m = pattern.match(uri)
@@ -131,24 +135,24 @@ def make_resources_read_handler(server_instance: Any, resources: list[McpResourc
 # ---------------------------------------------------------------------------
 
 
-def make_prompts_list_handler(prompts: list[McpPromptMeta]):
+def make_prompts_list_handler(prompts: list[McpPromptMeta]) -> _Handler:
     """Return an async handler for ``prompts/list``."""
-    schemas = []
+    schemas: list[dict[str, Any]] = []
     for p in prompts:
-        entry: dict = {"name": p.name}
+        entry: dict[str, Any] = {"name": p.name}
         if p.description is not None:
             entry["description"] = p.description
         if p.arguments:
             entry["arguments"] = p.arguments
         schemas.append(entry)
 
-    async def handler(req: JsonRpcRequest) -> dict:
+    async def handler(req: JsonRpcRequest) -> dict[str, Any]:
         return {"prompts": schemas}
 
     return handler
 
 
-def make_prompts_get_handler(server_instance: Any, prompts: list[McpPromptMeta]):
+def make_prompts_get_handler(server_instance: Any, prompts: list[McpPromptMeta]) -> _Handler:
     """Return an async handler for ``prompts/get``.
 
     Dispatches to ``server_instance.<method_name>(**arguments)`` and
@@ -157,8 +161,8 @@ def make_prompts_get_handler(server_instance: Any, prompts: list[McpPromptMeta])
     """
     prompt_map = {p.name: p for p in prompts}
 
-    async def handler(req: JsonRpcRequest) -> dict:
-        params = req.params or {}
+    async def handler(req: JsonRpcRequest) -> dict[str, Any]:
+        params: dict[str, Any] = req.params if isinstance(req.params, dict) else {}
         name = params.get("name")
         arguments = params.get("arguments") or {}
         if name not in prompt_map:

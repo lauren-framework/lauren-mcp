@@ -83,6 +83,7 @@ ignore = ["B008"]
 python_version         = "3.11"
 strict                 = true
 ignore_missing_imports = true
+cache_dir              = "/tmp/mypy-cache-lauren-mcp"
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

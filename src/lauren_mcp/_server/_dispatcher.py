@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Awaitable, Callable
+from collections.abc import Callable, Coroutine
 from typing import Any
 
 from lauren import Scope, injectable, post_construct
@@ -18,7 +18,7 @@ from lauren_mcp._types import (
 
 # Type alias for an async handler: receives the request params dict (or None)
 # and returns a plain Python value that will be placed in `result`.
-AsyncHandler = Callable[[dict[str, Any] | None], Awaitable[Any]]
+AsyncHandler = Callable[[dict[str, Any] | None], Coroutine[Any, Any, Any]]
 
 
 @injectable(scope=Scope.SINGLETON)

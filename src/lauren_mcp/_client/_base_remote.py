@@ -55,9 +55,9 @@ class _McpBaseRemoteClient(McpClientProtocol):
         self._startup_timeout = startup_timeout
 
         # Shared state
-        self._pending: dict[int, asyncio.Future] = {}
+        self._pending: dict[int, asyncio.Future[Any]] = {}
         self._notification_listeners: list[Callable[[JsonRpcNotification], None]] = []
-        self._reader_task: asyncio.Task | None = None
+        self._reader_task: asyncio.Task[None] | None = None
         self._next_id: int = 0
         self._initialized: bool = False
         self._retry_count: int = 0
@@ -67,7 +67,7 @@ class _McpBaseRemoteClient(McpClientProtocol):
     # ------------------------------------------------------------------
 
     @abstractmethod
-    async def _send_raw(self, obj: dict) -> None:
+    async def _send_raw(self, obj: dict[str, Any]) -> None:
         """Serialise *obj* to JSON and write it to the transport."""
 
     @abstractmethod
@@ -117,7 +117,7 @@ class _McpBaseRemoteClient(McpClientProtocol):
         loop = asyncio.get_running_loop()
         req_id = self._next_id
         self._next_id += 1
-        fut: asyncio.Future = loop.create_future()
+        fut: asyncio.Future[Any] = loop.create_future()
         self._pending[req_id] = fut
         await self._send_raw(
             {

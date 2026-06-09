@@ -9,7 +9,7 @@ from collections.abc import AsyncGenerator
 
 from lauren import controller, get, post
 from lauren.sse import EventStream, ServerSentEvent
-from lauren.types import Request, Response
+from lauren.types import Headers, Request, Response
 
 from lauren_mcp._server._dispatcher import McpDispatcher
 from lauren_mcp._server._session import SseSessionStore
@@ -112,7 +112,7 @@ def mcp_http_sse_controller(base_path: str) -> type:
                 return Response(
                     body=json.dumps({"error": f"Missing '{_SESSION_HEADER}' header"}).encode(),
                     status=400,
-                    headers=[("content-type", "application/json")],
+                    headers=Headers([("content-type", "application/json")]),
                 )
 
             queue = self._sessions.get(session_id)
@@ -120,7 +120,7 @@ def mcp_http_sse_controller(base_path: str) -> type:
                 return Response(
                     body=json.dumps({"error": f"Unknown session: {session_id!r}"}).encode(),
                     status=404,
-                    headers=[("content-type", "application/json")],
+                    headers=Headers([("content-type", "application/json")]),
                 )
 
             # Read and parse the request body.

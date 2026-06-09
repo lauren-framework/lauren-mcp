@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 from lauren import module, post_construct
 
 from lauren_mcp._server._dispatcher import McpDispatcher
@@ -185,7 +187,7 @@ class McpServerModule:
                 _si = _resolved_server_info
                 _sc = _resolved_caps
 
-                async def _initialize_handler(params: dict | None) -> dict:
+                async def _initialize_handler(params: dict[str, Any] | None) -> dict[str, Any]:
                     from lauren_mcp._types import (
                         Implementation,
                     )
@@ -243,11 +245,11 @@ class McpServerModule:
 
                     from lauren_mcp._types import JsonRpcRequest as _Req
 
-                    async def _tools_list(params: dict | None) -> dict:
+                    async def _tools_list(params: dict[str, Any] | None) -> dict[str, Any]:
                         req = _Req(method="tools/list", params=params)
                         return await _tl_inner(req)
 
-                    async def _tools_call(params: dict | None) -> dict:
+                    async def _tools_call(params: dict[str, Any] | None) -> dict[str, Any]:
                         req = _Req(method="tools/call", params=params)
                         return await _tc_inner(req)
 
@@ -261,11 +263,11 @@ class McpServerModule:
 
                     from lauren_mcp._types import JsonRpcRequest as _Req2
 
-                    async def _resources_list(params: dict | None) -> dict:
+                    async def _resources_list(params: dict[str, Any] | None) -> dict[str, Any]:
                         req = _Req2(method="resources/list", params=params)
                         return await _rl_inner(req)
 
-                    async def _resources_read(params: dict | None) -> dict:
+                    async def _resources_read(params: dict[str, Any] | None) -> dict[str, Any]:
                         req = _Req2(method="resources/read", params=params)
                         return await _rr_inner(req)
 
@@ -279,11 +281,11 @@ class McpServerModule:
 
                     from lauren_mcp._types import JsonRpcRequest as _Req3
 
-                    async def _prompts_list(params: dict | None) -> dict:
+                    async def _prompts_list(params: dict[str, Any] | None) -> dict[str, Any]:
                         req = _Req3(method="prompts/list", params=params)
                         return await _pl_inner(req)
 
-                    async def _prompts_get(params: dict | None) -> dict:
+                    async def _prompts_get(params: dict[str, Any] | None) -> dict[str, Any]:
                         req = _Req3(method="prompts/get", params=params)
                         return await _pg_inner(req)
 

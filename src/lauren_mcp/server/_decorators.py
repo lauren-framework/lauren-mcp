@@ -49,7 +49,7 @@ def _json_type(annotation: Any) -> str:
     return _PY_TO_JSON.get(annotation, "string")
 
 
-def _extract_description(fn: Callable) -> str:
+def _extract_description(fn: Callable[..., Any]) -> str:
     """Return first non-empty line of docstring, stopping before 'Args:' etc."""
     doc = fn.__doc__
     if not doc:
@@ -68,7 +68,7 @@ def _extract_description(fn: Callable) -> str:
     return " ".join(parts)
 
 
-def _build_schema(fn: Callable) -> tuple[str, str, dict[str, Any]]:
+def _build_schema(fn: Callable[..., Any]) -> tuple[str, str, dict[str, Any]]:
     """Build ``(name, description, json_schema)`` from a function's signature.
 
     * Uses ``inspect.signature`` and ``typing.get_type_hints`` (with fallback).
@@ -111,7 +111,7 @@ def _build_schema(fn: Callable) -> tuple[str, str, dict[str, Any]]:
 # ---------------------------------------------------------------------------
 
 
-def mcp_server(path: str, *, transport: str = "ws"):
+def mcp_server(path: str, *, transport: str = "ws") -> Callable[[type], type]:
     """Class decorator that marks a class as an MCP server.
 
     Applies ``@injectable(scope=Scope.SINGLETON)`` from Lauren so the class
@@ -132,7 +132,9 @@ def mcp_server(path: str, *, transport: str = "ws"):
     return decorator
 
 
-def mcp_tool(*, name: str | None = None, description: str | None = None):
+def mcp_tool(
+    *, name: str | None = None, description: str | None = None
+) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
     """Method decorator that exposes a coroutine as an MCP tool.
 
     Args:
@@ -140,7 +142,7 @@ def mcp_tool(*, name: str | None = None, description: str | None = None):
         description: Override the tool description (defaults to docstring).
     """
 
-    def decorator(fn: Callable) -> Callable:
+    def decorator(fn: Callable[..., Any]) -> Callable[..., Any]:
         auto_name, auto_desc, schema = _build_schema(fn)
         resolved_name = name if name is not None else auto_name
         resolved_desc = description if description is not None else auto_desc
@@ -162,7 +164,7 @@ def mcp_resource(
     name: str | None = None,
     description: str | None = None,
     mime_type: str | None = None,
-):
+) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
     """Method decorator that exposes a coroutine as an MCP resource.
 
     Args:
@@ -172,7 +174,7 @@ def mcp_resource(
         mime_type: Optional MIME type hint (e.g. ``"text/plain"``).
     """
 
-    def decorator(fn: Callable) -> Callable:
+    def decorator(fn: Callable[..., Any]) -> Callable[..., Any]:
         resolved_name = name if name is not None else fn.__name__
         resolved_desc = description if description is not None else _extract_description(fn)
         meta = McpResourceMeta(
@@ -188,7 +190,9 @@ def mcp_resource(
     return decorator
 
 
-def mcp_prompt(name: str | None = None, *, description: str | None = None):
+def mcp_prompt(
+    name: str | None = None, *, description: str | None = None
+) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
     """Method decorator that exposes a coroutine as an MCP prompt.
 
     Args:
@@ -196,16 +200,16 @@ def mcp_prompt(name: str | None = None, *, description: str | None = None):
         description: Human-readable description (defaults to docstring).
     """
 
-    def decorator(fn: Callable) -> Callable:
+    def decorator(fn: Callable[..., Any]) -> Callable[..., Any]:
         resolved_name = name if name is not None else fn.__name__
         resolved_desc = description if description is not None else _extract_description(fn)
 
         sig = inspect.signature(fn)
-        arguments: list[dict] = []
+        arguments: list[dict[str, Any]] = []
         for param_name, param in sig.parameters.items():
             if param_name == "self":
                 continue
-            arg_entry: dict = {
+            arg_entry: dict[str, Any] = {
                 "name": param_name,
                 "description": None,
                 "required": param.default is inspect.Parameter.empty,

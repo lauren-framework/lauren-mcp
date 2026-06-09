@@ -59,14 +59,14 @@ def mcp_ws_controller(
     class McpWsController:
         """MCP WebSocket gateway — one instance per connection (REQUEST scope)."""
 
-        def __init__(self, dispatcher: McpDispatcher) -> None:  # type: ignore[name-defined]
+        def __init__(self, dispatcher: McpDispatcher) -> None:
             self._dispatcher = dispatcher
             # Per-connection state: True once the client has sent
             # ``notifications/initialized`` after the handshake.
             self._initialized: bool = False
 
         @on_connect
-        async def handle_connect(self, ws: Any) -> None:  # type: ignore[name-defined]
+        async def handle_connect(self, ws: Any) -> None:
             """Start the message loop when the handshake completes."""
             asyncio.create_task(self._message_loop(ws))
 

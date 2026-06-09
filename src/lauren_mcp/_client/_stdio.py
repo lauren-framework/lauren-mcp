@@ -75,8 +75,8 @@ class McpStdioClient(McpClientProtocol):
 
         # Internal state (reset by _start_process)
         self._proc: asyncio.subprocess.Process | None = None
-        self._reader_task: asyncio.Task | None = None
-        self._pending: dict[int, asyncio.Future] = {}
+        self._reader_task: asyncio.Task[None] | None = None
+        self._pending: dict[int, asyncio.Future[Any]] = {}
         self._notification_listeners: list[Callable[[JsonRpcNotification], None]] = []
         self._next_id: int = 0
         self._initialized: bool = False
@@ -177,7 +177,7 @@ class McpStdioClient(McpClientProtocol):
         loop = asyncio.get_running_loop()
         req_id = self._next_id
         self._next_id += 1
-        fut: asyncio.Future = loop.create_future()
+        fut: asyncio.Future[Any] = loop.create_future()
         self._pending[req_id] = fut
         await self._send_raw(
             {
@@ -189,7 +189,7 @@ class McpStdioClient(McpClientProtocol):
         )
         return await fut
 
-    async def _send_raw(self, obj: dict) -> None:
+    async def _send_raw(self, obj: dict[str, Any]) -> None:
         """Encode *obj* as JSON + newline and write it to the process stdin."""
         if self._proc is None or self._proc.stdin is None:
             raise McpCallError("Not connected", code=-32000)

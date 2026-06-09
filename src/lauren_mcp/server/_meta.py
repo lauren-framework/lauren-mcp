@@ -47,5 +47,5 @@ class McpPromptMeta:
 
     name: str
     description: str | None
-    arguments: list[dict]  # [{name, description, required}]
+    arguments: list[dict[str, Any]]  # [{name, description, required}]
     method_name: str
