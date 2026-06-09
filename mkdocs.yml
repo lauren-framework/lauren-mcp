@@ -1,0 +1,111 @@
+site_name: Lauren MCP
+site_description: Model Context Protocol server and client for the Lauren web framework
+site_url: https://mcp.lauren-py.dev
+repo_url: https://github.com/lauren-framework/lauren-mcp
+repo_name: lauren-framework/lauren-mcp
+edit_uri: edit/main/docs/
+
+docs_dir: docs
+site_dir: site
+
+theme:
+  name: material
+  palette:
+    - scheme: default
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+    - scheme: slate
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
+  font:
+    text: Inter
+    code: JetBrains Mono
+  features:
+    - navigation.tabs
+    - navigation.tabs.sticky
+    - navigation.sections
+    - navigation.expand
+    - navigation.indexes
+    - navigation.top
+    - toc.follow
+    - content.code.copy
+    - content.code.annotate
+    - search.highlight
+    - search.share
+
+plugins:
+  - search
+  - mkdocstrings:
+      handlers:
+        python:
+          paths: [src]
+          options:
+            docstring_style: google
+            show_source: true
+            show_root_heading: true
+            show_root_full_path: false
+            show_symbol_type_heading: true
+            show_symbol_type_toc: true
+            members_order: source
+            separate_signature: true
+            unwrap_annotated: true
+            merge_init_into_class: true
+
+markdown_extensions:
+  - admonition
+  - pymdownx.details
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.inlinehilite
+  - pymdownx.snippets
+  - pymdownx.tabbed:
+      alternate_style: true
+  - tables
+  - toc:
+      permalink: true
+
+nav:
+  - Home: index.md
+  - Getting Started:
+    - getting-started/index.md
+    - Installation: getting-started/installation.md
+    - Quick Start: getting-started/quick-start.md
+  - Guides:
+    - guides/index.md
+    - MCP Server: guides/mcp-server.md
+    - MCP Client: guides/mcp-client.md
+    - Agent Tools: guides/mcp-agent-tools.md
+    - Testing: guides/testing.md
+  - API Reference:
+    - reference/index.md
+    - Server API: reference/server.md
+    - Client API: reference/client.md
+    - Wire Types: reference/types.md
+  - Generated Reference:
+    - Server: generated-reference/server.md
+    - Client: generated-reference/client.md
+    - Types: generated-reference/types.md
+  - Development:
+    - development/index.md
+    - Release Process: development/release.md
+    - Versioning: development/versioning.md
+
+extra:
+  social:
+    - icon: fontawesome/brands/github
+      link: https://github.com/lauren-framework/lauren-mcp
+  version:
+    provider: mike
+
+copyright: Copyright &copy; 2025 Lauren Contributors

@@ -1,0 +1,946 @@
+# llms-full.txt — lauren-mcp complete API reference
+
+> This file documents every public symbol in `lauren_mcp.__all__`.
+> It is intended for AI assistants and LLM-based tooling.
+> See llms.txt for a shorter overview.
+
+Package: lauren-mcp
+Source: https://github.com/lauren-framework/lauren-mcp
+Docs: https://mcp.lauren-py.dev
+PyPI: https://pypi.org/project/lauren-mcp/
+
+---
+
+## Version constants
+
+### LATEST
+
+```python
+LATEST: str
+```
+
+The latest MCP protocol version string supported by this library.
+Example value: `"2024-11-05"`.
+Use this when constructing `InitializeParams` if you want to negotiate the newest
+protocol version.
+
+### STABLE
+
+```python
+STABLE: str
+```
+
+The stable MCP protocol version string recommended for production use.
+May lag behind `LATEST` during transition periods to give server implementations
+time to adopt new protocol features.
+Example value: `"2024-11-05"`.
+
+### SUPPORTED
+
+```python
+SUPPORTED: list[str]
+```
+
+A list of all MCP protocol version strings this library can handle.
+Example value: `["2024-11-05"]`.
+The library refuses `initialize` handshakes that propose a version not in this list.
+
+---
+
+## Server decorators
+
+### mcp_server
+
+```python
+def mcp_server(
+    path: str,
+    *,
+    name: str | None = None,
+    version: str = "1.0.0",
+    description: str | None = None,
+) -> Callable[[type], type]:
+```
+
+Class decorator that registers a class as an MCP server mounted at `path`.
+
+**Parameters**
+
+- `path` (`str`, required): URL path prefix for this server (e.g. `"/mcp"`).
+- `name` (`str | None`, default `None`): Human-readable server name. Defaults to the
+  decorated class name.
+- `version` (`str`, default `"1.0.0"`): Version string reported in the MCP handshake.
+- `description` (`str | None`, default `None`): Server description reported in the
+  MCP handshake.
+
+**Returns**: The decorated class, unmodified except for attached MCP metadata.
+
+**Example**
+
+```python
+from lauren_mcp import mcp_server, mcp_tool
+
+@mcp_server("/mcp", name="Shop API", version="2.0.0")
+class ShopServer:
+    @mcp_tool()
+    async def search(self, query: str) -> list[dict]:
+        """Search items. Args: query: Search terms."""
+        ...
+```
+
+---
+
+### mcp_tool
+
+```python
+def mcp_tool(
+    *,
+    name: str | None = None,
+    description: str | None = None,
+) -> Callable[[Callable], Callable]:
+```
+
+Method decorator that marks an async method on an `@mcp_server` class as an MCP tool.
+
+The tool's JSON Schema is derived automatically from Python type annotations.
+Google-style docstrings (`Args:` section) populate per-parameter descriptions.
+
+**Parameters**
+
+- `name` (`str | None`, default `None`): Override the tool name. Defaults to the
+  method name.
+- `description` (`str | None`, default `None`): Override the tool description.
+  Defaults to the method docstring.
+
+**Schema generation rules**
+
+| Python annotation | JSON Schema |
+|---|---|
+| `str` | `{"type": "string"}` |
+| `int` | `{"type": "integer"}` |
+| `float` | `{"type": "number"}` |
+| `bool` | `{"type": "boolean"}` |
+| `list[X]` | `{"type": "array", "items": <X schema>}` |
+| `dict` / `dict[str, X]` | `{"type": "object"}` |
+| `X | None` | optional (omitted from `required`) |
+| parameter with default | optional |
+| parameter without default | required |
+
+DI parameters (annotated with `Depends(...)`) are excluded from the schema.
+
+**Example**
+
+```python
+@mcp_tool(name="item_search")
+async def search(
+    self,
+    query: str,
+    limit: int = 10,
+    tags: list[str] | None = None,
+) -> list[dict]:
+    """Search the catalogue.
+
+    Args:
+        query: Full-text search query.
+        limit: Max results (default 10).
+        tags: Optional tag filter.
+    """
+    ...
+```
+
+---
+
+### mcp_resource
+
+```python
+def mcp_resource(
+    uri: str,
+    *,
+    name: str | None = None,
+    description: str | None = None,
+    mime_type: str = "text/plain",
+) -> Callable[[Callable], Callable]:
+```
+
+Method decorator that exposes a URI-addressable resource on an `@mcp_server` class.
+
+URI template variables (e.g. `{item_id}`) are extracted from the URI and passed as
+keyword arguments to the decorated async method.
+
+**Parameters**
+
+- `uri` (`str`, required): URI template string (e.g. `"items://{item_id}"`).
+- `name` (`str | None`, default `None`): Override resource name. Defaults to the
+  method name.
+- `description` (`str | None`, default `None`): Override description. Defaults to
+  the docstring.
+- `mime_type` (`str`, default `"text/plain"`): MIME type of the returned content.
+
+**Example**
+
+```python
+@mcp_resource("orders://{order_id}", mime_type="application/json")
+async def get_order(self, order_id: str) -> str:
+    """Return an order as JSON. Args: order_id: The order ID."""
+    import json
+    return json.dumps({"id": order_id, "status": "shipped"})
+```
+
+---
+
+### mcp_prompt
+
+```python
+def mcp_prompt(
+    *,
+    name: str | None = None,
+    description: str | None = None,
+) -> Callable[[Callable], Callable]:
+```
+
+Method decorator that exposes a parameterised prompt template on an `@mcp_server`
+class. The decorated method must be async and must return a `str`.
+
+**Parameters**
+
+- `name` (`str | None`, default `None`): Override prompt name. Defaults to method name.
+- `description` (`str | None`, default `None`): Override description. Defaults to
+  docstring.
+
+**Example**
+
+```python
+@mcp_prompt()
+async def summarise_prompt(self, topic: str = "general") -> str:
+    """Build a summarisation prompt.
+
+    Args:
+        topic: What to summarise (default "general").
+    """
+    return f"Please provide a concise summary of the following {topic} content:"
+```
+
+---
+
+### McpServerModule
+
+```python
+class McpServerModule:
+    @classmethod
+    def for_root(
+        cls,
+        *,
+        transports: list[str] = ("ws", "sse"),
+        ping_interval: float = 30.0,
+        session_timeout: float = 300.0,
+    ) -> McpServerModule: ...
+```
+
+Lauren module that discovers all `@mcp_server`-decorated classes and mounts their
+transport handlers into the application.
+
+**`for_root()` parameters**
+
+- `transports` (`list[str]`, default `["ws", "sse"]`): Which transports to enable.
+  Valid values: `"ws"` (WebSocket), `"sse"` (HTTP+SSE).
+- `ping_interval` (`float`, default `30.0`): WebSocket keepalive ping interval in
+  seconds.
+- `session_timeout` (`float`, default `300.0`): Idle SSE session timeout in seconds.
+
+**Route mounting**
+
+For a server at `@mcp_server("/mcp")`:
+
+| Path | Transport |
+|---|---|
+| `/mcp/ws` | WebSocket |
+| `/mcp/sse` | HTTP+SSE (GET = SSE stream, POST = client messages) |
+
+**Example**
+
+```python
+from lauren import Lauren
+from lauren_mcp import McpServerModule
+
+app = Lauren()
+app.include(McpServerModule.for_root())                          # both transports
+app.include(McpServerModule.for_root(transports=["ws"]))        # WebSocket only
+app.include(McpServerModule.for_root(transports=["sse"]))       # SSE only
+```
+
+---
+
+## Client
+
+### McpServer
+
+```python
+class McpServer:
+    @classmethod
+    def stdio(
+        cls,
+        command: list[str],
+        *,
+        env: dict[str, str] | None = None,
+        cwd: str | None = None,
+        timeout: float = 30.0,
+    ) -> McpClientProtocol: ...
+
+    @classmethod
+    def ws(
+        cls,
+        url: str,
+        *,
+        headers: dict[str, str] | None = None,
+        ping_interval: float = 20.0,
+        reconnect: bool = True,
+        reconnect_delay: float = 1.0,
+        reconnect_max_delay: float = 30.0,
+        timeout: float = 30.0,
+    ) -> McpClientProtocol: ...
+
+    @classmethod
+    def http(
+        cls,
+        url: str,
+        *,
+        headers: dict[str, str] | None = None,
+        timeout: float = 30.0,
+        sse_timeout: float | None = None,
+    ) -> McpClientProtocol: ...
+```
+
+Factory class for creating MCP client connections. Never instantiate directly.
+
+**`McpServer.stdio`** — subprocess stdin/stdout transport. No extra deps required.
+
+- `command`: Command + args to start the MCP server subprocess.
+- `env`: Extra environment variables (merged with current env).
+- `cwd`: Working directory for the subprocess.
+- `timeout`: Seconds to wait for the MCP handshake.
+
+**`McpServer.ws`** — WebSocket transport. Requires `pip install "lauren-mcp[ws]"`.
+
+- `url`: WebSocket URL (`ws://` or `wss://`).
+- `headers`: Extra HTTP headers for the upgrade request.
+- `ping_interval`: Seconds between keepalive pings.
+- `reconnect`: Automatically reconnect on unexpected disconnect.
+- `reconnect_delay`: Initial reconnect backoff delay in seconds.
+- `reconnect_max_delay`: Maximum reconnect backoff delay in seconds.
+- `timeout`: Handshake timeout in seconds.
+
+**`McpServer.http`** — HTTP+SSE transport. Requires `pip install "lauren-mcp[http]"`.
+
+- `url`: Base SSE URL (`http://` or `https://`).
+- `headers`: Extra HTTP headers for every request.
+- `timeout`: Per-request timeout in seconds.
+- `sse_timeout`: SSE stream read timeout; `None` means no timeout.
+
+**Example**
+
+```python
+from lauren_mcp import McpServer
+
+stdio_client = McpServer.stdio(["python", "-m", "my_server"])
+ws_client    = McpServer.ws("wss://api.example.com/mcp/ws", headers={"Authorization": "Bearer token"})
+http_client  = McpServer.http("https://api.example.com/mcp/sse")
+```
+
+---
+
+### McpClientProtocol
+
+```python
+class McpClientProtocol(Protocol):
+    async def connect(self) -> None: ...
+    async def disconnect(self) -> None: ...
+    async def __aenter__(self) -> McpClientProtocol: ...
+    async def __aexit__(self, *args: object) -> bool: ...
+    async def list_tools(self) -> list[ToolSchema]: ...
+    async def call_tool(
+        self,
+        name: str,
+        arguments: dict,
+    ) -> list[TextContent | ImageContent | EmbeddedResource]: ...
+    async def list_resources(self) -> list[ResourceSchema]: ...
+    async def read_resource(self, uri: str) -> ReadResourceResult: ...
+    async def list_prompts(self) -> list[PromptSchema]: ...
+    async def get_prompt(
+        self,
+        name: str,
+        arguments: dict | None = None,
+    ) -> GetPromptResult: ...
+```
+
+The interface implemented by all three transport clients. You receive instances of this
+from `McpServer.stdio/ws/http`.
+
+**Methods**
+
+- `connect()`: Establishes the transport connection and runs the MCP initialize
+  handshake. Called automatically by the async context manager.
+- `disconnect()`: Sends a graceful close and tears down the transport. Called
+  automatically on context manager exit.
+- `list_tools()`: Fetches the server's current tool manifest. Returns
+  `list[ToolSchema]`.
+- `call_tool(name, arguments)`: Calls a tool. Raises `McpToolError` on server error.
+  Returns a list of content blocks.
+- `list_resources()`: Fetches the server's current resource manifest. Returns
+  `list[ResourceSchema]`.
+- `read_resource(uri)`: Reads a resource by URI. Returns `ReadResourceResult`.
+- `list_prompts()`: Fetches the server's prompt manifest. Returns `list[PromptSchema]`.
+- `get_prompt(name, arguments)`: Retrieves a rendered prompt. Returns `GetPromptResult`.
+
+**Example**
+
+```python
+async with McpServer.stdio(["python", "-m", "my_server"]) as client:
+    tools = await client.list_tools()
+    result = await client.call_tool("search", {"query": "coffee"})
+    print(result[0].text)
+```
+
+---
+
+### McpServerConfig
+
+```python
+from dataclasses import dataclass, field
+
+@dataclass
+class McpServerConfig:
+    alias: str
+    client: McpClientProtocol
+    description: str | None = None
+    tool_filter: list[str] | None = None
+```
+
+Configuration dataclass pairing a short alias with an `McpClientProtocol` instance.
+Used with `AgentModule.for_root(mcp_servers=[...])`.
+
+**Fields**
+
+- `alias` (`str`, required): Short identifier. Tools from this server are namespaced as
+  `alias__tool_name`.
+- `client` (`McpClientProtocol`, required): Client instance from `McpServer.stdio/ws/http`.
+- `description` (`str | None`, default `None`): Human description injected into the
+  agent system prompt.
+- `tool_filter` (`list[str] | None`, default `None`): Whitelist of tool names to
+  expose. If `None`, all tools are exposed.
+
+**Example**
+
+```python
+McpServerConfig(
+    alias="fs",
+    client=McpServer.stdio(["python", "-m", "my_mcp_server"]),
+    description="Internal filesystem tools",
+    tool_filter=["read_file", "list_directory"],
+)
+```
+
+---
+
+### McpToolBridge
+
+```python
+class McpToolBridge:
+    def __init__(self, config: McpServerConfig) -> None: ...
+    async def __aenter__(self) -> McpToolBridge: ...
+    async def __aexit__(self, *args: object) -> bool: ...
+    def get_tool_names(self) -> list[str]: ...
+    def get_tool_schemas(self) -> list[ToolSchema]: ...
+    async def call(
+        self,
+        namespaced_name: str,
+        arguments: dict,
+    ) -> list[TextContent | ImageContent | EmbeddedResource]: ...
+```
+
+Adapts a remote MCP server for use inside a Lauren agent. Manages the connection
+lifecycle, applies `tool_filter`, and provides namespaced tool dispatch.
+
+Used internally by `AgentModule`; also available for custom agent integrations.
+
+**Methods**
+
+- `get_tool_names()`: Returns the list of namespaced tool names available from this
+  server (e.g. `["fs__read_file", "fs__list_directory"]`). Must be called after
+  entering the async context manager.
+- `get_tool_schemas()`: Returns the raw `ToolSchema` objects for all exposed tools
+  (after applying `tool_filter`).
+- `call(namespaced_name, arguments)`: Strips the alias prefix and calls the underlying
+  tool. Raises `McpToolNotFoundError` if the name is not in this bridge's tool list.
+
+**Example**
+
+```python
+from lauren_mcp import McpToolBridge, McpServerConfig, McpServer
+
+config = McpServerConfig(alias="svc", client=McpServer.stdio([...]))
+bridge = McpToolBridge(config)
+
+async with bridge:
+    names = bridge.get_tool_names()    # ["svc__search", "svc__add"]
+    result = await bridge.call("svc__search", {"query": "widget"})
+```
+
+---
+
+## Wire types
+
+### JsonRpcRequest
+
+```python
+@dataclass
+class JsonRpcRequest:
+    jsonrpc: str           # always "2.0"
+    id: int | str
+    method: str
+    params: dict | None = None
+```
+
+An outgoing or incoming JSON-RPC 2.0 request. Always has an `id`; for fire-and-forget
+messages use `JsonRpcNotification`.
+
+---
+
+### JsonRpcNotification
+
+```python
+@dataclass
+class JsonRpcNotification:
+    jsonrpc: str           # always "2.0"
+    method: str
+    params: dict | None = None
+```
+
+A JSON-RPC 2.0 notification (no `id`). The server does not send a response.
+Used for MCP lifecycle events like `notifications/initialized`.
+
+---
+
+### JsonRpcResponse
+
+```python
+@dataclass
+class JsonRpcResponse:
+    jsonrpc: str           # always "2.0"
+    id: int | str
+    result: dict | list | str | int | float | bool | None
+```
+
+A successful JSON-RPC 2.0 response. The `result` field contains the method-specific
+return value.
+
+---
+
+### JsonRpcErrorResponse
+
+```python
+@dataclass
+class JsonRpcErrorResponse:
+    jsonrpc: str           # always "2.0"
+    id: int | str | None
+    error: JsonRpcError
+
+@dataclass
+class JsonRpcError:
+    code: int
+    message: str
+    data: dict | None = None
+```
+
+An error JSON-RPC 2.0 response. `id` is `None` when the error occurred before the
+request `id` could be determined (e.g. parse error).
+
+---
+
+### McpErrorCode
+
+```python
+from enum import IntEnum
+
+class McpErrorCode(IntEnum):
+    PARSE_ERROR        = -32700
+    INVALID_REQUEST    = -32600
+    METHOD_NOT_FOUND   = -32601
+    INVALID_PARAMS     = -32602
+    INTERNAL_ERROR     = -32603
+    TOOL_NOT_FOUND     = -32001
+    RESOURCE_NOT_FOUND = -32002
+    PROMPT_NOT_FOUND   = -32003
+    CONNECTION_ERROR   = -32004
+```
+
+Standard JSON-RPC 2.0 error codes plus MCP-specific extensions.
+
+---
+
+### parse_message
+
+```python
+def parse_message(
+    data: str | bytes,
+) -> JsonRpcRequest | JsonRpcNotification | JsonRpcResponse | JsonRpcErrorResponse:
+```
+
+Parse a raw JSON string or bytes into the appropriate JSON-RPC message type.
+
+**Parameters**
+
+- `data` (`str | bytes`): Raw JSON-RPC message from the wire.
+
+**Returns**: One of the four JSON-RPC message dataclasses.
+
+**Raises**: `JsonRpcParseError` if `data` is not valid JSON or does not conform to
+JSON-RPC 2.0 structure.
+
+**Example**
+
+```python
+from lauren_mcp import parse_message
+
+msg = parse_message('{"jsonrpc":"2.0","id":1,"method":"tools/list","params":null}')
+# → JsonRpcRequest(jsonrpc='2.0', id=1, method='tools/list', params=None)
+```
+
+---
+
+### build_error_response
+
+```python
+def build_error_response(
+    request_id: int | str | None,
+    code: McpErrorCode | int,
+    message: str,
+    data: dict | None = None,
+) -> JsonRpcErrorResponse:
+```
+
+Convenience constructor for `JsonRpcErrorResponse`.
+
+**Parameters**
+
+- `request_id` (`int | str | None`): The `id` from the request that triggered the
+  error. Pass `None` for parse errors.
+- `code` (`McpErrorCode | int`): Error code (use `McpErrorCode` enum values).
+- `message` (`str`): Human-readable error description.
+- `data` (`dict | None`, default `None`): Optional additional error detail.
+
+**Example**
+
+```python
+from lauren_mcp import build_error_response, McpErrorCode
+
+resp = build_error_response(
+    request_id=42,
+    code=McpErrorCode.TOOL_NOT_FOUND,
+    message="Tool 'foo' is not registered.",
+)
+```
+
+---
+
+### ToolSchema
+
+```python
+@dataclass
+class ToolSchema:
+    name: str
+    description: str
+    inputSchema: dict   # JSON Schema object describing the tool's parameters
+```
+
+Descriptor for a single MCP tool as returned by `tools/list`.
+
+`inputSchema` is a JSON Schema object with `type: "object"`, `properties`, and
+`required` fields. Generated automatically by `@mcp_tool` from Python annotations.
+
+---
+
+### ResourceSchema
+
+```python
+@dataclass
+class ResourceSchema:
+    uri: str
+    name: str
+    description: str | None = None
+    mimeType: str = "text/plain"
+```
+
+Descriptor for a single MCP resource as returned by `resources/list`.
+
+---
+
+### PromptSchema
+
+```python
+@dataclass
+class PromptSchema:
+    name: str
+    description: str | None = None
+    arguments: list[PromptArgument] = field(default_factory=list)
+```
+
+Descriptor for a single MCP prompt as returned by `prompts/list`.
+
+---
+
+### TextContent
+
+```python
+@dataclass
+class TextContent:
+    type: Literal["text"]   # always "text"
+    text: str
+```
+
+A plain-text content block. The most common return type from tool calls.
+
+**Example**
+
+```python
+result = await client.call_tool("search", {"query": "coffee"})
+# result[0] is typically TextContent
+print(result[0].text)
+```
+
+---
+
+### ImageContent
+
+```python
+@dataclass
+class ImageContent:
+    type: Literal["image"]   # always "image"
+    data: str                # base-64 encoded image bytes
+    mimeType: str            # e.g. "image/png", "image/jpeg"
+```
+
+A base-64 encoded image content block. Returned by tools that produce images.
+
+---
+
+### EmbeddedResource
+
+```python
+@dataclass
+class EmbeddedResource:
+    type: Literal["resource"]   # always "resource"
+    resource: TextResourceContents | BlobResourceContents
+```
+
+An embedded resource returned inside a tool call result. `TextResourceContents` has
+`uri: str` and `text: str`; `BlobResourceContents` has `uri: str` and `blob: str`
+(base-64 encoded).
+
+---
+
+### PromptArgument
+
+```python
+@dataclass
+class PromptArgument:
+    name: str
+    description: str | None = None
+    required: bool = False
+```
+
+A single argument descriptor within a `PromptSchema`. Generated automatically from
+`@mcp_prompt` method parameters.
+
+---
+
+### PromptMessage
+
+```python
+@dataclass
+class PromptMessage:
+    role: Literal["user", "assistant"]
+    content: TextContent | ImageContent | EmbeddedResource
+```
+
+A single rendered message within a `GetPromptResult`.
+
+---
+
+### InitializeParams
+
+```python
+@dataclass
+class InitializeParams:
+    protocolVersion: str
+    capabilities: ClientCapabilities
+    clientInfo: Implementation
+```
+
+Payload sent by the client in the MCP `initialize` request. Typically constructed
+internally by the client transport; you rarely need to create this directly.
+
+---
+
+### InitializeResult
+
+```python
+@dataclass
+class InitializeResult:
+    protocolVersion: str
+    capabilities: ServerCapabilities
+    serverInfo: Implementation
+    instructions: str | None = None
+```
+
+Payload returned by the server in the `initialize` response. Available on the client
+after `connect()` as `client.server_info`.
+
+---
+
+### ClientCapabilities
+
+```python
+@dataclass
+class ClientCapabilities:
+    roots: dict | None = None
+    sampling: dict | None = None
+    experimental: dict | None = None
+```
+
+Capability flags advertised by the client during the MCP handshake.
+
+---
+
+### ServerCapabilities
+
+```python
+@dataclass
+class ServerCapabilities:
+    tools: dict | None = None
+    resources: dict | None = None
+    prompts: dict | None = None
+    logging: dict | None = None
+    experimental: dict | None = None
+```
+
+Capability flags advertised by the server during the MCP handshake.
+The presence of `tools`, `resources`, or `prompts` keys indicates support for the
+corresponding MCP feature.
+
+---
+
+### Implementation
+
+```python
+@dataclass
+class Implementation:
+    name: str
+    version: str
+```
+
+Identifies a client or server implementation in the MCP handshake messages.
+For `lauren-mcp` servers the default is `Implementation(name="lauren-mcp", version=<package version>)`.
+
+---
+
+### ToolCallParams
+
+```python
+@dataclass
+class ToolCallParams:
+    name: str
+    arguments: dict | None = None
+```
+
+The `params` payload for a `tools/call` JSON-RPC request.
+
+---
+
+### ToolResult
+
+```python
+@dataclass
+class ToolResult:
+    content: list[TextContent | ImageContent | EmbeddedResource]
+    isError: bool = False
+```
+
+Full result envelope from a `tools/call` response. When `isError=True`, the `content`
+blocks describe the error rather than a successful result.
+
+---
+
+### ReadResourceParams
+
+```python
+@dataclass
+class ReadResourceParams:
+    uri: str
+```
+
+The `params` payload for a `resources/read` JSON-RPC request.
+
+---
+
+### ReadResourceResult
+
+```python
+@dataclass
+class ReadResourceResult:
+    contents: list[TextResourceContents | BlobResourceContents]
+```
+
+Result envelope from a `resources/read` response.
+
+---
+
+### GetPromptParams
+
+```python
+@dataclass
+class GetPromptParams:
+    name: str
+    arguments: dict[str, str] | None = None
+```
+
+The `params` payload for a `prompts/get` JSON-RPC request.
+
+---
+
+### GetPromptResult
+
+```python
+@dataclass
+class GetPromptResult:
+    description: str | None
+    messages: list[PromptMessage]
+```
+
+Result envelope from a `prompts/get` response. `messages` contains the rendered prompt
+as a list of role-tagged content blocks, ready to prepend to an LLM conversation.
+
+---
+
+## Exceptions
+
+These exceptions are not in `__all__` but are commonly caught by callers:
+
+- `McpError` — base class for all lauren-mcp exceptions
+- `McpConnectionError` — cannot connect or lost connection
+- `McpHandshakeError` — protocol version mismatch during initialize
+- `McpToolError` — server returned an error response for a tool call
+- `McpToolNotFoundError` — tool name not in server's tool list
+- `McpTimeoutError` — operation exceeded the configured timeout
+- `JsonRpcParseError` — raw data is not valid JSON-RPC 2.0
+
+---
+
+## Internal modules (not in __all__, for contributors)
+
+- `lauren_mcp._server._dispatcher.McpDispatcher` — body-based JSON-RPC routing
+- `lauren_mcp._server._session.SseSessionStore` — HTTP+SSE session lifecycle
+- `lauren_mcp._server._ws.WsHandler` — WebSocket connection handler
+- `lauren_mcp._server._sse.SseHandler` — HTTP+SSE connection handler
+- `lauren_mcp._server._handshake.run_handshake` — MCP initialize sequence
+- `lauren_mcp._client._McpBaseRemoteClient` — shared base for all client transports
+- `lauren_mcp._client._ws.WsClient` — WebSocket client implementation
+- `lauren_mcp._client._http.HttpSseClient` — HTTP+SSE client implementation

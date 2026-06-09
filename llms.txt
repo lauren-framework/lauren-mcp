@@ -1,0 +1,68 @@
+# lauren-mcp
+
+> Model Context Protocol (MCP) server and client for the Lauren web framework.
+
+## What is lauren-mcp?
+
+`lauren-mcp` extends the Lauren Python web framework with support for the Model Context
+Protocol. It provides two capabilities:
+
+**Server**: Expose any Lauren service as an MCP server. AI clients (Claude, custom
+agents, etc.) can discover and call your service's tools over WebSocket or HTTP+SSE.
+
+**Client**: Connect to any remote MCP server (stdio, WebSocket, HTTP+SSE) and wire its
+tools into a Lauren AI agent with automatic namespacing.
+
+## Installation
+
+```
+pip install lauren-mcp               # core: wire types + server decorators + stdio client
+pip install "lauren-mcp[ws]"         # + WebSocket client
+pip install "lauren-mcp[http]"       # + HTTP+SSE client
+pip install "lauren-mcp[all]"        # all transports
+```
+
+## Key concepts
+
+- `@mcp_server(path)` — register a class as an MCP server
+- `@mcp_tool()` — expose an async method as an MCP tool (JSON Schema from type hints)
+- `@mcp_resource(uri)` — expose a URI-addressable resource
+- `@mcp_prompt()` — expose a parameterised prompt template
+- `McpServerModule.for_root()` — mount all `@mcp_server` classes into a Lauren app
+- `McpServer.stdio/ws/http` — factory methods returning `McpClientProtocol`
+- `McpServerConfig(alias, client)` — config for one remote MCP server
+- `McpToolBridge` — adapts remote tools for use inside a Lauren agent
+- Tool namespacing: `{alias}__{tool_name}` prevents collisions
+
+## Wire protocol
+
+JSON-RPC 2.0 over three transports:
+
+| Transport | Extra | Endpoint |
+|---|---|---|
+| stdio | (none) | subprocess stdin/stdout |
+| WebSocket | `[ws]` | `{path}/ws` |
+| HTTP+SSE | `[http]` | `{path}/sse` |
+
+## Public API (`__all__`)
+
+Server: `mcp_server`, `mcp_tool`, `mcp_resource`, `mcp_prompt`, `McpServerModule`
+
+Client: `McpServer`, `McpClientProtocol`, `McpServerConfig`, `McpToolBridge`
+
+Wire types: `JsonRpcRequest`, `JsonRpcNotification`, `JsonRpcResponse`,
+`JsonRpcErrorResponse`, `McpErrorCode`, `parse_message`, `build_error_response`,
+`ToolSchema`, `ResourceSchema`, `PromptSchema`, `TextContent`, `ImageContent`,
+`EmbeddedResource`, `PromptArgument`, `PromptMessage`, `InitializeParams`,
+`InitializeResult`, `ClientCapabilities`, `ServerCapabilities`, `Implementation`,
+`ToolCallParams`, `ToolResult`, `ReadResourceParams`, `ReadResourceResult`,
+`GetPromptParams`, `GetPromptResult`
+
+Version constants: `LATEST`, `STABLE`, `SUPPORTED`
+
+## Links
+
+- Documentation: https://mcp.lauren-py.dev
+- Source: https://github.com/lauren-framework/lauren-mcp
+- PyPI: https://pypi.org/project/lauren-mcp/
+- llms-full.txt: https://mcp.lauren-py.dev/llms-full.txt

@@ -1,0 +1,168 @@
+name: Tests
+
+on:
+  push:
+    branches: ["main", "dev"]
+  pull_request:
+    branches: ["main", "dev"]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # --------------------------------------------------------------------------
+  # Unit tests — fast, no network, no optional deps
+  # --------------------------------------------------------------------------
+  unit:
+    name: Unit Tests (Python ${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12", "3.13", "3.14"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+        with:
+          enable-cache: true
+
+      - name: Install nox
+        run: uv tool install nox
+
+      - name: Run unit tests
+        run: nox -s tests_unit -- -q
+
+  # --------------------------------------------------------------------------
+  # Integration tests — may start subprocesses, uses [all] extra
+  # --------------------------------------------------------------------------
+  integration:
+    name: Integration Tests (Python ${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12", "3.13", "3.14"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+        with:
+          enable-cache: true
+
+      - name: Install nox
+        run: uv tool install nox
+
+      - name: Run integration tests
+        run: nox -s tests_integration -- -q
+
+  # --------------------------------------------------------------------------
+  # Coverage — aggregate after unit + integration
+  # --------------------------------------------------------------------------
+  coverage:
+    name: Coverage Report
+    runs-on: ubuntu-latest
+    needs: [unit, integration]
+    permissions:
+      contents: read
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+        with:
+          enable-cache: true
+
+      - name: Install nox
+        run: uv tool install nox
+
+      - name: Run coverage
+        run: nox -s coverage
+
+      - name: Upload coverage artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-report
+          path: |
+            htmlcov/
+            coverage.xml
+
+      - name: Upload to Codecov
+        uses: codecov/codecov-action@v4
+        continue-on-error: true
+        with:
+          files: coverage.xml
+          flags: unittests
+          name: lauren-mcp
+        env:
+          CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
+
+  # --------------------------------------------------------------------------
+  # Extras matrix — verify import guards for each install variant
+  # --------------------------------------------------------------------------
+  extras-matrix:
+    name: Extras (${{ matrix.extra }}, Python ${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12", "3.13"]
+        extra: ["", "ws", "http", "all"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+        with:
+          enable-cache: true
+
+      - name: Install core deps (bare)
+        if: matrix.extra == ''
+        run: uv sync --extra dev --active
+
+      - name: Install with extra ${{ matrix.extra }}
+        if: matrix.extra != ''
+        run: uv sync --extra ${{ matrix.extra }} --extra dev --active
+
+      - name: Run unit tests
+        run: uv run pytest tests/unit -q
+
+      - name: Verify ws ImportError on bare install
+        if: matrix.extra == ''
+        run: |
+          uv run python -c "
+          import subprocess, sys
+          r = subprocess.run(
+              [sys.executable, '-c', 'from lauren_mcp._client._ws import WsClient'],
+              capture_output=True,
+          )
+          assert r.returncode != 0, f'Expected ImportError but process exited 0. stderr={r.stderr.decode()}'
+          print('OK: WsClient raises ImportError on bare install')
+          "
