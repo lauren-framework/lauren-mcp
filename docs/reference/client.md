@@ -4,56 +4,60 @@
 
 ## `McpServer`
 
-Factory class. Do not instantiate directly — use the class methods below.
+Factory class — use the static methods below.  Do not instantiate directly.
 
 ### `McpServer.stdio`
 
 ```python
-@classmethod
+@staticmethod
 def stdio(
-    cls,
-    command: list[str],
+    command: list[str] | tuple[str, ...],
     *,
-    env: dict[str, str] | None = None,
-    cwd: str | None = None,
-    timeout: float = 30.0,
+    max_retries: int = 3,
+    startup_timeout: float = 10.0,
 ) -> McpClientProtocol:
-    ...
 ```
 
 Create an MCP client that communicates with a subprocess over stdin/stdout.
+
+**No extra install required** — stdio is part of the core package.
 
 **Parameters**
 
 | Name | Type | Default | Description |
 |---|---|---|---|
-| `command` | `list[str]` | required | Command + args to launch the MCP server subprocess |
-| `env` | `dict[str, str] \| None` | `None` | Extra environment variables (merged with current env) |
-| `cwd` | `str \| None` | `None` | Working directory for the subprocess |
-| `timeout` | `float` | `30.0` | Seconds to wait for the MCP initialize handshake |
+| `command` | `list[str] \| tuple[str, ...]` | required | Command + args to launch the subprocess |
+| `max_retries` | `int` | `3` | Subprocess restart attempts on unexpected EOF |
+| `startup_timeout` | `float` | `10.0` | Seconds to wait for the `initialize` handshake |
 
-**Returns**: `McpClientProtocol` (not yet connected)
+**Returns**: `McpClientProtocol` (not yet connected).
 
-**No extra deps required** — stdio is in the core install.
+**Example**
+
+```python
+from lauren_mcp import McpServer
+
+client = McpServer.stdio(
+    ["npx", "-y", "@modelcontextprotocol/server-filesystem", "/tmp"]
+)
+await client.connect()
+tools = await client.list_tools()
+await client.close()
+```
 
 ---
 
 ### `McpServer.ws`
 
 ```python
-@classmethod
+@staticmethod
 def ws(
-    cls,
     url: str,
     *,
     headers: dict[str, str] | None = None,
-    ping_interval: float = 20.0,
-    reconnect: bool = True,
-    reconnect_delay: float = 1.0,
-    reconnect_max_delay: float = 30.0,
-    timeout: float = 30.0,
+    max_retries: int = 3,
+    startup_timeout: float = 10.0,
 ) -> McpClientProtocol:
-    ...
 ```
 
 Create an MCP client that connects over WebSocket.
@@ -66,32 +70,37 @@ Create an MCP client that connects over WebSocket.
 |---|---|---|---|
 | `url` | `str` | required | WebSocket URL (`ws://` or `wss://`) |
 | `headers` | `dict[str, str] \| None` | `None` | Extra HTTP headers for the upgrade request |
-| `ping_interval` | `float` | `20.0` | Seconds between keepalive pings |
-| `reconnect` | `bool` | `True` | Reconnect automatically on unexpected disconnect |
-| `reconnect_delay` | `float` | `1.0` | Initial backoff delay in seconds |
-| `reconnect_max_delay` | `float` | `30.0` | Maximum backoff delay in seconds |
-| `timeout` | `float` | `30.0` | Handshake timeout in seconds |
+| `max_retries` | `int` | `3` | Reconnect attempts after unexpected disconnect |
+| `startup_timeout` | `float` | `10.0` | Seconds to wait for the `initialize` handshake |
 
-**Returns**: `McpClientProtocol` (not yet connected)
+**Example**
+
+```python
+client = McpServer.ws(
+    "wss://api.example.com/mcp/ws",
+    headers={"Authorization": "Bearer my-token"},
+)
+await client.connect()
+result = await client.call_tool("search", {"query": "coffee"})
+await client.close()
+```
 
 ---
 
 ### `McpServer.http`
 
 ```python
-@classmethod
+@staticmethod
 def http(
-    cls,
     url: str,
     *,
     headers: dict[str, str] | None = None,
-    timeout: float = 30.0,
-    sse_timeout: float | None = None,
+    max_retries: int = 3,
+    startup_timeout: float = 10.0,
 ) -> McpClientProtocol:
-    ...
 ```
 
-Create an MCP client that uses HTTP POST for client→server messages and SSE for
+Create an MCP client using HTTP POST for client→server messages and SSE for
 server→client messages.
 
 **Requires**: `pip install "lauren-mcp[http]"`
@@ -100,89 +109,123 @@ server→client messages.
 
 | Name | Type | Default | Description |
 |---|---|---|---|
-| `url` | `str` | required | Base SSE URL (`http://` or `https://`) |
+| `url` | `str` | required | Base URL (`http://` or `https://`) |
 | `headers` | `dict[str, str] \| None` | `None` | Extra HTTP headers for every request |
-| `timeout` | `float` | `30.0` | Per-request timeout in seconds |
-| `sse_timeout` | `float \| None` | `None` | SSE read timeout; `None` means no timeout |
-
-**Returns**: `McpClientProtocol` (not yet connected)
+| `max_retries` | `int` | `3` | Reconnect attempts after SSE stream closes |
+| `startup_timeout` | `float` | `10.0` | Seconds to wait for the `initialize` handshake |
 
 ---
 
 ## `McpClientProtocol`
 
-The interface implemented by all transport clients. You normally receive one of these
-from `McpServer.stdio/ws/http` — you do not implement this yourself.
+The interface implemented by all three transport clients.
 
-### Context manager
-
-```python
-async with client:
-    # client is connected here
-    ...
-# client is disconnected here
-```
-
-### `connect() / disconnect()`
+### Connection lifecycle
 
 ```python
-await client.connect() -> None
-await client.disconnect() -> None
+await client.connect()   # establish transport + MCP handshake
+await client.close()     # graceful shutdown
 ```
 
-`connect()` establishes the transport connection and completes the MCP initialize
-handshake. `disconnect()` sends a graceful close and tears down the transport.
-
-### `list_tools() -> list[ToolSchema]`
+### `list_tools() → list[ToolSchema]`
 
 ```python
-tools: list[ToolSchema] = await client.list_tools()
+tools = await client.list_tools()
+for tool in tools:
+    print(tool.name, "—", tool.description)
+    print("  inputSchema:", tool.inputSchema)
 ```
 
-Fetch the server's current tool manifest. Re-call after `notifications/tools/list_changed`
-events to refresh.
+### `call_tool(name, arguments) → dict`
 
-### `call_tool(name, arguments) -> list[TextContent | ImageContent | EmbeddedResource]`
+Returns a raw dict with `"content"` and `"isError"` keys.  The `"content"`
+list contains dicts with `{"type": "text", "text": "..."}` or image/resource
+blocks.
 
 ```python
-result = await client.call_tool("search", {"query": "coffee"})
+result = await client.call_tool("search", {"query": "blue widgets"})
+
+if result.get("isError"):
+    print("Tool error")
+
+content = result.get("content", [])
+if content and content[0].get("type") == "text":
+    print(content[0]["text"])
+
+# dict/list return values are JSON-encoded in text
+import json
+items = json.loads(content[0]["text"])
 ```
 
-**Parameters**
+**Raises**: `McpCallError` if the server returns a JSON-RPC error response.
 
-| Name | Type | Description |
-|---|---|---|
-| `name` | `str` | Exact tool name as returned by `list_tools()` |
-| `arguments` | `dict` | Keyword arguments matching the tool's JSON Schema |
-
-**Returns**: List of content blocks. For most tools this is a list with one `TextContent`.
-
-**Raises**: `McpToolError` if the server returns an error response.
-
-### `list_resources() -> list[ResourceSchema]`
+### `list_resources() → list[ResourceSchema]`
 
 ```python
-resources: list[ResourceSchema] = await client.list_resources()
+resources = await client.list_resources()
+for r in resources:
+    print(r.name, "—", r.uri)
 ```
 
-### `read_resource(uri) -> ReadResourceResult`
+### `read_resource(uri) → dict`
+
+Returns a raw dict with a `"contents"` list.
 
 ```python
-result = await client.read_resource("items://42")
-print(result.contents[0].text)
+result = await client.read_resource("/items/42")
+contents = result.get("contents", [])
+if contents:
+    print(contents[0].get("text", ""))
 ```
 
-### `list_prompts() -> list[PromptSchema]`
+### `list_prompts() → list[PromptSchema]`
 
 ```python
-prompts: list[PromptSchema] = await client.list_prompts()
+prompts = await client.list_prompts()
+print([p.name for p in prompts])
 ```
 
-### `get_prompt(name, arguments) -> GetPromptResult`
+### `get_prompt(name, arguments) → dict`
+
+Returns a raw dict with a `"messages"` list.
 
 ```python
 result = await client.get_prompt("summary_prompt", {"topic": "sales"})
-print(result.messages[0].content.text)
+messages = result.get("messages", [])
+if messages:
+    print(messages[0].get("content", {}).get("text", ""))
+```
+
+### `ping() → None`
+
+```python
+await client.ping()   # raises McpCallError on failure
+```
+
+---
+
+## `McpCallError`
+
+```python
+from lauren_mcp import McpCallError
+
+class McpCallError(Exception):
+    code: int
+    # message is the standard exception message
+```
+
+Raised when the server returns a JSON-RPC error response.
+
+```python
+from lauren_mcp import McpCallError
+import asyncio
+
+try:
+    result = await client.call_tool("divide", {"a": 1, "b": 0})
+except McpCallError as exc:
+    print(f"Server error {exc.code}: {exc}")
+except asyncio.TimeoutError:
+    print("Request timed out")
 ```
 
 ---
@@ -191,15 +234,15 @@ print(result.messages[0].content.text)
 
 ```python
 from dataclasses import dataclass
-from lauren_mcp import McpServerConfig, McpServer
 
 @dataclass
 class McpServerConfig:
     alias: str
-    client: McpClientProtocol
-    description: str | None = None
-    tool_filter: list[str] | None = None
+    client: Any   # McpClientProtocol
 ```
+
+Pairs an alias string with an MCP client for use with `McpToolBridge` and
+`lauren_ai.AgentModule.for_root(mcp_servers=[...])`.
 
 **Fields**
 
@@ -207,17 +250,15 @@ class McpServerConfig:
 |---|---|---|---|
 | `alias` | `str` | yes | Short identifier; tools are namespaced as `alias__tool_name` |
 | `client` | `McpClientProtocol` | yes | Client instance from `McpServer.stdio/ws/http` |
-| `description` | `str \| None` | no | Human description injected into the agent system prompt |
-| `tool_filter` | `list[str] \| None` | no | Whitelist of tool names to expose (all tools if `None`) |
 
 **Example**
 
 ```python
-McpServerConfig(
+from lauren_mcp import McpServerConfig, McpServer
+
+config = McpServerConfig(
     alias="fs",
     client=McpServer.stdio(["python", "-m", "my_mcp_server"]),
-    description="Internal filesystem tools",
-    tool_filter=["read_file", "list_directory"],
 )
 ```
 
@@ -225,35 +266,35 @@ McpServerConfig(
 
 ## `McpToolBridge`
 
-Wraps an `McpServerConfig` and manages the connection lifecycle, tool registration,
-and dispatch for one remote MCP server. Used internally by `AgentModule`; you can also
-use it directly for custom integrations.
+Manages the lifecycle for a list of `McpServerConfig` entries.  Connects
+every server, populates a registry, and disconnects cleanly on teardown.
 
 ```python
 from lauren_mcp import McpToolBridge, McpServerConfig, McpServer
 
-config = McpServerConfig(alias="svc", client=McpServer.stdio([...]))
-bridge = McpToolBridge(config)
+bridge = McpToolBridge([
+    McpServerConfig(alias="alpha", client=McpServer.stdio(["python", "server_a.py"])),
+    McpServerConfig(alias="beta",  client=McpServer.stdio(["python", "server_b.py"])),
+])
 
-async with bridge:
-    # bridge is connected
-    tool_names: list[str] = bridge.get_tool_names()
-    # e.g. ["svc__search", "svc__get_item"]
+# Optional: attach a registry that implements register_mcp_server()
+bridge.set_registry(my_registry)
 
-    result = await bridge.call("svc__search", {"query": "widget"})
+await bridge.connect_all()     # connect + list_tools + populate registry
+await bridge.disconnect_all()  # close all clients
 ```
 
-### `get_tool_names() -> list[str]`
+### `set_registry(registry) → None`
 
-Returns the list of namespaced tool names available from this server.
-Must be called after the async context manager is entered.
+Attach any object with a `register_mcp_server(alias, tools, client)` method.
+Called by `connect_all()` once per server.
 
-### `call(namespaced_name, arguments) -> list[TextContent | ImageContent | EmbeddedResource]`
+### `connect_all() → None`
 
-Strips the alias prefix, calls the underlying tool, and returns the result.
-Raises `McpToolNotFoundError` if the name is not in this bridge's tool list.
+Connect every configured server, fetch tool lists, and call
+`registry.register_mcp_server(alias, tools, client)` for each one.  Failures
+on individual servers are logged at ERROR level and do not abort the others.
 
-### `get_tool_schemas() -> list[ToolSchema]`
+### `disconnect_all() → None`
 
-Returns the raw `ToolSchema` objects for all exposed tools (after applying
-`tool_filter`). Useful for building a tool catalogue for an agent system prompt.
+Close every client.  Individual close failures are suppressed.

@@ -7,6 +7,7 @@ from importlib.metadata import PackageNotFoundError, version
 from ._bridge import McpServerConfig, McpToolBridge
 from ._client._factory import McpServer
 from ._client._protocol import McpClientProtocol
+from ._client._stdio import McpCallError
 from ._mcp_version import LATEST, STABLE, SUPPORTED
 from ._types import (
     AnyContent,
@@ -50,6 +51,7 @@ __all__ = [
     "McpServerModule",
     "McpServer",
     "McpClientProtocol",
+    "McpCallError",
     "McpServerConfig",
     "McpToolBridge",
     "JsonRpcRequest",

@@ -79,19 +79,18 @@ class JsonRpcError:
 from enum import IntEnum
 
 class McpErrorCode(IntEnum):
+    # JSON-RPC 2.0 standard codes
     PARSE_ERROR      = -32700
     INVALID_REQUEST  = -32600
     METHOD_NOT_FOUND = -32601
     INVALID_PARAMS   = -32602
     INTERNAL_ERROR   = -32603
-    # MCP-specific codes
-    TOOL_NOT_FOUND   = -32001
-    RESOURCE_NOT_FOUND = -32002
-    PROMPT_NOT_FOUND   = -32003
-    CONNECTION_ERROR   = -32004
+    # MCP extension codes
+    REQUEST_CANCELLED = -32800
+    CONTENT_TOO_LARGE = -32801
 ```
 
-Standard JSON-RPC 2.0 error codes plus MCP-specific extensions.
+Standard JSON-RPC 2.0 error codes plus MCP protocol extensions.
 
 ---
 
@@ -114,8 +113,8 @@ Parse a raw JSON string or bytes into the appropriate JSON-RPC message type.
 
 **Returns**: One of the four JSON-RPC message types.
 
-**Raises**: `JsonRpcParseError` if `data` is not valid JSON or does not conform to
-JSON-RPC 2.0 structure.
+**Raises**: `McpParseError` (a subclass of `ValueError`) if `data` is not valid
+JSON or does not conform to JSON-RPC 2.0 structure.
 
 ---
 
@@ -123,10 +122,10 @@ JSON-RPC 2.0 structure.
 
 ```python
 def build_error_response(
-    request_id: int | str | None,
+    id: int | str | None,
     code: McpErrorCode | int,
     message: str,
-    data: dict | None = None,
+    data: Any = None,
 ) -> JsonRpcErrorResponse:
     ...
 ```

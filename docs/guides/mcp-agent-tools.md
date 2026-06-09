@@ -1,19 +1,20 @@
 # MCP Agent Tools Guide
 
-This guide shows how to wire remote MCP server tools into a Lauren `AgentModule` so
-that an AI agent can discover and call them alongside its native tools.
+This guide shows how to wire remote MCP server tools into a `lauren_ai`
+`AgentModule` so that an AI agent can discover and call them alongside its
+native tools.
 
 ---
 
 ## Overview
 
-`AgentModule.for_root(mcp_servers=[...])` accepts a list of `McpServerConfig` objects.
-At application startup the module:
+`AgentModule.for_root(mcp_servers=[...])` accepts a list of `McpServerConfig`
+objects.  At application startup the module:
 
 1. Connects to each MCP server using the configured transport.
 2. Calls `tools/list` to fetch the server's tool manifest.
 3. Registers each tool under a namespaced name: `{alias}__{tool_name}`.
-4. Prepends a tool catalogue section to the agent's system prompt.
+4. Injects the namespaced tools into every agent's tool map.
 
 ---
 
@@ -34,46 +35,56 @@ McpServerConfig(
 |---|---|---|---|
 | `alias` | `str` | yes | Short name used to namespace tools: `alias__tool_name` |
 | `client` | `McpClientProtocol` | yes | A client created by `McpServer.stdio/ws/http` |
-| `description` | `str \| None` | no | Human description injected into the system prompt |
-| `tool_filter` | `list[str] \| None` | no | Whitelist of tool names to expose (all if `None`) |
 
 ---
 
 ## `AgentModule.for_root(mcp_servers=[...])`
 
 ```python
-from lauren import Lauren
+from lauren import LaurenFactory, module
+from lauren_ai import AgentModule
+from lauren_ai._config import AgentConfig, LLMConfig
 from lauren_mcp import McpServer, McpServerConfig
-from lauren.contrib.ai import AgentModule
 
-app = Lauren()
-app.include(
-    AgentModule.for_root(
-        model="claude-opus-4-5",
-        mcp_servers=[
-            McpServerConfig(
-                alias="fs",
-                client=McpServer.stdio(
-                    ["npx", "-y", "@modelcontextprotocol/server-filesystem", "/tmp"]
+# Define your agents (from lauren_ai)
+# @agent(model="claude-opus-4-8")
+# class MyAgent: ...
+
+@module(
+    imports=[
+        AgentModule.for_root(
+            agents=[MyAgent],
+            mcp_servers=[
+                McpServerConfig(
+                    alias="fs",
+                    client=McpServer.stdio(
+                        ["npx", "-y", "@modelcontextprotocol/server-filesystem", "/tmp"]
+                    ),
                 ),
-            ),
-            McpServerConfig(
-                alias="search",
-                client=McpServer.ws("ws://search-service:8080/mcp/ws"),
-                description="Catalogue search service",
-            ),
-        ],
-    )
+                McpServerConfig(
+                    alias="search",
+                    client=McpServer.ws("ws://search-service:8080/mcp/ws"),
+                ),
+            ],
+        )
+    ]
 )
+class AppModule:
+    pass
+
+app = LaurenFactory.create(AppModule)
 ```
 
 At startup you will see log output like:
 
 ```
-INFO  [lauren-mcp] Connected to MCP server 'fs' via stdio
-INFO  [lauren-mcp] Registered tools from 'fs': fs__read_file, fs__write_file, fs__list_directory
-INFO  [lauren-mcp] Connected to MCP server 'search' via WebSocket
-INFO  [lauren-mcp] Registered tools from 'search': search__search, search__get_item
+INFO lauren_ai.mcp._bridge: MCP bridge: loaded 3 tools from 'fs'
+INFO lauren_ai.mcp._bridge: MCP bridge:   fs__read_file
+INFO lauren_ai.mcp._bridge: MCP bridge:   fs__write_file
+INFO lauren_ai.mcp._bridge: MCP bridge:   fs__list_directory
+INFO lauren_ai.mcp._bridge: MCP bridge: loaded 2 tools from 'search'
+INFO lauren_ai.mcp._bridge: MCP bridge:   search__search
+INFO lauren_ai.mcp._bridge: MCP bridge:   search__get_item
 ```
 
 ---
@@ -89,104 +100,61 @@ Every tool from a remote MCP server is prefixed with `{alias}__`:
 | `search` | `search` | `search__search` |
 | `search` | `get_item` | `search__get_item` |
 
-This prevents collisions between tools from different servers and between MCP tools and
-native agent tools.
-
----
-
-## Updating the system prompt
-
-`AgentModule.for_root` automatically appends a tool catalogue to the system prompt:
-
-```
-You have access to the following MCP tools:
-
-**fs** (Filesystem server):
-- fs__read_file(path: str) → Read the contents of a file.
-- fs__write_file(path: str, content: str) → Write content to a file.
-- fs__list_directory(path: str) → List files in a directory.
-
-**search** (Catalogue search service):
-- search__search(query: str) → Search the catalogue by name or tag.
-- search__get_item(item_id: int) → Retrieve a catalogue item by ID.
-```
-
-To customise the system prompt further, pass a `system_prompt` argument — the MCP tool
-catalogue will be appended after it:
-
-```python
-AgentModule.for_root(
-    model="claude-opus-4-5",
-    system_prompt="You are a helpful assistant for our e-commerce platform.",
-    mcp_servers=[...],
-)
-```
+This prevents collisions between tools from different servers and between MCP
+tools and native agent tools.
 
 ---
 
 ## Mixing native and MCP tools
 
-Native tools (defined with `@tool` on the agent class) and MCP tools coexist without
-conflict as long as their names do not collide. Native tools are registered without any
-prefix; MCP tools always use the `alias__` prefix.
+Native tools (`@use_tools(...)` on the agent class) and MCP tools coexist:
 
 ```python
-from lauren.contrib.ai import agent, tool, AgentModule
+from lauren_ai import agent, use_tools, AgentModule
 from lauren_mcp import McpServer, McpServerConfig
 
-@agent
+@agent(model="claude-opus-4-8", system="You are a helpful assistant.")
+@use_tools(GetCartTool, CheckoutTool)
 class ShopAgent:
-    @tool
-    async def get_cart(self, user_id: str) -> dict:
-        """Get the current cart for a user."""
-        ...
+    pass
 
-    @tool
-    async def checkout(self, user_id: str) -> str:
-        """Checkout the current cart for a user."""
-        ...
-
-app = Lauren()
-app.include(
-    AgentModule.for_root(
-        agent=ShopAgent,
-        mcp_servers=[
-            McpServerConfig(
-                alias="fs",
-                client=McpServer.stdio([...]),
-            ),
-        ],
-    )
+AgentModule.for_root(
+    agents=[ShopAgent],
+    mcp_servers=[
+        McpServerConfig(
+            alias="fs",
+            client=McpServer.stdio([...]),
+        ),
+    ],
 )
-# Agent has: get_cart, checkout (native) + fs__read_file, fs__write_file, ... (MCP)
+# Agent tool list: get_cart, checkout (native) + fs__read_file, ... (MCP)
 ```
 
 ---
 
-## Tool filtering
+## Connection errors
 
-Use `tool_filter` to expose only a subset of a server's tools:
+If a server fails to connect at startup, the error is logged at `ERROR` level
+and the remaining servers continue loading:
 
-```python
-McpServerConfig(
-    alias="fs",
-    client=McpServer.stdio([...]),
-    tool_filter=["read_file", "list_directory"],  # write_file is excluded
-)
+```
+ERROR lauren_ai.mcp._bridge: MCP bridge: failed to connect 'broken': ConnectionRefusedError
+INFO  lauren_ai.mcp._bridge: MCP bridge: loaded 2 tools from 'ok_server'
 ```
 
-This is useful for security (preventing write access in read-only agents) or to reduce
-prompt noise when the remote server exposes many tools.
+The application starts even if some MCP servers are unavailable.  Their tools
+are simply absent from the agent tool list.
 
 ---
 
-## Startup log output
+## Startup log
 
-At `DEBUG` level you will see the full tool schema for each registered tool:
+At `INFO` level each registered tool name is logged.  Reference these names in
+your agent's system prompt so the LLM knows to use them:
 
 ```
-DEBUG [lauren-mcp] Tool schema for fs__read_file:
-  {"type": "object", "properties": {"path": {"type": "string", ...}}, "required": ["path"]}
+Available MCP tools:
+- fs__read_file: Read a file from the filesystem.
+- fs__list_directory: List files in a directory.
+- search__search: Search the product catalogue.
 ```
-
-At `INFO` level only the tool names are logged.

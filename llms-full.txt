@@ -225,46 +225,48 @@ async def summarise_prompt(self, topic: str = "general") -> str:
 
 ```python
 class McpServerModule:
-    @classmethod
+    @staticmethod
     def for_root(
-        cls,
+        server_cls: type,
         *,
-        transports: list[str] = ("ws", "sse"),
-        ping_interval: float = 30.0,
-        session_timeout: float = 300.0,
-    ) -> McpServerModule: ...
+        transport: str = "ws",
+        server_info: Implementation | None = None,
+        capabilities: ServerCapabilities | None = None,
+    ) -> type:  # returns a Lauren @module class
+        ...
 ```
 
-Lauren module that discovers all `@mcp_server`-decorated classes and mounts their
-transport handlers into the application.
+Builds a Lauren `@module` that mounts *server_cls* in the DI graph and
+wires all MCP handler coroutines.
 
-**`for_root()` parameters**
+**Parameters**
 
-- `transports` (`list[str]`, default `["ws", "sse"]`): Which transports to enable.
-  Valid values: `"ws"` (WebSocket), `"sse"` (HTTP+SSE).
-- `ping_interval` (`float`, default `30.0`): WebSocket keepalive ping interval in
-  seconds.
-- `session_timeout` (`float`, default `300.0`): Idle SSE session timeout in seconds.
+- `server_cls` (required): Class decorated with `@mcp_server`.
+- `transport` (`str`, default `"ws"`): `"ws"`, `"sse"`, or `"both"`.
+- `server_info`: Override the name/version sent in the `initialize` response.
+- `capabilities`: Override auto-detected `ServerCapabilities`.
 
-**Route mounting**
+**Raises** `TypeError` if *server_cls* is not decorated with `@mcp_server`.
 
-For a server at `@mcp_server("/mcp")`:
+**Route mounting** for `@mcp_server("/mcp")`:
 
 | Path | Transport |
 |---|---|
 | `/mcp/ws` | WebSocket |
-| `/mcp/sse` | HTTP+SSE (GET = SSE stream, POST = client messages) |
+| `/mcp` | HTTP+SSE (GET = SSE stream, POST = client messages) |
 
 **Example**
 
 ```python
-from lauren import Lauren
+from lauren import LaurenFactory, module
 from lauren_mcp import McpServerModule
 
-app = Lauren()
-app.include(McpServerModule.for_root())                          # both transports
-app.include(McpServerModule.for_root(transports=["ws"]))        # WebSocket only
-app.include(McpServerModule.for_root(transports=["sse"]))       # SSE only
+@module(imports=[McpServerModule.for_root(MyServer)])
+class AppModule:
+    pass
+
+app = LaurenFactory.create(AppModule)
+# WebSocket at ws://host/mcp/ws, SSE at http://host/mcp
 ```
 
 ---
@@ -275,37 +277,30 @@ app.include(McpServerModule.for_root(transports=["sse"]))       # SSE only
 
 ```python
 class McpServer:
-    @classmethod
+    @staticmethod
     def stdio(
-        cls,
-        command: list[str],
+        command: list[str] | tuple[str, ...],
         *,
-        env: dict[str, str] | None = None,
-        cwd: str | None = None,
-        timeout: float = 30.0,
+        max_retries: int = 3,
+        startup_timeout: float = 10.0,
     ) -> McpClientProtocol: ...
 
-    @classmethod
+    @staticmethod
     def ws(
-        cls,
         url: str,
         *,
         headers: dict[str, str] | None = None,
-        ping_interval: float = 20.0,
-        reconnect: bool = True,
-        reconnect_delay: float = 1.0,
-        reconnect_max_delay: float = 30.0,
-        timeout: float = 30.0,
+        max_retries: int = 3,
+        startup_timeout: float = 10.0,
     ) -> McpClientProtocol: ...
 
-    @classmethod
+    @staticmethod
     def http(
-        cls,
         url: str,
         *,
         headers: dict[str, str] | None = None,
-        timeout: float = 30.0,
-        sse_timeout: float | None = None,
+        max_retries: int = 3,
+        startup_timeout: float = 10.0,
     ) -> McpClientProtocol: ...
 ```
 
@@ -314,26 +309,22 @@ Factory class for creating MCP client connections. Never instantiate directly.
 **`McpServer.stdio`** — subprocess stdin/stdout transport. No extra deps required.
 
 - `command`: Command + args to start the MCP server subprocess.
-- `env`: Extra environment variables (merged with current env).
-- `cwd`: Working directory for the subprocess.
-- `timeout`: Seconds to wait for the MCP handshake.
+- `max_retries`: How many times to restart the subprocess on unexpected exit.
+- `startup_timeout`: Seconds to wait for the MCP `initialize` handshake.
 
 **`McpServer.ws`** — WebSocket transport. Requires `pip install "lauren-mcp[ws]"`.
 
 - `url`: WebSocket URL (`ws://` or `wss://`).
-- `headers`: Extra HTTP headers for the upgrade request.
-- `ping_interval`: Seconds between keepalive pings.
-- `reconnect`: Automatically reconnect on unexpected disconnect.
-- `reconnect_delay`: Initial reconnect backoff delay in seconds.
-- `reconnect_max_delay`: Maximum reconnect backoff delay in seconds.
-- `timeout`: Handshake timeout in seconds.
+- `headers`: Extra HTTP headers for the upgrade request (use for auth tokens).
+- `max_retries`: Reconnect attempts after unexpected disconnect.
+- `startup_timeout`: Seconds to wait for the `initialize` handshake.
 
 **`McpServer.http`** — HTTP+SSE transport. Requires `pip install "lauren-mcp[http]"`.
 
-- `url`: Base SSE URL (`http://` or `https://`).
+- `url`: Base URL (`http://` or `https://`).
 - `headers`: Extra HTTP headers for every request.
-- `timeout`: Per-request timeout in seconds.
-- `sse_timeout`: SSE stream read timeout; `None` means no timeout.
+- `max_retries`: Reconnect attempts after SSE stream closes.
+- `startup_timeout`: Seconds to wait for the `initialize` handshake.
 
 **Example**
 
@@ -342,7 +333,7 @@ from lauren_mcp import McpServer
 
 stdio_client = McpServer.stdio(["python", "-m", "my_server"])
 ws_client    = McpServer.ws("wss://api.example.com/mcp/ws", headers={"Authorization": "Bearer token"})
-http_client  = McpServer.http("https://api.example.com/mcp/sse")
+http_client  = McpServer.http("https://api.example.com/mcp")
 ```
 
 ---
@@ -352,23 +343,14 @@ http_client  = McpServer.http("https://api.example.com/mcp/sse")
 ```python
 class McpClientProtocol(Protocol):
     async def connect(self) -> None: ...
-    async def disconnect(self) -> None: ...
-    async def __aenter__(self) -> McpClientProtocol: ...
-    async def __aexit__(self, *args: object) -> bool: ...
+    async def close(self) -> None: ...
     async def list_tools(self) -> list[ToolSchema]: ...
-    async def call_tool(
-        self,
-        name: str,
-        arguments: dict,
-    ) -> list[TextContent | ImageContent | EmbeddedResource]: ...
+    async def call_tool(self, name: str, arguments: dict | None = None) -> Any: ...
     async def list_resources(self) -> list[ResourceSchema]: ...
-    async def read_resource(self, uri: str) -> ReadResourceResult: ...
+    async def read_resource(self, uri: str) -> Any: ...
     async def list_prompts(self) -> list[PromptSchema]: ...
-    async def get_prompt(
-        self,
-        name: str,
-        arguments: dict | None = None,
-    ) -> GetPromptResult: ...
+    async def get_prompt(self, name: str, arguments: dict[str, str] | None = None) -> Any: ...
+    async def ping(self) -> None: ...
 ```
 
 The interface implemented by all three transport clients. You receive instances of this
@@ -376,65 +358,90 @@ from `McpServer.stdio/ws/http`.
 
 **Methods**
 
-- `connect()`: Establishes the transport connection and runs the MCP initialize
-  handshake. Called automatically by the async context manager.
-- `disconnect()`: Sends a graceful close and tears down the transport. Called
-  automatically on context manager exit.
-- `list_tools()`: Fetches the server's current tool manifest. Returns
-  `list[ToolSchema]`.
-- `call_tool(name, arguments)`: Calls a tool. Raises `McpToolError` on server error.
-  Returns a list of content blocks.
-- `list_resources()`: Fetches the server's current resource manifest. Returns
-  `list[ResourceSchema]`.
-- `read_resource(uri)`: Reads a resource by URI. Returns `ReadResourceResult`.
-- `list_prompts()`: Fetches the server's prompt manifest. Returns `list[PromptSchema]`.
-- `get_prompt(name, arguments)`: Retrieves a rendered prompt. Returns `GetPromptResult`.
+- `connect()`: Establishes the transport connection and runs the MCP `initialize`
+  handshake.
+- `close()`: Sends a graceful close and tears down the transport.
+- `list_tools()`: Fetches the server's tool manifest. Returns `list[ToolSchema]`.
+- `call_tool(name, arguments)`: Calls a tool. Returns a raw dict
+  `{"content": [{"type": "text", "text": "..."}], "isError": False}`.
+  Raises `McpCallError` on server error.
+- `list_resources()`: Returns `list[ResourceSchema]`.
+- `read_resource(uri)`: Returns a raw dict `{"contents": [{"uri": ..., "text": ...}]}`.
+- `list_prompts()`: Returns `list[PromptSchema]`.
+- `get_prompt(name, arguments)`: Returns a raw dict `{"messages": [...], "description": ...}`.
+- `ping()`: Checks server liveness; raises `McpCallError` on failure.
 
 **Example**
 
 ```python
-async with McpServer.stdio(["python", "-m", "my_server"]) as client:
+import asyncio, json
+from lauren_mcp import McpServer
+
+async def main():
+    client = McpServer.stdio(["python", "-m", "my_server"])
+    await client.connect()
     tools = await client.list_tools()
     result = await client.call_tool("search", {"query": "coffee"})
-    print(result[0].text)
+    print(json.loads(result["content"][0]["text"]))
+    await client.close()
+
+asyncio.run(main())
 ```
+
+---
+
+### McpCallError
+
+```python
+class McpCallError(Exception):
+    code: int   # JSON-RPC error code, e.g. -32603 (INTERNAL_ERROR)
+```
+
+Raised by `call_tool()`, `list_tools()`, and other client methods when the server
+returns a JSON-RPC error response.
+
+```python
+from lauren_mcp import McpCallError
+
+try:
+    result = await client.call_tool("divide", {"a": 1, "b": 0})
+except McpCallError as exc:
+    print(f"Server error {exc.code}: {exc}")
+```
+
+Common codes: `PARSE_ERROR = -32700`, `METHOD_NOT_FOUND = -32601`,
+`INTERNAL_ERROR = -32603`.
 
 ---
 
 ### McpServerConfig
 
 ```python
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 @dataclass
 class McpServerConfig:
     alias: str
-    client: McpClientProtocol
-    description: str | None = None
-    tool_filter: list[str] | None = None
+    client: Any   # McpClientProtocol
 ```
 
 Configuration dataclass pairing a short alias with an `McpClientProtocol` instance.
-Used with `AgentModule.for_root(mcp_servers=[...])`.
+Used with `McpToolBridge` and `lauren_ai.AgentModule.for_root(mcp_servers=[...])`.
 
 **Fields**
 
 - `alias` (`str`, required): Short identifier. Tools from this server are namespaced as
   `alias__tool_name`.
-- `client` (`McpClientProtocol`, required): Client instance from `McpServer.stdio/ws/http`.
-- `description` (`str | None`, default `None`): Human description injected into the
-  agent system prompt.
-- `tool_filter` (`list[str] | None`, default `None`): Whitelist of tool names to
-  expose. If `None`, all tools are exposed.
+- `client` (required): Client instance from `McpServer.stdio/ws/http`.
 
 **Example**
 
 ```python
-McpServerConfig(
+from lauren_mcp import McpServerConfig, McpServer
+
+config = McpServerConfig(
     alias="fs",
     client=McpServer.stdio(["python", "-m", "my_mcp_server"]),
-    description="Internal filesystem tools",
-    tool_filter=["read_file", "list_directory"],
 )
 ```
 
@@ -444,22 +451,39 @@ McpServerConfig(
 
 ```python
 class McpToolBridge:
-    def __init__(self, config: McpServerConfig) -> None: ...
-    async def __aenter__(self) -> McpToolBridge: ...
-    async def __aexit__(self, *args: object) -> bool: ...
-    def get_tool_names(self) -> list[str]: ...
-    def get_tool_schemas(self) -> list[ToolSchema]: ...
-    async def call(
-        self,
-        namespaced_name: str,
-        arguments: dict,
-    ) -> list[TextContent | ImageContent | EmbeddedResource]: ...
+    def __init__(self, servers: list[McpServerConfig]) -> None: ...
+    def set_registry(self, registry: Any) -> None: ...
+    async def connect_all(self) -> None: ...
+    async def disconnect_all(self) -> None: ...
 ```
 
-Adapts a remote MCP server for use inside a Lauren agent. Manages the connection
-lifecycle, applies `tool_filter`, and provides namespaced tool dispatch.
+Manages the lifecycle for a list of `McpServerConfig` entries — connects every
+server, optionally populates a registry, and disconnects cleanly.
 
-Used internally by `AgentModule`; also available for custom agent integrations.
+Used internally by `lauren_ai.AgentModule` when `mcp_servers=[...]` is passed.
+
+**Methods**
+
+- `set_registry(registry)`: Attach any object with a `register_mcp_server(alias,
+  tools, client)` method.  Called by `connect_all()` once per server after tools are
+  fetched.
+- `connect_all()`: Connect all servers and call `registry.register_mcp_server` for
+  each one.  Failures are logged at ERROR and do not abort other servers.
+- `disconnect_all()`: Close all clients; individual failures are suppressed.
+
+**Example**
+
+```python
+from lauren_mcp import McpToolBridge, McpServerConfig, McpServer
+
+bridge = McpToolBridge([
+    McpServerConfig(alias="alpha", client=McpServer.stdio(["python", "server_a.py"])),
+    McpServerConfig(alias="beta",  client=McpServer.stdio(["python", "server_b.py"])),
+])
+await bridge.connect_all()
+# ... use connected clients ...
+await bridge.disconnect_all()
+```
 
 **Methods**
 

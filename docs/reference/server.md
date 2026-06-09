@@ -5,35 +5,29 @@
 ## `mcp_server`
 
 ```python
-def mcp_server(
-    path: str,
-    *,
-    name: str | None = None,
-    version: str = "1.0.0",
-    description: str | None = None,
-) -> Callable[[type], type]:
+def mcp_server(path: str, *, transport: str = "ws") -> Callable[[type], type]:
     ...
 ```
 
-Class decorator that registers a class as an MCP server mounted at `path`.
+Class decorator that registers a class as an MCP server endpoint.
 
 **Parameters**
 
 | Name | Type | Default | Description |
 |---|---|---|---|
-| `path` | `str` | required | URL path prefix for this server (e.g. `"/mcp"`) |
-| `name` | `str \| None` | `None` | Human-readable server name; defaults to the class name |
-| `version` | `str` | `"1.0.0"` | Version string reported in the MCP handshake |
-| `description` | `str \| None` | `None` | Server description reported in the MCP handshake |
+| `path` | `str` | required | URL path prefix (e.g. `"/mcp"`); WebSocket mounts at `{path}/ws` |
+| `transport` | `str` | `"ws"` | `"ws"`, `"sse"`, or `"both"` |
 
-**Returns**: The decorated class, unmodified except for attached MCP metadata.
+**Returns**: The decorated class with MCP metadata attached and
+`@injectable(scope=Scope.SINGLETON)` applied so DI resolves constructor
+dependencies automatically.
 
 **Example**
 
 ```python
 from lauren_mcp import mcp_server, mcp_tool
 
-@mcp_server("/mcp", name="My Service", version="2.0.0")
+@mcp_server("/mcp")
 class MyService:
     @mcp_tool()
     async def ping(self) -> str:
@@ -50,35 +44,35 @@ def mcp_tool(
     *,
     name: str | None = None,
     description: str | None = None,
-) -> Callable[[Callable], Callable]:
+) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
     ...
 ```
 
 Method decorator that marks an async method as an MCP tool.
 
-The tool's JSON Schema is derived automatically from Python type annotations. Docstring
-descriptions (Google format `Args:` section) populate per-parameter descriptions.
+The tool's JSON Schema is derived automatically from Python type
+annotations.  Docstring `Args:` sections (Google format) supply
+per-parameter descriptions.
 
 **Parameters**
 
 | Name | Type | Default | Description |
 |---|---|---|---|
-| `name` | `str \| None` | `None` | Override the tool name; defaults to the method name |
-| `description` | `str \| None` | `None` | Override the description; defaults to the method docstring |
-
-**Returns**: The decorated method with attached MCP tool metadata.
+| `name` | `str \| None` | `None` | Override tool name; defaults to the method name |
+| `description` | `str \| None` | `None` | Override description; defaults to the docstring |
 
 **Schema generation rules**
 
-| Python annotation | JSON Schema |
+| Python annotation | JSON Schema type |
 |---|---|
-| `str` | `{"type": "string"}` |
-| `int` | `{"type": "integer"}` |
-| `float` | `{"type": "number"}` |
-| `bool` | `{"type": "boolean"}` |
-| `list[X]` | `{"type": "array", "items": <X schema>}` |
-| `dict` / `dict[str, X]` | `{"type": "object"}` |
-| `X \| None` | optional parameter (omitted from `required`) |
+| `str` | `"string"` |
+| `int` | `"integer"` |
+| `float` | `"number"` |
+| `bool` | `"boolean"` |
+| `list` / `list[X]` | `"array"` |
+| `dict` | `"object"` |
+| `X \| None` or param with default | optional (omitted from `required`) |
+| No default, not `X \| None` | required |
 
 **Example**
 
@@ -106,35 +100,36 @@ async def search(
 
 ```python
 def mcp_resource(
-    uri: str,
+    uri_template: str,
     *,
     name: str | None = None,
     description: str | None = None,
-    mime_type: str = "text/plain",
-) -> Callable[[Callable], Callable]:
+    mime_type: str | None = None,
+) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
     ...
 ```
 
 Method decorator that exposes a URI-addressable resource.
 
-URI template variables (e.g. `{item_id}`) are extracted and passed as keyword
-arguments to the decorated method.
+URI template variables (e.g. `{item_id}`) are extracted and passed as
+string keyword arguments to the decorated method.  URI variables are
+**always strings** regardless of annotation — cast inside the method.
 
 **Parameters**
 
 | Name | Type | Default | Description |
 |---|---|---|---|
-| `uri` | `str` | required | URI template string (e.g. `"items://{item_id}"`) |
+| `uri_template` | `str` | required | URI template (e.g. `"/items/{item_id}"`) |
 | `name` | `str \| None` | `None` | Override resource name; defaults to method name |
 | `description` | `str \| None` | `None` | Override description; defaults to docstring |
-| `mime_type` | `str` | `"text/plain"` | MIME type of the returned content |
-
-**Returns**: The decorated method with attached MCP resource metadata.
+| `mime_type` | `str \| None` | `None` | MIME type hint (e.g. `"application/json"`) |
 
 **Example**
 
 ```python
-@mcp_resource("orders://{order_id}", mime_type="application/json")
+from lauren_mcp import mcp_resource
+
+@mcp_resource("/orders/{order_id}", mime_type="application/json")
 async def get_order(self, order_id: str) -> str:
     """Return an order as a JSON string.
 
@@ -142,7 +137,7 @@ async def get_order(self, order_id: str) -> str:
         order_id: The order identifier.
     """
     import json
-    order = await db.get_order(order_id)
+    order = {"id": int(order_id), "status": "open"}
     return json.dumps(order)
 ```
 
@@ -152,17 +147,18 @@ async def get_order(self, order_id: str) -> str:
 
 ```python
 def mcp_prompt(
-    *,
     name: str | None = None,
+    *,
     description: str | None = None,
-) -> Callable[[Callable], Callable]:
+) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
     ...
 ```
 
 Method decorator that exposes a parameterised prompt template.
 
-The method must return a `str` (the rendered prompt text). Parameter annotations are
-used to build the prompt's argument schema for the `prompts/list` response.
+The method returns either a plain `str` (wrapped into a single `user`
+message) or a `list[dict]` of `{"role": ..., "content": {"type": "text",
+"text": ...}}` dicts for multi-turn prompts.
 
 **Parameters**
 
@@ -171,11 +167,11 @@ used to build the prompt's argument schema for the `prompts/list` response.
 | `name` | `str \| None` | `None` | Override prompt name; defaults to method name |
 | `description` | `str \| None` | `None` | Override description; defaults to docstring |
 
-**Returns**: The decorated method with attached MCP prompt metadata.
-
 **Example**
 
 ```python
+from lauren_mcp import mcp_prompt
+
 @mcp_prompt(name="product_analysis")
 async def product_analysis_prompt(
     self,
@@ -201,51 +197,58 @@ async def product_analysis_prompt(
 
 ```python
 class McpServerModule:
-    @classmethod
+    @staticmethod
     def for_root(
-        cls,
+        server_cls: type,
         *,
-        transports: list[str] = ("ws", "sse"),
-        ping_interval: float = 30.0,
-        session_timeout: float = 300.0,
-    ) -> McpServerModule:
+        transport: str = "ws",
+        server_info: Implementation | None = None,
+        capabilities: ServerCapabilities | None = None,
+    ) -> type:
         ...
 ```
 
-Lauren module that discovers all `@mcp_server`-decorated classes and mounts their
-transport handlers.
+Builds a Lauren `@module` that mounts *server_cls* in the DI graph and
+registers all MCP handler coroutines.
 
-**`for_root()` parameters**
+**Parameters**
 
 | Name | Type | Default | Description |
 |---|---|---|---|
-| `transports` | `list[str]` | `["ws", "sse"]` | Which transports to enable: `"ws"`, `"sse"`, or both |
-| `ping_interval` | `float` | `30.0` | WebSocket keepalive ping interval in seconds |
-| `session_timeout` | `float` | `300.0` | Idle SSE session timeout in seconds |
+| `server_cls` | `type` | required | Class decorated with `@mcp_server` |
+| `transport` | `str` | `"ws"` | `"ws"`, `"sse"`, or `"both"` |
+| `server_info` | `Implementation \| None` | `None` | Override name/version in handshake |
+| `capabilities` | `ServerCapabilities \| None` | `None` | Override auto-detected capabilities |
+
+**Raises**: `TypeError` if *server_cls* is not decorated with `@mcp_server`.
 
 **Route mounting**
 
-For a server declared at path `/mcp`, `McpServerModule.for_root()` mounts:
+For a server declared at path `"/mcp"`:
 
-| Path | Transport | Description |
+| Transport | Path | Protocol |
 |---|---|---|
-| `/mcp/ws` | WebSocket | Persistent bidirectional connection |
-| `/mcp/sse` | HTTP + SSE | POST for client→server, SSE stream for server→client |
-| `/mcp` | — | Redirects to `/mcp/ws` or `/mcp/sse` based on `Upgrade` header |
+| `"ws"` (default) | `/mcp/ws` | WebSocket |
+| `"sse"` | `/mcp` | HTTP POST + SSE stream |
 
-**Example**
+**Usage with Lauren**
 
 ```python
-from lauren import Lauren
+from lauren import LaurenFactory, module
 from lauren_mcp import McpServerModule
 
-app = Lauren()
-# Mount with both transports (default)
-app.include(McpServerModule.for_root())
+@module(imports=[McpServerModule.for_root(CatalogueServer)])
+class AppModule:
+    pass
 
-# WebSocket only
-app.include(McpServerModule.for_root(transports=["ws"]))
-
-# SSE only with custom timeout
-app.include(McpServerModule.for_root(transports=["sse"], session_timeout=60.0))
+app = LaurenFactory.create(AppModule)
 ```
+
+Run with uvicorn:
+
+```bash
+pip install "lauren-mcp[ws]" uvicorn
+uvicorn myapp:app --port 8000
+```
+
+Clients connect at `ws://localhost:8000/mcp/ws`.
