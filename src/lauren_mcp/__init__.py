@@ -12,8 +12,10 @@ from ._mcp_version import LATEST, STABLE, SUPPORTED
 from ._server._context import McpToolContext
 from ._types import (
     AnyContent,
+    AudioContent,
     BlobResource,
     ClientCapabilities,
+    CompletionResult,
     CreateMessageParams,
     CreateMessageResult,
     ElicitResult,
@@ -33,14 +35,18 @@ from ._types import (
     McpErrorCode,
     McpParseError,
     McpSamplingNotAvailable,
+    McpUrlElicitationNotAvailable,
     PromptArgument,
     PromptMessage,
     PromptSchema,
     ReadResourceParams,
     ReadResourceResult,
+    ResourceAnnotations,
     ResourceContent,
+    ResourceLink,
     ResourceResult,
     ResourceSchema,
+    Role,
     Root,
     SamplingMessage,
     ServerCapabilities,
@@ -49,9 +55,13 @@ from ._types import (
     ToolCallParams,
     ToolOutput,
     ToolResult,
+    ToolResultContent,
     ToolSchema,
+    ToolUseContent,
+    UrlElicitResult,
     build_error_response,
     parse_message,
+    validate_sampling_messages,
 )
 from .server import (
     McpServerModule,
@@ -125,6 +135,17 @@ __all__ = [
     "LATEST",
     "STABLE",
     "SUPPORTED",
+    # New wire types
+    "AudioContent",
+    "ResourceLink",
+    "ToolUseContent",
+    "ToolResultContent",
+    "ResourceAnnotations",
+    "Role",
+    "UrlElicitResult",
+    "McpUrlElicitationNotAvailable",
+    "CompletionResult",
+    "validate_sampling_messages",
 ]
 
 try:

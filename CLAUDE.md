@@ -5,12 +5,15 @@
 `lauren-mcp` is a Model Context Protocol (MCP) server and client library for the
 Lauren Python web framework.  It provides:
 
-- **Server** — `@mcp_server`, `@mcp_tool`, `@mcp_resource`, `@mcp_prompt` decorators
-  that expose any Lauren service as an MCP endpoint over WebSocket or HTTP+SSE.
-- **Client** — `McpServer.stdio/ws/http` factories returning an `McpClientProtocol`
-  that can connect to any MCP server.
+- **Server** — `@mcp_server`, `@mcp_tool`, `@mcp_resource`, `@mcp_prompt`,
+  `@mcp_completion`, `@mcp_lifespan` decorators that expose any Lauren service as
+  an MCP endpoint over WebSocket, HTTP+SSE, or Streamable HTTP.
+- **Client** — `McpServer.stdio/ws/http/streamable` factories returning an
+  `McpClientProtocol` that can connect to any MCP server.
 - **Lauren integration** — `McpServerModule.for_root(server_cls)` builds a Lauren
   `@module` that wires handlers into the DI graph and mounts transport controllers.
+- **CLI** — `lmcp` entry-point (Typer app) with `run`, `dev`, `inspect`, `call`,
+  and `install` commands.
 
 ## Essential commands
 
@@ -42,32 +45,74 @@ uv run --no-sync nox -s llms_check
 
 ```
 src/lauren_mcp/
-  __init__.py              Public re-exports + McpCallError export
+  __init__.py              Public __all__ (~65+ symbols); re-exports McpCallError
   _types.py                Wire types (dataclasses): JsonRpc*, MCP types, parse_message
-  _version.py              LATEST / STABLE / SUPPORTED constants (from _mcp_version.py)
-  _mcp_version.py          Protocol version constants
+  _mcp_version.py          LATEST="2025-11-25", STABLE, SUPPORTED (4 versions)
   _bridge.py               McpServerConfig, McpToolBridge (lifecycle manager)
 
   server/                  Server-side decorator API
-    _decorators.py         @mcp_server, @mcp_tool, @mcp_resource, @mcp_prompt
-    _meta.py               McpServerMeta, McpToolMeta, McpResourceMeta, McpPromptMeta
-    _handlers.py           Handler factories (make_tools_list_handler etc.)
-    _module.py             McpServerModule.for_root() + _McpHandlerRegistrar
+    _decorators.py         @mcp_server, @mcp_tool, @mcp_resource, @mcp_prompt,
+                           @mcp_completion, @mcp_lifespan; _validate_tool_name,
+                           _auto_output_schema
+    _meta.py               McpServerMeta, McpToolMeta, McpResourceMeta, McpPromptMeta,
+                           McpCompletionMeta, McpLifespanMeta; MCP_*_META constants;
+                           structured_output/title/annotations fields on McpToolMeta
+    _handlers.py           Handler factories: make_tools_list_handler,
+                           make_tools_call_handler, make_completion_handler,
+                           make_context_factory; title/annotations in list response
+    _module.py             McpServerModule.for_root() + _McpHandlerRegistrar;
+                           injects McpCatalogManager, ResourceSubscriptionManager;
+                           @pre_destruct for @mcp_lifespan cleanup
+    _schema.py             SchemaBuilder — recursive JSON Schema for Pydantic /
+                           dataclass / TypedDict / msgspec
+    _docstring.py          Google / Sphinx / NumPy docstring parser
+    _uri.py                RFC 6570 URI template compiler ({+p}, {p*}, {?p1,p2})
+    _builtin_resources.py  FileResource, HttpResource, DirectoryResource
+    _composition.py        make_mount_binder, make_proxy_binder, McpToolNameCollision
+    _openapi.py            build_openapi_server_class, RouteEntry
 
   _server/                 Transport layer (server side)
     _dispatcher.py         McpDispatcher (@injectable Singleton, body-based routing)
     _ws.py                 mcp_ws_controller() — Lauren @ws_controller factory
     _sse.py                mcp_http_sse_controller() — Lauren @controller factory
+    _streamable.py         mcp_streamable_http_controller, StreamableSessionStore;
+                           single-POST endpoint; JSON vs SSE based on Accept header;
+                           mcp-session-id issued at initialize; GET push; DELETE teardown
     _session.py            SseSessionStore (@injectable Singleton, session→queue map)
     _handshake.py          negotiate_version(), build_initialize_result()
+    _binding.py            CURRENT_BINDING ContextVar[TransportBinding | None];
+                           TransportBinding dataclass (headers, session_id,
+                           send_notification, client_rpc, client_capabilities)
+    _catalog.py            McpCatalogManager (@injectable Singleton); holds live
+                           tool/resource/prompt lists; mutations fire list_changed
+    _registry.py           McpConnectionRegistry (@injectable Singleton); fan-out
+                           broadcast to all live connections across all transports
+    _context.py            McpToolContext (frozen dataclass), LogLevelState,
+                           McpSamplingLoopError, build_elicitation_schema
+    _subscriptions.py      ResourceSubscriptionManager — per-URI subscriber fan-out
+    _event_store.py        EventStore ABC, InMemoryEventStore
+    _transport_security.py TransportSecuritySettings, McpTransportSecurityGuard
+                           (DNS rebinding protection)
+    _otel.py               instrument_dispatcher — wraps each handler in an OTel span
+    _propagate.py          Helper for propagating Lauren metadata onto controllers
 
   _client/                 Client transports
     _protocol.py           McpClientProtocol (ABC)
-    _factory.py            McpServer static factory
+    _factory.py            McpServer static factory (stdio/ws/http/streamable)
     _stdio.py              McpStdioClient, McpCallError
     _base_remote.py        _McpBaseRemoteClient (shared handshake + mux logic)
+    _features.py           _ClientFeaturesMixin (version negotiation, roots,
+                           server-initiated request routing, list handlers)
     _ws.py                 McpWebSocketClient (requires [ws] extra)
     _sse.py                McpHttpSseClient (requires [http] extra)
+    _streamable.py         McpStreamableHttpClient — MCP 2025-03-26 transport
+                           (requires [http] extra)
+    _oauth.py              ClientCredentialsProvider, InMemoryTokenStorage
+
+  cli/
+    __init__.py            Typer app "lmcp" (requires [cli] extra)
+    _commands.py           run, dev, inspect, call, install commands
+    _resolve.py            resolve_server_class — file-spec → @mcp_server class
 
 tests/
   unit/                    Pure unit tests (no subprocess, no network)
@@ -82,28 +127,82 @@ tests/
 
 `McpServerModule.for_root(server_cls)` returns a `@module` class.  The handler
 registration logic lives in `_McpHandlerRegistrar` — an `@injectable(Singleton)`
-that is in `providers=[...]` so the DI container instantiates it and calls its
-`@post_construct` at startup.
+in `providers=[...]` so the DI container instantiates it and calls its
+`@post_construct` at startup.  It also has a `@pre_destruct` that closes the
+`@mcp_lifespan` async generator at shutdown.
 
 **Critical**: call `TestClient(app)` after `LaurenFactory.create(app)` to trigger
 `@post_construct` hooks before connecting via WsTestClient.
+
+### CURRENT_BINDING contextvar
+
+`_server/_binding.py` holds `CURRENT_BINDING: ContextVar[TransportBinding | None]`.
+Each transport sets it (via `CURRENT_BINDING.set(binding)`) before calling
+`dispatcher.dispatch()`; because `contextvars` values propagate into tasks created
+afterwards, handler tasks see the correct per-connection data (headers, session_id,
+send_notification, client_rpc, client_capabilities) without any locking or threading.
+
+**Warning**: the contextvar does NOT propagate into threads.  Do not use
+`asyncio.to_thread` inside tool handlers without copying `CURRENT_BINDING.get()`
+before entering the thread.
+
+### McpCatalogManager + McpConnectionRegistry
+
+`McpCatalogManager` (SINGLETON) holds the live tool/resource/prompt catalogue.  It
+is seeded from decorator metadata at startup (silently — broadcast fn not yet
+attached), then `catalog.set_broadcast_fn(registry.broadcast_method)` is called so
+subsequent mutations fire `notifications/*/list_changed` automatically.
+
+`McpConnectionRegistry` (SINGLETON) maps connection keys to send functions.  WS,
+SSE, and Streamable controllers each register on connect and unregister on close.
+`broadcast_method(method)` fans a parameter-less notification to all live connections.
+
+### Context factory pattern
+
+`make_context_factory(metadata, lifespan_getter, log_level_state)` builds a callable
+that reads `CURRENT_BINDING.get()` and constructs a frozen `McpToolContext` per call.
+`make_tools_call_handler(..., context_factory=..., dispatcher=...)` injects it for
+each invocation and registers cancel events.
+
+### McpToolContext
+
+`frozen=True` dataclass injected into `@mcp_tool` parameters annotated
+`McpToolContext`.  Excluded from JSON schema automatically (via `_is_context_annotation`
+which handles string annotations under `from __future__ import annotations`).
+
+Key methods: `report_progress(progress, total, message)`, `log/debug/info/warning/
+error/notice/critical(msg, data)`, `sample(messages, *, tools=, ...)`,
+`elicit(msg, response_type)`, `elicit_url(msg, url)`, `cancel_requested` property.
+
+New private fields on the frozen dataclass must use `object.__setattr__` (as done
+for `_cancel_event` lazy init).
 
 ### WebSocket transport
 
 `mcp_ws_controller(path)` mounts at `{path}/ws`.  `handle_connect` calls
 `await ws.accept()` explicitly (Lauren auto-accepts only after `@on_connect` returns,
 but our message loop never returns) then `await self._message_loop(ws)`.
-This keeps Lauren's routing loop from starting — MCP uses raw JSON-RPC, not Lauren's
-event-keyed dispatch.
 
 ### SSE transport
 
 Two endpoints at `base_path`:
 - `GET {path}/sse` — opens SSE stream, yields `endpoint` event with `session_id`
-- `POST {path}/` — receives JSON-RPC; response is pushed to the session's queue
+- `POST {path}/` — receives JSON-RPC; response pushed to the session's queue
 
-`SseSessionStore` maps `session_id → asyncio.Queue[str]`.  Sessions are created per
-GET connection and cleaned up in the generator's `finally` block.
+`SseSessionStore` maps `session_id → asyncio.Queue[str]`.
+
+### Streamable HTTP transport
+
+Single `POST {path}/` endpoint.  Response is JSON or SSE depending on the client's
+`Accept` header.  `mcp-session-id` header issued at `initialize` and required on all
+subsequent requests.  `StreamableSessionStore` maps session_id to `StreamableSession`.
+`GET {path}/` opens a push channel.  `DELETE {path}/` tears down the session.
+
+### Protocol versions
+
+`LATEST = "2025-11-25"`, `SUPPORTED = {"2024-11-05", "2025-03-26", "2025-06-18",
+"2025-11-25"}`.  Client defaults to `LATEST`.  `negotiate_version()` in `_handshake.py`
+picks the best overlap.
 
 ### McpCallError
 
@@ -120,6 +219,7 @@ from `lauren_mcp` directly: `from lauren_mcp import McpCallError`.
   terminating the outer `'''...'''` string literal.
 - `max_retries=0` on all `McpServer.stdio` calls in tests to prevent 30 s hangs on
   subprocess errors.
+- CLI tests that import `typer` should guard with `pytest.importorskip("typer")`.
 
 ## Common pitfalls
 
@@ -131,3 +231,7 @@ from `lauren_mcp` directly: `from lauren_mcp import McpCallError`.
 | `MissingProviderError: No provider for server_cls` | `from __future__ import annotations` stringifies annotation | Fixed via `__annotations__["server_instance"] = server_cls` after class definition |
 | `prek` fails: `git write-tree: insufficient permission` | Root-owned `.git/objects` dirs | noxfile uses `prek run --all-files` to skip git stash |
 | Subprocess test hangs 30 s | server script crashes, client retries | Set `max_retries=0` on `McpServer.stdio` in tests |
+| `McpToolContext` param excluded from schema | `_is_context_annotation` checks string annotations | Correct behaviour — no fix needed |
+| Tool context not visible in `asyncio.to_thread` | CURRENT_BINDING doesn't cross thread boundary | Copy `binding = CURRENT_BINDING.get()` before entering thread |
+| `@mcp_lifespan` cleanup not called | Lauren doesn't support async `@pre_destruct` in older versions | Requires lauren>=1.6.0 |
+| CLI test fails with `ModuleNotFoundError: typer` | typer is an optional dep | Add `pytest.importorskip("typer")` at top of test file |

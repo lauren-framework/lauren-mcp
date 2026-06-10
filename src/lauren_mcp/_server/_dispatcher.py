@@ -36,6 +36,9 @@ class McpDispatcher:
     def __init__(self) -> None:
         self._handlers: dict[str, AsyncHandler] = {}
         self._in_flight: dict[str | int, asyncio.Task[Any]] = {}
+        # Per-request context registry: request_id → McpToolContext
+        # Used by cancel() to set the cooperative cancel_requested event.
+        self._contexts: dict[str | int, Any] = {}
 
     @post_construct
     def _register_builtins(self) -> None:
@@ -45,6 +48,14 @@ class McpDispatcher:
             return {}
 
         self.register("ping", _ping)
+
+    def register_context(self, request_id: str | int, ctx: Any) -> None:
+        """Register the tool context for *request_id* so :meth:`cancel` can signal it.
+
+        Called by ``make_tools_call_handler`` after building the
+        :class:`~lauren_mcp._server._context.McpToolContext` for a request.
+        """
+        self._contexts[request_id] = ctx
 
     def register(self, method: str, handler: AsyncHandler) -> None:
         """Register *handler* for *method*.
@@ -102,13 +113,28 @@ class McpDispatcher:
         finally:
             if request_id is not None:
                 self._in_flight.pop(request_id, None)
+                self._contexts.pop(request_id, None)
 
     def cancel(self, request_id: str | int) -> bool:
         """Cancel the in-flight task for *request_id*.
 
+        Before hard-cancelling the task, sets the cooperative
+        ``cancel_requested`` event on the registered
+        :class:`~lauren_mcp._server._context.McpToolContext` (if any) so
+        tool code can detect cancellation and clean up gracefully.
+
         Returns ``True`` if a task was found and cancelled, ``False``
         if the request was already complete or never registered.
         """
+        # Signal the cooperative cancel event first (if the tool accessed it).
+        # Uses getattr with a default of None so this is safe whether or not
+        # McpToolContext has the _cancel_event field (added by a parallel change).
+        ctx = self._contexts.get(request_id)
+        if ctx is not None:
+            cancel_event = getattr(ctx, "_cancel_event", None)
+            if cancel_event is not None:
+                cancel_event.set()
+
         task = self._in_flight.get(request_id)
         if task is None or task.done():
             return False

@@ -93,6 +93,7 @@ nav:
     - MCP Server (full): guides/mcp-server.md
     - MCP Client (full): guides/mcp-client.md
     - Agent Tools: guides/mcp-agent-tools.md
+    - Tool Context: guides/tool-context.md
   - API Reference:
     - reference/index.md
     - Server API: reference/server.md

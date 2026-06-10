@@ -24,6 +24,10 @@ from lauren_mcp._server._dispatcher import McpDispatcher
 from lauren_mcp._server._propagate import _apply_server_metadata
 from lauren_mcp._server._registry import McpConnectionRegistry
 from lauren_mcp._server._session import SseSessionStore
+from lauren_mcp._server._transport_security import (
+    McpTransportSecurityGuard,
+    TransportSecuritySettings,
+)
 from lauren_mcp._types import (
     JsonRpcErrorResponse,
     JsonRpcNotification,
@@ -48,6 +52,7 @@ def mcp_http_sse_controller(
     guard_classes: tuple[type, ...] = (),
     interceptor_classes: tuple[type, ...] = (),
     middleware_classes: tuple[type, ...] = (),
+    transport_security: TransportSecuritySettings | None = None,
 ) -> type:
     """Return a ``@controller(base_path)`` class implementing the MCP HTTP+SSE transport.
 
@@ -245,5 +250,16 @@ def mcp_http_sse_controller(
             controller_cls = use_guards(*guard_classes)(controller_cls)
         if interceptor_classes:
             controller_cls = use_interceptors(*interceptor_classes)(controller_cls)
+
+    # Apply transport security guard if configured.
+    if transport_security is not None:
+        _guard = McpTransportSecurityGuard()
+        _guard.configure(transport_security)
+
+        class _BoundSseTransportSecurityGuard:
+            async def can_activate(self, ctx: ExecutionContext) -> bool:
+                return await _guard.can_activate(ctx)
+
+        controller_cls = use_guards(_BoundSseTransportSecurityGuard)(controller_cls)
 
     return controller_cls

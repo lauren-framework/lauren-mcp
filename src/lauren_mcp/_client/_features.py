@@ -27,12 +27,19 @@ _logger = logging.getLogger(__name__)
 NotificationHandler = Callable[[dict[str, Any]], Awaitable[None] | None]
 #: Handler invoked with "tools" | "resources" | "prompts".
 ListChangedHandler = Callable[[str], Awaitable[None] | None]
+#: Handler invoked with the URI string when a subscribed resource changes.
+ResourceUpdatedHandler = Callable[[str], Awaitable[None] | None]
 #: Returns the current roots; sync or async.
 RootsProvider = Callable[[], "list[Root] | Awaitable[list[Root]]"]
 #: Responds to a server-initiated request; returns the result dict.
 ServerRequestHandler = Callable[[dict[str, Any]], Awaitable[dict[str, Any]] | dict[str, Any]]
 #: Zero-arg unsubscribe function returned by on_* registrations.
 Unsubscribe = Callable[[], None]
+
+#: Log levels accepted by the MCP ``logging/setLevel`` request.
+_VALID_LOG_LEVELS: frozenset[str] = frozenset(
+    {"debug", "info", "notice", "warning", "error", "critical", "alert", "emergency"}
+)
 
 _LIST_CHANGED_METHODS = {
     "notifications/tools/list_changed": "tools",
@@ -55,8 +62,10 @@ class _ClientFeaturesMixin:
         progress_handler: NotificationHandler | None = None,
         log_handler: NotificationHandler | None = None,
         list_changed_handler: ListChangedHandler | None = None,
+        resource_updated_handler: ResourceUpdatedHandler | None = None,
         sampling_handler: ServerRequestHandler | None = None,
         elicitation_handler: ServerRequestHandler | None = None,
+        sampling_tools: bool = False,
     ) -> None:
         self._requested_protocol_version: str = protocol_version or LATEST
         self._negotiated_protocol_version: str | None = None
@@ -68,8 +77,12 @@ class _ClientFeaturesMixin:
         self._list_changed_handlers: list[ListChangedHandler] = (
             [list_changed_handler] if list_changed_handler else []
         )
+        self._resource_updated_handlers: list[ResourceUpdatedHandler] = (
+            [resource_updated_handler] if resource_updated_handler else []
+        )
         self._sampling_handler = sampling_handler
         self._elicitation_handler = elicitation_handler
+        self._sampling_tools: bool = sampling_tools
 
     # ------------------------------------------------------------------
     # Protocol version
@@ -104,6 +117,20 @@ class _ClientFeaturesMixin:
         self._list_changed_handlers.append(handler)
         return lambda: self._discard(self._list_changed_handlers, handler)
 
+    def on_resource_updated(self, handler: ResourceUpdatedHandler) -> Unsubscribe:
+        """Register a handler for ``notifications/resources/updated``.
+
+        Returns a zero-arg callable that removes the handler when called.
+
+        Parameters
+        ----------
+        handler:
+            Callable invoked with the resource URI string whenever a subscribed
+            resource changes.
+        """
+        self._resource_updated_handlers.append(handler)
+        return lambda: self._discard(self._resource_updated_handlers, handler)
+
     @staticmethod
     def _discard(handlers: list[Any], handler: Any) -> None:
         import contextlib
@@ -120,7 +147,7 @@ class _ClientFeaturesMixin:
         if self._roots is not None:
             caps["roots"] = {"listChanged": callable(self._roots)}
         if self._sampling_handler is not None:
-            caps["sampling"] = {}
+            caps["sampling"] = {"tools": True} if self._sampling_tools else {}
         if self._elicitation_handler is not None:
             caps["elicitation"] = {}
         return caps
@@ -137,6 +164,9 @@ class _ClientFeaturesMixin:
             self._invoke_all(self._log_handlers, params)
         elif msg.method in _LIST_CHANGED_METHODS:
             self._invoke_all(self._list_changed_handlers, _LIST_CHANGED_METHODS[msg.method])
+        elif msg.method == "notifications/resources/updated":
+            uri = params.get("uri", "")
+            self._invoke_all(self._resource_updated_handlers, uri)
 
     @staticmethod
     def _invoke_all(handlers: list[Any], arg: Any) -> None:

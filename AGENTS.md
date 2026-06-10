@@ -5,18 +5,46 @@
 | Path | Owns what |
 |---|---|
 | `src/lauren_mcp/_types.py` | All MCP wire types; `parse_message`; `build_error_response` |
-| `src/lauren_mcp/__init__.py` | Public `__all__`; re-exports including `McpCallError` |
-| `src/lauren_mcp/server/_decorators.py` | `@mcp_server`, `@mcp_tool`, `@mcp_resource`, `@mcp_prompt` |
-| `src/lauren_mcp/server/_module.py` | `McpServerModule.for_root()`, `_McpHandlerRegistrar` |
-| `src/lauren_mcp/server/_handlers.py` | Handler factory functions |
+| `src/lauren_mcp/__init__.py` | Public `__all__` (~65+ symbols); re-exports including `McpCallError` |
+| `src/lauren_mcp/_mcp_version.py` | `LATEST`, `STABLE`, `SUPPORTED` protocol version constants |
+| `src/lauren_mcp/_bridge.py` | `McpServerConfig`, `McpToolBridge` (lifecycle manager) |
+| `src/lauren_mcp/server/_decorators.py` | `@mcp_server`, `@mcp_tool`, `@mcp_resource`, `@mcp_prompt`, `@mcp_completion`, `@mcp_lifespan`; name validation; auto output schema |
+| `src/lauren_mcp/server/_meta.py` | `McpServerMeta`, `McpToolMeta`, `McpResourceMeta`, `McpPromptMeta`, `McpCompletionMeta`, `McpLifespanMeta`; `MCP_*_META` attribute constants |
+| `src/lauren_mcp/server/_handlers.py` | Handler factory functions; `make_context_factory`; `make_completion_handler` |
+| `src/lauren_mcp/server/_module.py` | `McpServerModule.for_root()`, `_McpHandlerRegistrar` (DI wiring, lifespan, catalog seeding) |
+| `src/lauren_mcp/server/_schema.py` | `SchemaBuilder` — recursive JSON Schema for Pydantic/dataclass/TypedDict/msgspec |
+| `src/lauren_mcp/server/_docstring.py` | Google/Sphinx/NumPy docstring parser |
+| `src/lauren_mcp/server/_uri.py` | RFC 6570 URI template compiler |
+| `src/lauren_mcp/server/_builtin_resources.py` | `FileResource`, `HttpResource`, `DirectoryResource` |
+| `src/lauren_mcp/server/_composition.py` | `make_mount_binder`, `make_proxy_binder`, `McpToolNameCollision` |
+| `src/lauren_mcp/server/_openapi.py` | `build_openapi_server_class`, `RouteEntry` |
 | `src/lauren_mcp/_server/_dispatcher.py` | `McpDispatcher` (routes method → handler) |
 | `src/lauren_mcp/_server/_ws.py` | `mcp_ws_controller()` (Lauren WS gateway) |
 | `src/lauren_mcp/_server/_sse.py` | `mcp_http_sse_controller()` (Lauren HTTP+SSE gateway) |
+| `src/lauren_mcp/_server/_streamable.py` | `mcp_streamable_http_controller`, `StreamableSessionStore` |
 | `src/lauren_mcp/_server/_session.py` | `SseSessionStore` |
+| `src/lauren_mcp/_server/_handshake.py` | `negotiate_version()`, `build_initialize_result()` |
+| `src/lauren_mcp/_server/_binding.py` | `CURRENT_BINDING` ContextVar, `TransportBinding` dataclass |
+| `src/lauren_mcp/_server/_catalog.py` | `McpCatalogManager` (dynamic catalog + list_changed notifications) |
+| `src/lauren_mcp/_server/_registry.py` | `McpConnectionRegistry` (fan-out broadcast to all live connections) |
+| `src/lauren_mcp/_server/_context.py` | `McpToolContext`, `LogLevelState`, `McpSamplingLoopError`, `build_elicitation_schema` |
+| `src/lauren_mcp/_server/_subscriptions.py` | `ResourceSubscriptionManager` |
+| `src/lauren_mcp/_server/_event_store.py` | `EventStore` ABC, `InMemoryEventStore` |
+| `src/lauren_mcp/_server/_transport_security.py` | `TransportSecuritySettings`, `McpTransportSecurityGuard` (DNS rebinding guard) |
+| `src/lauren_mcp/_server/_otel.py` | `instrument_dispatcher` (OTel span wrapping) |
+| `src/lauren_mcp/_client/_protocol.py` | `McpClientProtocol` ABC |
+| `src/lauren_mcp/_client/_factory.py` | `McpServer` static factory |
 | `src/lauren_mcp/_client/_stdio.py` | `McpStdioClient`, `McpCallError` |
-| `src/lauren_mcp/_client/_base_remote.py` | `_McpBaseRemoteClient` (shared WS+SSE logic) |
-| `src/lauren_mcp/_bridge.py` | `McpServerConfig`, `McpToolBridge` |
-| `llms-full.txt` | Full API reference for LLMs — keep in sync with `__all__` |
+| `src/lauren_mcp/_client/_base_remote.py` | `_McpBaseRemoteClient` (shared WS+SSE+Streamable logic) |
+| `src/lauren_mcp/_client/_features.py` | `_ClientFeaturesMixin` (version negotiation, roots, server-request routing) |
+| `src/lauren_mcp/_client/_ws.py` | `McpWebSocketClient` (requires `[ws]` extra) |
+| `src/lauren_mcp/_client/_sse.py` | `McpHttpSseClient` (requires `[http]` extra) |
+| `src/lauren_mcp/_client/_streamable.py` | `McpStreamableHttpClient` — MCP 2025-03-26 (requires `[http]` extra) |
+| `src/lauren_mcp/_client/_oauth.py` | `ClientCredentialsProvider`, `InMemoryTokenStorage` |
+| `src/lauren_mcp/cli/__init__.py` | Typer `app` ("lmcp" entry-point, requires `[cli]` extra) |
+| `src/lauren_mcp/cli/_commands.py` | `run`, `dev`, `inspect`, `call`, `install` commands |
+| `src/lauren_mcp/cli/_resolve.py` | `resolve_server_class` — file-spec → `@mcp_server` class |
+| `llms-full.txt` | Full API reference for LLMs — must stay in sync with `__all__` |
 | `llms.txt` | Short overview — update when public API changes |
 | `docs/` | User-facing documentation |
 | `skills/` | Agent skill packs |
@@ -26,32 +54,60 @@
 ## By-task lookup
 
 ### Adding a new public symbol
-1. Add to `src/lauren_mcp/__init__.py` imports + `__all__`
+1. Add to `src/lauren_mcp/__init__.py` imports and `__all__`
 2. Add a `### SymbolName` section to `llms-full.txt`
 3. Run `uv run --no-sync nox -s llms_check` — must pass with 0 missing symbols
 
-### Adding a new @mcp_* decorator option
+### Adding a new `@mcp_*` decorator option
 1. Update `server/_decorators.py` and `server/_meta.py`
-2. Update `server/_handlers.py` if dispatch logic changes
+2. Update `server/_handlers.py` if dispatch or schema logic changes
 3. Update `docs/guides/decorators.md` and `docs/reference/server.md`
 4. Add test in `tests/docs/test_decorators.py` (subprocess e2e)
 
+### Adding a new context method to McpToolContext
+1. Edit `_server/_context.py` only
+2. `McpToolContext` is `frozen=True` — new private fields must use
+   `object.__setattr__` (see `_cancel_event` for the pattern)
+3. Add capability guard if the method requires a client capability
+
+### Adding a new transport
+1. Create `_server/_newtransport.py`; register/unregister with `McpConnectionRegistry`
+2. Set `CURRENT_BINDING` before each `dispatcher.dispatch()` call
+3. Add controller to `_module.py`'s `controllers` list and to the `_TRANSPORTS` set
+4. Add `McpServer.newtransport()` factory in `_client/_factory.py` if there is a
+   matching client transport
+5. Document in `docs/reference/transports.md`
+
 ### Adding a new client transport
-1. Create `_client/_newtransport.py` extending `_McpBaseRemoteClient`
+1. Create `_client/_newtransport.py` extending `_McpBaseRemoteClient` (or
+   `_ClientFeaturesMixin` for feature sharing)
 2. Add `McpServer.newtransport()` factory in `_client/_factory.py`
-3. Add optional-dep guard (`try: import ...; _AVAIL=True except ImportError: _AVAIL=False`)
+3. Add optional-dep guard (`try: import ...; _AVAIL = True except ImportError: ...`)
 4. Add extra to `pyproject.toml` and document in `docs/reference/client.md`
+
+### Dynamic catalog mutation at runtime
+1. Inject `McpCatalogManager` into your service
+2. Call `catalog.register_tool(meta)` / `catalog.unregister_tool(name)`
+3. `list_changed` notifications fire automatically — no manual broadcast needed
+
+### Adding resource subscriptions
+1. `ResourceSubscriptionManager` is already wired into `_McpHandlerRegistrar`
+2. Inject it where needed and call `sub_mgr.notify_updated(uri)` to push
+   `notifications/resources/updated` to all subscribers for that URI
 
 ### Changing McpServerModule.for_root()
 - The handler registrar must be an `@injectable(Singleton)` in `providers=[...]`
-- After creating the registrar class, set `__init__.__annotations__["server_instance"] = server_cls`
-  to work around `from __future__ import annotations` stringification
+- After creating the registrar class, set
+  `__init__.__annotations__["server_instance"] = server_cls` to work around
+  `from __future__ import annotations` stringification
 - `_McpModule._handler_registrar_cls = _McpHandlerRegistrar` exposes it for direct testing
+- `build_wired_dispatcher` takes 4 args: `(dispatcher, registry, catalog, server_instance)`
 
 ### Testing Lauren integration
 - Always call `TestClient(app)` after `LaurenFactory.create()` to trigger `@post_construct`
-- Two `McpServerModule.for_root()` in the same `@module` will raise `ModuleExportViolation`
-  (McpDispatcher can only be in one module) — use separate apps
+- Two `McpServerModule.for_root()` in the same `@module` will raise
+  `ModuleExportViolation` (McpDispatcher can only be in one module) — use separate apps
+- CLI tests: add `pytest.importorskip("typer")` at the top of the file
 
 ## Common errors
 
@@ -62,8 +118,11 @@
 | `websocket_validation_error: frame missing 'event' field` | Lauren's routing loop consumed message | `handle_connect` must `await ws.accept()` then `await _message_loop(ws)` |
 | `ModuleExportViolation: McpDispatcher declared in both…` | Two `for_root()` in same app | Use two separate `LaurenFactory.create()` apps |
 | `MissingProviderError: No provider for server_cls` | PEP 563 stringifies `server_cls` annotation | Patch annotation at runtime (already done in `_module.py`) |
-| Subprocess test hangs | `max_retries > 0` causes reconnects on crash | Set `max_retries=0` in all test fixtures |
+| Subprocess test hangs 30 s | `max_retries > 0` causes reconnects on crash | Set `max_retries=0` in all test fixtures |
 | `prek run` fails: `git write-tree: insufficient permission` | Root-owned `.git/objects` dirs | `noxfile.py` runs `prek run --all-files`; also rewrite root-owned files with `python3 -c "import shutil; ..."` |
+| `McpToolContext` param included in JSON schema | `_is_context_annotation` failed to match | Ensure the annotation string or type resolves to `McpToolContext`; check `from __future__ import annotations` is present |
+| Tool gets wrong transport context | `asyncio.to_thread` doesn't copy ContextVar | Copy `binding = CURRENT_BINDING.get()` before the thread call |
+| `ImportError: typer` in CLI test | `[cli]` extra not installed | Add `pytest.importorskip("typer")` at top of test file |
 
 ## Definition of done
 
@@ -71,10 +130,10 @@ A change is complete when ALL of the following pass:
 
 ```bash
 uv run --no-sync nox -s lint          # ruff: 0 errors
-uv run --no-sync nox -s typecheck     # mypy: 0 errors  
-uv run --no-sync nox -s llms_check   # all 43 public symbols documented
-uv run --no-sync nox -s prek         # pre-release hooks pass
-uv run --no-sync pytest tests/ -q    # all tests pass
+uv run --no-sync nox -s typecheck     # mypy: 0 errors
+uv run --no-sync nox -s llms_check    # all 65+ public symbols documented
+uv run --no-sync nox -s prek          # pre-release hooks pass
+uv run --no-sync pytest tests/ -q     # all tests pass
 ```
 
 If you add a public symbol, `llms_check` will fail — add a `### SymbolName` section
@@ -88,13 +147,18 @@ If you change an API signature, update:
 
 ## Key invariants
 
-- `McpStdioClient._message_loop` uses `await ws.receive_text()` — no `asyncio.create_task`
-  competing loop because `handle_connect` awaits `_message_loop` directly.
+- `McpStdioClient._message_loop` uses `await process.stdout.readline()` — no competing
+  `asyncio.create_task` loop because `handle_connect` awaits `_message_loop` directly.
 - `ws.accept()` is called explicitly in `handle_connect` before the loop — Lauren
   only auto-accepts after `@on_connect` returns, but our loop never returns.
 - `McpCallError` is the only exception raised by client methods on server-side errors.
   It is exported from the top-level `lauren_mcp` package.
+- `McpCatalogManager.set_broadcast_fn` is called *after* seeding from decorator
+  metadata so startup registration does not broadcast spurious `list_changed` events.
+- `CURRENT_BINDING` propagates into asyncio Tasks but NOT into threads.
+- `McpToolContext` is `frozen=True`; new lazy private fields use `object.__setattr__`.
 - `McpServerConfig` has exactly two fields: `alias: str` and `client: Any`.
-  No `description`, `tool_filter`, or other fields.
-- `call_tool()` / `read_resource()` / `get_prompt()` all return raw `dict` (the JSON-RPC
-  `result` field), not typed dataclasses.
+- `call_tool()` / `read_resource()` / `get_prompt()` all return raw `dict` (the
+  JSON-RPC `result` field), not typed dataclasses.
+- Protocol versions: `LATEST = "2025-11-25"`, `SUPPORTED = {"2024-11-05",
+  "2025-03-26", "2025-06-18", "2025-11-25"}`.

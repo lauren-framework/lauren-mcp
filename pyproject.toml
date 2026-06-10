@@ -35,6 +35,7 @@ http     = ["httpx>=0.27", "httpx-sse>=0.4"]
 pydantic = ["pydantic>=2.0"]
 msgspec  = ["msgspec>=0.18"]
 all      = ["lauren-mcp[ws,http,pydantic,msgspec]"]
+cli      = ["typer>=0.12", "python-dotenv>=1.0", "uvicorn>=0.31"]
 dev  = [
     "pytest>=8.0",
     "pytest-asyncio>=0.23",
@@ -51,6 +52,9 @@ dev  = [
     "build>=1.0",
     "twine>=5.0",
 ]
+
+[project.scripts]
+lmcp = "lauren_mcp.cli:app"
 
 [project.urls]
 Homepage      = "https://github.com/lauren-framework/lauren-mcp"
@@ -105,4 +109,5 @@ show_missing = true
 [dependency-groups]
 dev = [
     "nox>=2026.4.10",
+    "typer>=0.26.7",
 ]

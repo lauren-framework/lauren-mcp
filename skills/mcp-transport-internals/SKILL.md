@@ -1,8 +1,8 @@
 ---
 skill: mcp-transport-internals
-version: 2.0.0
-tags: [mcp, internals, dispatcher, sse, session-store, transport, ws, lauren-mcp]
-summary: Understand McpDispatcher body-based routing, SseSessionStore, the WS gateway, and _McpBaseRemoteClient.
+version: 3.0.0
+tags: [mcp, internals, dispatcher, sse, session-store, streamable-http, binding, catalog, registry, subscriptions, security, lauren-mcp]
+summary: Understand McpDispatcher routing, CURRENT_BINDING, Streamable HTTP, McpCatalogManager, McpConnectionRegistry, and related transport internals.
 ---
 
 # Skill: MCP Transport Internals
@@ -11,21 +11,23 @@ summary: Understand McpDispatcher body-based routing, SseSessionStore, the WS ga
 
 Use this skill when you need to:
 - Understand how incoming JSON-RPC messages are routed to handler methods
-- Debug SSE session lifecycle issues
-- Understand the shared base class all remote client transports inherit from
-- Work on the WebSocket gateway or SSE controller
+- Debug per-call context flow (headers, session id, notification channel)
+- Understand the Streamable HTTP architecture and SSE resumability
+- Work on the WebSocket or SSE transports
+- Add a new transport
+- Understand the dynamic catalog or connection fan-out architecture
 
 ---
 
 ## `McpDispatcher` — body-based routing
 
-`McpDispatcher` (`src/lauren_mcp/_server/_dispatcher.py`) is the central routing
-engine.  It is a `@injectable(scope=Scope.SINGLETON)`.
+`McpDispatcher` (`src/lauren_mcp/_server/_dispatcher.py`) is a
+`@injectable(Singleton)` — one instance per Lauren app, shared across all
+connections.
 
 ```python
-# Simplified
 class McpDispatcher:
-    _handlers: dict[str, AsyncHandler]  # method_name → coroutine
+    _handlers: dict[str, AsyncHandler]
     _in_flight: dict[str | int, asyncio.Task[Any]]
 
     def register(self, method: str, handler: AsyncHandler) -> None: ...
@@ -39,112 +41,334 @@ class McpDispatcher:
         result = await task
         return JsonRpcResponse(id=request.id, result=result)
 
-    def cancel(self, request_id: str | int) -> bool: ...
+    def cancel(self, request_id: str | int) -> bool:
+        task = self._in_flight.pop(request_id, None)
+        if task and not task.done():
+            task.cancel()
+            return True
+        return False
 ```
 
-Handlers are registered by `_McpHandlerRegistrar._register_handlers()` in its
-`@post_construct` hook.  That hook runs when `TestClient(app)` or the first real
-request triggers the Lauren lifecycle.
+Routing is body-based (`message.method`), not path-based. All transports
+funnel messages through the same dispatcher instance.
 
-**Key**: routing is body-based (`message.method`), not path-based.
+---
+
+## `CURRENT_BINDING` contextvar — per-call transport state
+
+Because the dispatcher is a singleton shared by every connection, per-call
+state (headers, session id, notification channel, client RPC channel) must
+be threaded through without mutating the dispatcher.
+
+`TransportBinding` (`src/lauren_mcp/_server/_binding.py`) is a plain
+dataclass:
+
+```python
+@dataclass
+class TransportBinding:
+    headers: Any = None
+    execution_context: Any = None   # lauren.ExecutionContext | None
+    session_id: str | None = None
+    send_notification: SendNotification | None = None  # push notif to client
+    client_rpc: ClientRpc | None = None                # server-initiated request
+    client_capabilities: ClientCapabilities | None = None
+    extras: dict[str, Any] = field(default_factory=dict)
+
+CURRENT_BINDING: ContextVar[TransportBinding | None] = ContextVar(
+    "mcp_transport_binding", default=None
+)
+```
+
+Each transport sets `CURRENT_BINDING` with a `ContextVar.set()` token
+**before** calling `dispatcher.dispatch()`. Because `contextvars` propagate
+into tasks created from the calling coroutine, the handler task sees the
+right binding without any locking:
+
+```python
+# inside a transport handler
+binding = TransportBinding(
+    headers=request.headers,
+    session_id=session.session_id,
+    send_notification=send_notif,
+)
+token = CURRENT_BINDING.set(binding)
+try:
+    response = await self._dispatcher.dispatch(msg)
+finally:
+    CURRENT_BINDING.reset(token)
+```
+
+`McpToolContext` is built from the current binding inside
+`make_context_factory()` in `server/_handlers.py`.
+
+In tests, inject a fake binding to simulate transport state without a real
+connection (see `mcp-testing` skill Pattern 4).
+
+---
+
+## Streamable HTTP transport (MCP 2025-03-26)
+
+`mcp_streamable_http_controller(base_path)` (`src/lauren_mcp/_server/_streamable.py`)
+exposes a single MCP endpoint per the 2025-03-26 spec:
+
+```
+POST {base_path}/    — main MCP endpoint; Accept header decides response format
+GET  {base_path}/    — optional server-push SSE channel
+DELETE {base_path}/  — explicit session teardown
+```
+
+**POST semantics:**
+- `initialize` — creates a session, returns `mcp-session-id` header
+- Requests — dispatch and return either `application/json` (direct) or
+  `text/event-stream` (SSE body; notifications stream before the final result)
+- Notifications — return `202 Accepted`
+- Client responses to server-initiated RPCs — resolve the pending future
+
+**Stateless mode** (`stateless=True`) — no session created or required;
+no GET/DELETE endpoints; server-initiated RPCs unavailable.
+
+**SSE body mode** — when the client sends `Accept: text/event-stream` on a
+POST, the server streams any notifications generated during the call as SSE
+`message` events, then emits the final JSON-RPC response as the last event.
+
+---
+
+## `StreamableSessionStore` — Streamable HTTP session lifecycle
+
+`StreamableSessionStore` (`_server/_streamable.py`) is a `@injectable(Singleton)`.
+
+```python
+class StreamableSession:
+    session_id: str
+    protocol_version: str
+    client_capabilities: ClientCapabilities | None
+    initialized: bool
+    push_queue: asyncio.Queue[str | None]  # feeds the GET push channel
+    pending_client_rpcs: dict[str, asyncio.Future[Any]]
+    next_srv_id: int
+    next_event_id: int   # counter for SSE event IDs when event_store is set
+
+class StreamableSessionStore:
+    def create(self, protocol_version: str) -> StreamableSession: ...
+    def get(self, session_id: str) -> StreamableSession | None: ...
+    def remove(self, session_id: str) -> None: ...
+    # remove() drains push_queue (puts None sentinel) and fails pending RPCs
+```
+
+---
+
+## `EventStore` / `InMemoryEventStore` — SSE resumability
+
+`EventStore` (`_server/_event_store.py`) is an ABC for persisting SSE events
+so that reconnecting clients can replay missed events using `Last-Event-ID`.
+
+```python
+class EventStore(ABC):
+    async def store_event(self, session_id, event_id, data): ...
+    async def replay_events_after(self, session_id, last_event_id, send): ...
+
+class InMemoryEventStore(EventStore):
+    def __init__(self, *, max_events: int = 1000): ...
+    def evict_session(self, session_id: str) -> None: ...
+```
+
+Pass an `EventStore` instance to `mcp_streamable_http_controller`:
+
+```python
+from lauren_mcp._server._event_store import InMemoryEventStore
+from lauren_mcp._server._streamable import mcp_streamable_http_controller
+
+store = InMemoryEventStore(max_events=500)
+controller = mcp_streamable_http_controller("/mcp", event_store=store)
+```
+
+When configured, every event emitted on the GET channel receives a
+sequential `id:` field (`"{session_id}:{seq}"`). On reconnect the client
+sends `Last-Event-ID`; the controller calls `replay_events_after()` to
+deliver missed events before resuming the normal queue-drain loop.
 
 ---
 
 ## WebSocket gateway — `mcp_ws_controller`
 
-`mcp_ws_controller(path)` (`src/lauren_mcp/_server/_ws.py`) returns a Lauren
-`@ws_controller` class mounted at `{path}/ws`.
+`mcp_ws_controller(path)` (`_server/_ws.py`) mounts at `{path}/ws`.
 
-**Lifecycle quirk**: Lauren calls `ws.accept()` only after `@on_connect` returns.
-Our message loop never returns, so we call `await ws.accept()` explicitly before
-entering the loop:
+**Lifecycle quirk**: Lauren calls `ws.accept()` only after `@on_connect`
+returns. The MCP message loop never returns, so we call `await ws.accept()`
+explicitly before entering the loop:
 
 ```python
 @on_connect
 async def handle_connect(self, ws: WebSocket) -> None:
-    await ws.accept()           # must be explicit — Lauren can't do it for us
-    await self._message_loop(ws)  # blocks until connection closes
-
-async def _message_loop(self, ws: Any) -> None:
-    while True:
-        raw: str = await ws.receive_text()   # blocks on each frame
-        await self._handle_frame(ws, raw)
+    await ws.accept()           # must be explicit
+    await self._message_loop(ws)   # blocks until connection closes
 ```
 
-This also prevents Lauren's built-in event-routing loop from starting (MCP uses
-raw JSON-RPC frames, not Lauren's `event`-keyed dispatch format).
-
 Protocol enforcement:
-- Requests before `notifications/initialized` → `INVALID_REQUEST` (-32600)
-- Unknown methods → `METHOD_NOT_FOUND` (-32601)
+- Requests before `notifications/initialized` → `INVALID_REQUEST (-32600)`
+- Unknown methods → `METHOD_NOT_FOUND (-32601)`
 - `$/cancelRequest` notification → `dispatcher.cancel(id)`
+
+Each WebSocket connection creates its own `send_notification` closure that
+writes JSON frames directly to the socket. The connection key is registered
+with `McpConnectionRegistry` on connect and removed on disconnect.
 
 ---
 
-## SSE transport — two-endpoint pattern
+## Legacy SSE transport — `mcp_http_sse_controller`
 
-`mcp_http_sse_controller(base_path)` (`src/lauren_mcp/_server/_sse.py`) exposes:
+Two endpoints at `base_path`:
 
 ```
-GET  {base_path}/sse   → opens SSE stream; sends "endpoint" event with session_id
-POST {base_path}/      → receives JSON-RPC; identified by "mcp-session-id" header
+GET  {base_path}/sse   → opens SSE stream; first event = "endpoint" with session_id
+POST {base_path}/      → receives JSON-RPC; "mcp-session-id" header required
 ```
 
-```python
-# GET /mcp/sse — first event carries the session_id
-yield ServerSentEvent(event="endpoint", data=json.dumps({"session_id": session_id}))
-# subsequent events carry JSON-RPC responses from the queue
-while True:
-    payload = await queue.get()
-    yield ServerSentEvent(event="message", data=payload)
-
-# POST /mcp/ — dispatches and pushes response to queue
-session_id = request.headers.get("mcp-session-id")   # header, not query param
-queue = self._sessions.get(session_id)                # None → 404
-response = await self._dispatcher.dispatch(msg)
-await queue.put(response.to_json())
-return Response(body=b"", status=202)
-```
-
-POST responses:
+POST response codes:
 - Missing `mcp-session-id` header → 400
 - Unknown session_id → 404
 - Malformed JSON → 202 (PARSE_ERROR response queued)
 - Notification → 202 (no queue write)
-- Request → 202 (response JSON queued)
+- Request → 202 (response JSON queued to SSE stream)
 
 ---
 
-## `SseSessionStore` — session registry
+## `SseSessionStore` — legacy SSE session registry
 
-`SseSessionStore` (`src/lauren_mcp/_server/_session.py`) is a `@injectable(Singleton)`.
+`SseSessionStore` (`_server/_session.py`) is a `@injectable(Singleton)`.
 
 ```python
 class SseSessionStore:
-    _queues: dict[str, asyncio.Queue[str]]
-
     def create(self, session_id: str) -> asyncio.Queue[str]: ...
     def get(self, session_id: str) -> asyncio.Queue[str] | None: ...
     def remove(self, session_id: str) -> None: ...
 ```
 
-Sessions are created in `GET /sse` and removed in the generator's `finally` block.
-In tests, resolve the store with `await app.container.resolve(SseSessionStore)` to
-create sessions manually without opening an SSE stream.
+Sessions created on `GET /sse`, removed in the generator's `finally` block.
+In tests: `await app.container.resolve(SseSessionStore)` to create sessions
+directly without opening a real SSE stream.
 
 ---
 
-## `_McpBaseRemoteClient` — shared client logic
+## `McpCatalogManager` — dynamic tool/resource/prompt catalog
 
-All remote clients (`McpWebSocketClient`, `McpHttpSseClient`) inherit from
-`_McpBaseRemoteClient` (`src/lauren_mcp/_client/_base_remote.py`).
+`McpCatalogManager` (`_server/_catalog.py`) is a `@injectable(Singleton)`.
+Holds the live catalog seeded at startup and mutable at runtime.
 
 ```python
-class _McpBaseRemoteClient(McpClientProtocol):
-    _pending: dict[int, asyncio.Future[Any]]  # id → future
+class McpCatalogManager:
+    def register_tool(self, meta, *, on_conflict="replace") -> None: ...
+    def unregister_tool(self, name: str) -> bool: ...
+    def list_tools(self) -> list[Any]: ...
+
+    def register_resource(self, meta) -> None: ...
+    def unregister_resource(self, name: str) -> bool: ...
+    def list_resources(self) -> list[Any]: ...
+
+    def register_prompt(self, meta) -> None: ...
+    def unregister_prompt(self, name: str) -> bool: ...
+    def list_prompts(self) -> list[Any]: ...
+
+    def set_broadcast_fn(self, fn: BroadcastFn | None) -> None: ...
+    # Mutations after set_broadcast_fn fire list_changed notifications
+```
+
+`_McpHandlerRegistrar` seeds the catalog in `@post_construct`, then calls
+`catalog.set_broadcast_fn(registry.broadcast_method)` so subsequent
+mutations push `notifications/*/list_changed` to all connections.
+
+---
+
+## `McpConnectionRegistry` — connection fan-out
+
+`McpConnectionRegistry` (`_server/_registry.py`) is a `@injectable(Singleton)`.
+Tracks every live connection's send function for broadcast.
+
+```python
+class McpConnectionRegistry:
+    def register(self, send_fn: SendFn) -> str: ...   # returns opaque key
+    def unregister(self, key: str) -> None: ...
+    async def broadcast(self, payload: dict[str, Any]) -> None: ...
+    async def broadcast_method(self, method: str) -> None: ...
+    # broadcast failures on individual connections are logged, not raised
+```
+
+---
+
+## `ResourceSubscriptionManager` — per-URI subscriber fan-out
+
+`ResourceSubscriptionManager` (`_server/_subscriptions.py`) is a
+`@injectable(Singleton)`.
+
+```python
+class ResourceSubscriptionManager:
+    def subscribe(self, uri, session_key, send_fn) -> None: ...
+    def unsubscribe(self, uri, session_key) -> None: ...
+    def unsubscribe_all(self, session_key) -> None: ...   # on disconnect
+    def get_subscribers(self, uri) -> dict[str, SendFn]: ...
+    async def notify_updated(self, uri: str) -> None: ...
+    # broadcasts notifications/resources/updated to all subscribers of uri
+```
+
+Trigger update notifications from within your server logic:
+
+```python
+from lauren_mcp._server._subscriptions import ResourceSubscriptionManager
+
+@mcp_server("/mcp")
+class MyServer:
+    def __init__(self, sub_mgr: ResourceSubscriptionManager) -> None:
+        self._subs = sub_mgr
+
+    @mcp_tool()
+    async def update_config(self, key: str, value: str) -> str:
+        # ... do update ...
+        await self._subs.notify_updated("config://main")
+        return "updated"
+```
+
+---
+
+## `TransportSecuritySettings` — DNS-rebinding protection
+
+`TransportSecuritySettings` (`_server/_transport_security.py`) is a frozen
+dataclass that configures `McpTransportSecurityGuard`, a Lauren guard applied
+to HTTP transports to block DNS-rebinding attacks.
+
+```python
+from lauren_mcp._server._transport_security import TransportSecuritySettings
+
+settings = TransportSecuritySettings(
+    enable_dns_rebinding_protection=True,
+    allowed_hosts=["api.example.com", "localhost:8000"],
+    allowed_origins=["https://app.example.com"],
+)
+
+# Pass to the controller factory
+controller = mcp_streamable_http_controller("/mcp", transport_security=settings)
+# Or via McpServerModule.for_root — currently no direct kwarg; pass via providers
+```
+
+The guard validates:
+- `Host` header on every request (all methods)
+- `Origin` header on POST requests (cross-origin only)
+- `Content-Type: application/json` on POST requests
+
+When `allowed_hosts` is empty, only `localhost` and `127.0.0.1` are allowed.
+
+---
+
+## `_McpBaseRemoteClient` — shared remote client logic
+
+All remote clients (`McpWebSocketClient`, `McpHttpSseClient`,
+`McpStreamableHttpClient`) share pending-future request multiplexing:
+
+```python
+class _McpBaseRemoteClient(McpClientProtocol, _ClientFeaturesMixin):
+    _pending: dict[int, asyncio.Future[Any]]
     _next_id: int
 
-    async def _request(self, method: str, params: Any = None) -> Any:
+    async def _request(self, method, params=None) -> Any:
         req_id = self._next_id; self._next_id += 1
         fut = loop.create_future()
         self._pending[req_id] = fut
@@ -158,23 +382,28 @@ class _McpBaseRemoteClient(McpClientProtocol):
             if fut and not fut.done():
                 if isinstance(msg, JsonRpcResponse): fut.set_result(msg.result)
                 else: fut.set_exception(McpCallError(msg.error.message, msg.error.code))
+        elif isinstance(msg, JsonRpcNotification):
+            self._route_notification(msg)
+        elif isinstance(msg, JsonRpcRequest):
+            self._handle_server_request(msg)
 ```
 
-`list_tools()`, `call_tool()` etc. all call `await self._request(...)`.
-
-`McpStdioClient` is separate and does NOT inherit from `_McpBaseRemoteClient` — it
-uses the same pending-future pattern but reads from subprocess stdout directly.
+`McpStdioClient` does **not** inherit from `_McpBaseRemoteClient` — it uses
+the same pending-future pattern but reads from subprocess stdout directly.
 
 ---
 
 ## Adding a new transport
 
-1. Create `src/lauren_mcp/_client/_newtransport.py` extending `_McpBaseRemoteClient`.
-2. Implement `connect()` to open the connection and start a read loop that calls
-   `self._dispatch_message(raw)` for each received frame.
-3. Implement `_send_raw(obj: dict[str, Any]) -> None` to serialise and write.
-4. Add `McpServer.newtransport(...)` in `_client/_factory.py`.
-5. Guard with `try: import ...; _AVAIL=True except ImportError: _AVAIL=False` and
-   raise informative `ImportError` in `__init__` if not available.
-6. Add optional extra to `pyproject.toml`.
-7. Update `docs/reference/client.md`, `llms-full.txt`, `llms.txt`, and this skill.
+1. Create `src/lauren_mcp/_client/_newtransport.py` extending
+   `_McpBaseRemoteClient` (or use the mixin pattern like stdio).
+2. Call `self._init_features(**feature_kwargs)` in `__init__`.
+3. Implement `connect()` to open the connection and start a read loop that
+   calls `self._dispatch_message(raw)` for each received frame.
+4. Implement `async def _send_raw(self, obj: dict[str, Any]) -> None` to
+   serialise and write.
+5. Add `McpServer.newtransport(...)` static method in `_client/_factory.py`.
+6. Guard the import: `try: import dep; _AVAIL=True except ImportError: _AVAIL=False`
+   and raise informative `ImportError` in `__init__` if unavailable.
+7. Add optional extra to `pyproject.toml`.
+8. Update `docs/reference/client.md`, `llms-full.txt`, `llms.txt`, and this skill.

@@ -23,7 +23,7 @@ from lauren_mcp._types import (
     ToolOutput,
 )
 
-from ._meta import McpPromptMeta, McpResourceMeta, McpToolMeta
+from ._meta import McpCompletionMeta, McpPromptMeta, McpResourceMeta, McpToolMeta
 from ._uri import coerce_params, compile_uri_template, match_uri
 
 _logger = logging.getLogger(__name__)
@@ -75,11 +75,11 @@ def make_context_factory(
 
 
 def _tool_list_entry(t: McpToolMeta) -> dict[str, Any]:
-    entry: dict[str, Any] = {
-        "name": t.name,
-        "description": t.description,
-        "inputSchema": t.input_schema,
-    }
+    entry: dict[str, Any] = {"name": t.name}
+    if t.title is not None:
+        entry["title"] = t.title
+    entry["description"] = t.description
+    entry["inputSchema"] = t.input_schema
     if t.annotations is not None:
         entry["annotations"] = t.annotations.to_dict()
     if t.output_schema is not None:
@@ -173,6 +173,14 @@ def _coerce_tool_result(result: Any, meta: McpToolMeta) -> dict[str, Any]:
     else:
         content = [{"type": "text", "text": str(result)}]
 
+    # When structured_output=True wraps a primitive, produce the {"result": ...} dict
+    if structured is None and meta.structured_output is True:
+        raw_text = content[0]["text"] if content else str(result)
+        try:
+            structured = {"result": json.loads(raw_text)}
+        except (json.JSONDecodeError, TypeError):
+            structured = {"result": raw_text}
+
     out: dict[str, Any] = {"content": content, "isError": is_error}
     if structured is not None:
         out["structuredContent"] = structured
@@ -202,12 +210,23 @@ def make_tools_call_handler(
     tools: list[McpToolMeta] | Callable[[], list[McpToolMeta]],
     *,
     context_factory: ContextFactory | None = None,
+    dispatcher: Any | None = None,
 ) -> _Handler:
     """Return an async handler for ``tools/call``.
 
     Dispatches to ``server_instance.<method_name>(**arguments)``.  When a tool
     declares a ``McpToolContext`` parameter and *context_factory* is supplied,
     the context is injected under the declared parameter name.
+
+    Parameters
+    ----------
+    dispatcher:
+        Optional :class:`~lauren_mcp._server._dispatcher.McpDispatcher`
+        reference.  When provided, the built context is registered via
+        ``dispatcher.register_context(req.id, ctx)`` so that
+        ``$/cancelRequest`` can set the cooperative
+        ``cancel_requested`` event on the context before hard-cancelling
+        the task.
     """
     get_tools = tools if callable(tools) else (lambda: tools)
 
@@ -228,7 +247,11 @@ def make_tools_call_handler(
             progress_token = (
                 request_meta.get("progressToken") if isinstance(request_meta, dict) else None
             )
-            kwargs[meta.context_param_name] = context_factory(meta.name, req.id, progress_token)
+            ctx = context_factory(meta.name, req.id, progress_token)
+            kwargs[meta.context_param_name] = ctx
+            # Register the context so cancel() can signal it cooperatively.
+            if dispatcher is not None and req.id is not None:
+                dispatcher.register_context(req.id, ctx)
 
         if meta.timeout is not None:
             try:
@@ -259,17 +282,24 @@ def make_resources_list_handler(
     get_resources = resources if callable(resources) else (lambda: resources)
 
     async def handler(req: JsonRpcRequest) -> dict[str, Any]:
-        return {
-            "resources": [
-                {
-                    "uri": r.uri_template,
-                    "name": r.name,
-                    **({"description": r.description} if r.description is not None else {}),
-                    **({"mimeType": r.mime_type} if r.mime_type is not None else {}),
-                }
-                for r in get_resources()
-            ]
-        }
+        result = []
+        for r in get_resources():
+            entry: dict[str, Any] = {
+                "uri": r.uri_template,
+                "name": r.name,
+            }
+            if r.title is not None:
+                entry["title"] = r.title
+            if r.description is not None:
+                entry["description"] = r.description
+            if r.mime_type is not None:
+                entry["mimeType"] = r.mime_type
+            if r.annotations is not None:
+                ann_dict = r.annotations.to_dict()
+                if ann_dict:
+                    entry["annotations"] = ann_dict
+            result.append(entry)
+        return {"resources": result}
 
     return handler
 
@@ -360,6 +390,8 @@ def make_prompts_list_handler(
         schemas: list[dict[str, Any]] = []
         for p in get_prompts():
             entry: dict[str, Any] = {"name": p.name}
+            if p.title is not None:
+                entry["title"] = p.title
             if p.description is not None:
                 entry["description"] = p.description
             if p.arguments:
@@ -407,5 +439,65 @@ def make_prompts_get_handler(
                 "description": meta.description or name,
                 "messages": [{"role": "user", "content": {"type": "text", "text": str(result)}}],
             }
+
+    return handler
+
+
+# ---------------------------------------------------------------------------
+# Completion
+# ---------------------------------------------------------------------------
+
+
+def make_completion_handler(
+    server_instance: Any,
+    completions: list[McpCompletionMeta],
+) -> _Handler:
+    """Return an async handler for ``completion/complete``.
+
+    Dispatches to the registered completion method based on
+    ``ref.type + ref.name/uri`` + ``argument.name``.
+
+    Returns an empty list when no matching completion handler is registered
+    (per spec: not an error, just no suggestions).
+    """
+    # Build a lookup: (ref_type, target_name, argument_name) -> meta
+    lookup: dict[tuple[str, str, str], McpCompletionMeta] = {
+        (c.ref_type, c.target_name, c.argument_name): c for c in completions
+    }
+
+    async def handler(req: JsonRpcRequest) -> dict[str, Any]:
+        params: dict[str, Any] = req.params if isinstance(req.params, dict) else {}
+        ref = params.get("ref") or {}
+        argument = params.get("argument") or {}
+
+        ref_type: str = ref.get("type", "")
+        ref_name: str = ref.get("name") or ref.get("uri") or ""
+        arg_name: str = argument.get("name", "")
+        partial: str = argument.get("value", "")
+
+        key = (ref_type, ref_name, arg_name)
+        meta = lookup.get(key)
+        if meta is None:
+            return {"completion": {"values": [], "total": 0, "hasMore": False}}
+
+        target = getattr(meta, "_bound_instance", None) or server_instance
+        method = getattr(target, meta.method_name)
+        raw_result = await method(partial)
+
+        # CompletionResult dataclass — has .values, .total, .has_more
+        if hasattr(raw_result, "values") and hasattr(raw_result, "has_more"):
+            result_dict: dict[str, Any] = {
+                "values": list(raw_result.values),
+                "hasMore": bool(raw_result.has_more),
+            }
+            if raw_result.total is not None:
+                result_dict["total"] = raw_result.total
+            else:
+                result_dict["total"] = len(raw_result.values)
+            return {"completion": result_dict}
+
+        # list[str]
+        values: list[str] = list(raw_result)
+        return {"completion": {"values": values, "total": len(values), "hasMore": False}}
 
     return handler

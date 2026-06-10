@@ -21,7 +21,7 @@ from lauren_mcp._types import (
     parse_message,
 )
 
-from ._features import _ClientFeaturesMixin
+from ._features import _VALID_LOG_LEVELS, _ClientFeaturesMixin
 from ._protocol import McpClientProtocol
 
 _logger = logging.getLogger(__name__)
@@ -71,8 +71,10 @@ class McpStdioClient(_ClientFeaturesMixin, McpClientProtocol):
         progress_handler: Any = None,
         log_handler: Any = None,
         list_changed_handler: Any = None,
+        resource_updated_handler: Any = None,
         sampling_handler: Any = None,
         elicitation_handler: Any = None,
+        sampling_tools: bool = False,
     ) -> None:
         self._command = command
         self._client_info = client_info or Implementation(
@@ -86,8 +88,10 @@ class McpStdioClient(_ClientFeaturesMixin, McpClientProtocol):
             progress_handler=progress_handler,
             log_handler=log_handler,
             list_changed_handler=list_changed_handler,
+            resource_updated_handler=resource_updated_handler,
             sampling_handler=sampling_handler,
             elicitation_handler=elicitation_handler,
+            sampling_tools=sampling_tools,
         )
 
         # Internal state (reset by _start_process)
@@ -366,3 +370,33 @@ class McpStdioClient(_ClientFeaturesMixin, McpClientProtocol):
 
     async def ping(self) -> None:
         await self._request("ping")
+
+    async def set_logging_level(self, level: str) -> None:
+        """Ask the server to change its minimum log-notification threshold.
+
+        Sends ``logging/setLevel`` with ``{"level": level}``.
+
+        Raises
+        ------
+        ValueError
+            If *level* is not one of the accepted strings.
+        McpCallError
+            If the server returns a JSON-RPC error response.
+        """
+        if level not in _VALID_LOG_LEVELS:
+            raise ValueError(
+                f"Invalid log level {level!r}; expected one of {sorted(_VALID_LOG_LEVELS)}"
+            )
+        await self._request("logging/setLevel", {"level": level})
+
+    async def subscribe_resource(self, uri: str) -> None:
+        """Subscribe to change notifications for the resource at *uri*."""
+        await self._request("resources/subscribe", {"uri": uri})
+
+    async def unsubscribe_resource(self, uri: str) -> None:
+        """Cancel a previously established resource subscription."""
+        await self._request("resources/unsubscribe", {"uri": uri})
+
+    async def complete(self, ref: dict[str, Any], argument: dict[str, Any]) -> Any:
+        """Request completion suggestions (``completion/complete``)."""
+        return await self._request("completion/complete", {"ref": ref, "argument": argument})

@@ -74,111 +74,147 @@ consuming remote MCP tools, schema generation, transport configuration, and more
 | Resource | What it contains |
 |---|---|
 | [`llms.txt`](https://raw.githubusercontent.com/lauren-framework/lauren-mcp/refs/heads/main/llms.txt) | 2 KB package overview — start here |
-| [`llms-full.txt`](https://raw.githubusercontent.com/lauren-framework/lauren-mcp/refs/heads/main/llms-full.txt) | Complete API reference — all 40+ symbols, signatures, common errors |
+| [`llms-full.txt`](https://raw.githubusercontent.com/lauren-framework/lauren-mcp/refs/heads/main/llms-full.txt) | Complete API reference — all 60+ symbols, signatures, common errors |
 | [`AGENTS.md`](https://github.com/lauren-framework/lauren-mcp/blob/main/AGENTS.md) | Agent rules, by-task lookup, file ownership, common errors, definition of done |
 | [`CLAUDE.md`](https://github.com/lauren-framework/lauren-mcp/blob/main/CLAUDE.md) | Conventions, commands, golden rules |
 | [`skills/`](https://github.com/lauren-framework/lauren-mcp/tree/main/skills/) | Copy-paste skill guides for common tasks |
 
 ---
 
-## Features
-
-- `@mcp_server`, `@mcp_tool`, `@mcp_resource`, `@mcp_prompt` decorators with
-  automatic JSON Schema generation from Python type annotations
-- Three client transports: **stdio subprocess**, **WebSocket**, **HTTP+SSE**
-- `McpServerConfig` + `AgentModule.for_root(mcp_servers=[...])` for zero-boilerplate
-  agent tool integration
-- Tool namespacing (`alias__tool_name`) prevents collisions across multiple MCP servers
-- Automatic system prompt injection listing all available MCP tools
-- Exponential backoff reconnect for the WebSocket client
-- DI-aware tool dispatch — `Depends(...)` parameters excluded from generated JSON Schema
-- 100% typed (mypy strict), 418 tests across Python 3.11–3.14
-
 ## Installation
 
 | Command | What you get |
 |---|---|
-| `pip install lauren-mcp` | Core: JSON-RPC types + server decorators + stdio client |
+| `pip install lauren-mcp` | Core: wire types + server decorators + stdio client |
 | `pip install "lauren-mcp[ws]"` | + WebSocket client (`websockets`) |
-| `pip install "lauren-mcp[http]"` | + HTTP+SSE client (`httpx`, `httpx-sse`) |
-| `pip install "lauren-mcp[all]"` | All transports |
+| `pip install "lauren-mcp[http]"` | + HTTP+SSE client (`httpx` + `httpx-sse`) |
+| `pip install "lauren-mcp[pydantic]"` | + Pydantic model schemas (`pydantic>=2`) |
+| `pip install "lauren-mcp[msgspec]"` | + msgspec.Struct schemas (`msgspec`) |
+| `pip install "lauren-mcp[cli]"` | + `lmcp` CLI (`typer` + `uvicorn`) |
+| `pip install "lauren-mcp[otel]"` | + OpenTelemetry tracing (`opentelemetry-api`) |
+| `pip install "lauren-mcp[all]"` | Everything |
+
+## MCP protocol versions
+
+| Version | Transport | Status |
+|---|---|---|
+| 2024-11-05 | Legacy SSE | Supported |
+| 2025-03-26 | Streamable HTTP | Supported |
+| 2025-06-18 | Streamable HTTP | Supported |
+| 2025-11-25 | Streamable HTTP | Supported (default) |
+
+## Server features
+
+- `@mcp_server(path, transport="ws")` — transport options: `"ws"`, `"sse"`, `"streamable"`, `"both"`, `"all"`
+- `@mcp_tool(title=, annotations=ToolAnnotations(...), timeout=30.0, tags={"search"}, output_schema=MyModel, structured_output=True)`
+- `@mcp_resource(uri_template, mime_type=...)` with RFC 6570 extensions (`{+path}`, `{?page,size}`)
+- `@mcp_prompt(title=)`, `@mcp_completion(target, argument)`, `@mcp_lifespan`
+- `McpToolContext` injection — `ctx.report_progress()`, `ctx.log/debug/info/warning/error()`, `ctx.sample()`, `ctx.elicit()`, `ctx.elicit_url()`, `ctx.cancel_requested`
+- Rich schema generation: Pydantic, msgspec.Struct, `@dataclass`, TypedDict, Literal, `Annotated+Field`
+- Binary resources: `bytes` return → auto base64 blob; `BlobResource`, `ResourceResult`
+- Dynamic catalog: `listChanged: True`, auto `notifications/tools/list_changed`
+- Server composition: `mounts=[(OtherCls, "prefix_")]`, `proxies=[(client, "prefix_")]`
+- OpenAPI import: `build_openapi_server_class(spec, http_client=...)`
+- Built-in resource types: `FileResource`, `HttpResource`, `DirectoryResource`
+- Guards, interceptors, and middleware via Lauren pipeline — `@use_guards`, `@use_interceptors`
+- DNS rebinding protection: `TransportSecuritySettings`
+- SSE event store: `InMemoryEventStore` for resumable connections
+- OpenTelemetry tracing: `instrument_otel=True` on `for_root()`
+- CLI: `lmcp run`, `lmcp dev`, `lmcp inspect`, `lmcp call`, `lmcp install`
+
+## Client features
+
+- `McpServer.stdio()`, `McpServer.ws()`, `McpServer.http()` (legacy SSE), `McpServer.streamable_http()` (MCP 2025-03-26+)
+- All factories accept: `protocol_version=`, `roots=`, `progress_handler=`, `log_handler=`, `list_changed_handler=`, `sampling_handler=`, `elicitation_handler=`, `resource_updated_handler=`
+- `client.protocol_version` property after `connect()`
+- `client.on_progress/on_log/on_list_changed/on_resource_updated()` return an unsubscribe callable
+- `client.subscribe_resource(uri)`, `client.unsubscribe_resource(uri)`
+- `client.set_logging_level(level)` — 8 severity levels
+- `client.complete(ref, argument)`
+- `ClientCredentialsProvider` for OAuth client credentials flow
 
 ## Quick start — Server
 
 ```python
-from lauren import Lauren
-from lauren_mcp import mcp_server, mcp_tool, mcp_resource, mcp_prompt, McpServerModule
+from lauren_mcp import (
+    mcp_server, mcp_tool, McpToolContext, McpToolNameCollision,
+    McpServerModule, ToolAnnotations, BlobResource,
+)
+from lauren_mcp.server import mcp_lifespan
+from lauren import LaurenFactory, module
 
-CATALOGUE = [
-    {"id": 1, "name": "Widget A", "price": 9.99},
-    {"id": 2, "name": "Widget B", "price": 14.99},
-    {"id": 3, "name": "Gadget C", "price": 24.99},
-]
 
 @mcp_server("/mcp")
 class CatalogueServer:
-    @mcp_tool()
-    async def search(self, query: str) -> list[dict]:
-        """Search the catalogue by name.
+    @mcp_lifespan
+    async def lifespan(self):
+        db = await connect_db()
+        try:
+            yield {"db": db}
+        finally:
+            await db.close()
+
+    @mcp_tool(
+        annotations=ToolAnnotations(readOnlyHint=True),
+        timeout=30.0,
+        tags={"search"},
+    )
+    async def search(self, query: str, limit: int = 10, ctx: McpToolContext = ...) -> list:
+        """Search items.
 
         Args:
             query: Search terms.
+            limit: Max results.
         """
-        return [i for i in CATALOGUE if query.lower() in i["name"].lower()]
+        await ctx.report_progress(0, total=100, message="Starting search")
+        db = ctx.lifespan_context["db"]
+        results = await db.search(query, limit)
+        await ctx.info("Search complete", {"count": len(results)})
+        return results
 
-    @mcp_tool()
-    async def get_item(self, item_id: int) -> dict | None:
-        """Get a single item by ID.
+    @mcp_resource("/img/{name}", mime_type="image/png")
+    async def image(self, name: str) -> bytes:
+        return open(f"images/{name}.png", "rb").read()
 
-        Args:
-            item_id: The numeric item ID.
-        """
-        return next((i for i in CATALOGUE if i["id"] == item_id), None)
 
-    @mcp_resource("/catalogue/{item_id}")
-    async def item_resource(self, item_id: str) -> str:
-        """Expose a catalogue item as a readable MCP resource.
+@module(imports=[McpServerModule.for_root(CatalogueServer, transport="all")])
+class App:
+    pass
 
-        Args:
-            item_id: The item ID extracted from the URI path.
-        """
-        item = next((i for i in CATALOGUE if i["id"] == int(item_id)), None)
-        if item is None:
-            return f"Item {item_id} not found."
-        return f"{item['name']} — ${item['price']:.2f}"
 
-    @mcp_prompt()
-    async def recommend(self, budget: str) -> str:
-        """Generate a recommendation prompt for a given budget.
-
-        Args:
-            budget: Customer's maximum budget (e.g. "20").
-        """
-        affordable = [i for i in CATALOGUE if i["price"] <= float(budget)]
-        names = ", ".join(i["name"] for i in affordable) or "none"
-        return f"Recommend a product to a customer with ${budget} budget: {names}"
-
-app = Lauren()
-app.include_module(McpServerModule.for_root(CatalogueServer))
+app = LaurenFactory.create(App)
+# WebSocket:        ws://localhost:8000/mcp/ws
+# Streamable HTTP:  http://localhost:8000/mcp/
 ```
 
 ## Quick start — Client
 
 ```python
+from lauren_mcp import McpServer
+
+client = McpServer.streamable_http(
+    "http://localhost:8000/mcp",
+    progress_handler=lambda p: print(f"Progress: {p['progress']} — {p.get('message', '')}"),
+    log_handler=lambda p: print(f"[{p['level']}] {p['data']['message']}"),
+)
+await client.connect()
+print(f"Protocol: {client.protocol_version}")  # "2025-11-25"
+tools = await client.list_tools()
+result = await client.call_tool("search", {"query": "coffee", "limit": 5})
+```
+
+### Stdio subprocess client
+
+```python
 from lauren_mcp import McpServer, McpServerConfig
-from lauren_ai import AgentModule
 
-mcp_servers = [
-    McpServerConfig(
-        alias="fs",
-        client=McpServer.stdio(
-            ["npx", "-y", "@modelcontextprotocol/server-filesystem", "/tmp"]
-        ),
+config = McpServerConfig(
+    alias="fs",
+    client=McpServer.stdio(
+        ["npx", "-y", "@modelcontextprotocol/server-filesystem", "/tmp"]
     ),
-]
-
-# tools available to agent: fs__read_file, fs__write_file, fs__list_directory, ...
-app.include_module(AgentModule.for_root(model="claude-opus-4-5", mcp_servers=mcp_servers))
+)
+# Tools available as: fs__read_file, fs__write_file, fs__list_directory, ...
 ```
 
 ## Documentation
@@ -189,3 +225,75 @@ app.include_module(AgentModule.for_root(model="claude-opus-4-5", mcp_servers=mcp
 - [Agent Tools guide](https://mcp.lauren-py.dev/guides/mcp-agent-tools/)
 - [Testing guide](https://mcp.lauren-py.dev/guides/testing/)
 - [API Reference](https://mcp.lauren-py.dev/reference/)
+
+## API summary
+
+```
+# Decorators
+mcp_server(path, transport="ws", name=, version=, description=)
+mcp_tool(title=, annotations=, timeout=, tags=, meta=, output_schema=, structured_output=)
+mcp_resource(uri_template, mime_type=, title=, annotations=)
+mcp_prompt(title=)
+mcp_lifespan
+mcp_completion(target, argument)
+
+# Module
+McpServerModule.for_root(
+    server_cls,
+    transport="ws",          # "ws" | "sse" | "streamable" | "both" | "all"
+    log_level=,
+    mounts=,                 # [(OtherServerCls, "prefix_")]
+    proxies=,                # [(McpClientProtocol, "prefix_")]
+    instrument_otel=False,
+    event_store=,
+    stateless_http=False,
+)
+
+# Client factories (all accept protocol_version=, roots=, progress_handler=,
+#   log_handler=, list_changed_handler=, sampling_handler=,
+#   elicitation_handler=, resource_updated_handler=)
+McpServer.stdio(command, env=, max_retries=)
+McpServer.ws(url, ...)
+McpServer.http(url, ...)           # legacy SSE (MCP 2024-11-05)
+McpServer.streamable_http(url, ...) # MCP 2025-03-26+
+
+# Client methods
+client.connect() / client.close()
+client.protocol_version            # property, set after connect()
+client.list_tools() / list_resources() / list_prompts()
+client.call_tool(name, arguments)
+client.read_resource(uri)
+client.get_prompt(name, arguments)
+client.complete(ref, argument)
+client.set_logging_level(level)
+client.subscribe_resource(uri) / unsubscribe_resource(uri)
+client.on_progress(handler) / on_log(handler)
+client.on_list_changed(handler) / on_resource_updated(handler)
+client.notify_roots_changed()
+
+# Context (injected into @mcp_tool via ctx: McpToolContext parameter)
+ctx.report_progress(progress, total=, message=)
+ctx.log/debug/info/notice/warning/error/critical(message, data=)
+ctx.sample(messages, model_preferences=, tools=, tool_choice=, max_tool_iterations=)
+ctx.elicit(schema, message=)
+ctx.elicit_url(url, message=)
+ctx.cancel_requested               # asyncio.Event
+ctx.lifespan_context               # dict yielded by @mcp_lifespan
+
+# Wire types (selection)
+ToolSchema, ToolAnnotations, ToolCallParams, ToolResult, ToolOutput
+ResourceSchema, ResourceAnnotations, BlobResource, ResourceResult
+PromptSchema, PromptMessage, PromptArgument
+TextContent, ImageContent, AudioContent, EmbeddedResource
+ResourceLink, ToolUseContent, ToolResultContent
+SamplingMessage, CreateMessageParams, CreateMessageResult
+ElicitResult, UrlElicitResult
+CompletionResult, Root, Role
+McpCallError, McpToolNameCollision
+McpSamplingNotAvailable, McpElicitationNotAvailable, McpUrlElicitationNotAvailable
+LATEST, STABLE, SUPPORTED
+
+# OpenAPI import
+build_openapi_server_class(spec, http_client=, route_entries=)
+RouteEntry
+```

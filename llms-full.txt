@@ -218,9 +218,10 @@ async def image(self, name: str) -> bytes:
 
 ```python
 def mcp_prompt(
-    *,
     name: str | None = None,
+    *,
     description: str | None = None,
+    title: str | None = None,
 ) -> Callable[[Callable], Callable]:
 ```
 
@@ -232,6 +233,7 @@ class. The decorated method must be async and must return a `str`.
 - `name` (`str | None`, default `None`): Override prompt name. Defaults to method name.
 - `description` (`str | None`, default `None`): Override description. Defaults to
   docstring.
+- `title` (`str | None`, default `None`): Human-readable display name shown in client UIs.
 
 **Example**
 
@@ -288,6 +290,56 @@ class MyServer:
     @mcp_tool()
     async def query(self, sql: str, ctx: McpToolContext) -> list:
         return await ctx.lifespan_context["db"].fetch(sql)
+```
+
+---
+
+### mcp_completion
+
+```python
+# from lauren_mcp.server import mcp_completion
+
+def mcp_completion(
+    target: str,
+    argument: str,
+    *,
+    ref_type: str = "ref/prompt",
+) -> Callable[[Callable], Callable]:
+```
+
+Method decorator that registers a completion handler for a prompt argument or resource
+template variable. Called by the client when the user types partial input into a prompt
+or resource field that supports auto-complete.
+
+**Parameters**
+
+- `target` (`str`): Name of the prompt (for `ref_type="ref/prompt"`) or the URI
+  template of the resource (for `ref_type="ref/resource"`).
+- `argument` (`str`): The argument name within that prompt or resource for which
+  this function provides completions.
+- `ref_type` (`str`, default `"ref/prompt"`): Either `"ref/prompt"` or `"ref/resource"`.
+
+The decorated method must be `async def` accepting a single `partial: str` argument
+and returning either `list[str]` or `CompletionResult`.
+
+**Example**
+
+```python
+from lauren_mcp import mcp_server, mcp_prompt
+from lauren_mcp.server import mcp_completion
+
+@mcp_server("/mcp")
+class MyServer:
+    NAMES = ["Alice", "Bob", "Carol"]
+
+    @mcp_prompt()
+    async def greet(self, name: str) -> str:
+        """Greet someone. Args: name: Person's name."""
+        return f"Hello {name}!"
+
+    @mcp_completion("greet", "name")
+    async def complete_greet_name(self, partial: str) -> list[str]:
+        return [n for n in self.NAMES if n.lower().startswith(partial.lower())]
 ```
 
 ---
@@ -810,6 +862,21 @@ request `id` could be determined (e.g. parse error).
 
 ---
 
+### JsonRpcError
+
+```python
+@dataclass
+class JsonRpcError:
+    code: int
+    message: str
+    data: Any = None
+```
+
+The error object embedded inside a `JsonRpcErrorResponse`. `code` is a standard JSON-RPC
+or MCP error code (see `McpErrorCode`). `data` carries optional extra detail.
+
+---
+
 ### McpErrorCode
 
 ```python
@@ -928,6 +995,44 @@ Descriptor for a single MCP resource as returned by `resources/list`.
 
 ---
 
+### Role
+
+```python
+Role = Literal["user", "assistant"]
+```
+
+Type alias for MCP audience roles. Used in `ResourceAnnotations.audience` and
+`SamplingMessage.role`.
+
+---
+
+### ResourceAnnotations
+
+```python
+@dataclass
+class ResourceAnnotations:
+    audience: list[Role] | None = None  # intended readers; None means unrestricted
+    priority: float | None = None       # relevance weight in [0.0, 1.0]
+```
+
+Annotations attached to an MCP resource for UI and routing hints. Pass to
+`@mcp_resource(annotations=...)`.
+
+- `audience`: Restricts which roles should see the resource (`"user"`, `"assistant"`).
+- `priority`: Relevance weight in `[0.0, 1.0]`; higher means higher priority.
+  Raises `ValueError` if outside the valid range.
+
+```python
+from lauren_mcp import ResourceAnnotations
+from lauren_mcp.server import mcp_resource
+
+@mcp_resource("/reports/{name}",
+    annotations=ResourceAnnotations(audience=["user"], priority=0.8))
+async def report(self, name: str) -> str: ...
+```
+
+---
+
 ### ResourceContent
 
 ```python
@@ -1009,14 +1114,51 @@ An embedded resource returned inside a tool call result. `TextResourceContents` 
 
 ---
 
+### AudioContent
+
+```python
+@dataclass
+class AudioContent:
+    data: str      # base64-encoded audio bytes
+    mimeType: str  # e.g. "audio/wav", "audio/mpeg", "audio/ogg"
+    type: str = "audio"
+
+    @classmethod
+    def from_bytes(cls, data: bytes, mime_type: str = "audio/wav") -> AudioContent: ...
+```
+
+A base64-encoded audio content block. Returned by tools that produce audio output.
+Use `AudioContent.from_bytes(raw_audio, "audio/wav")` to construct from raw bytes
+without manually base64-encoding.
+
+---
+
+### ResourceLink
+
+```python
+@dataclass
+class ResourceLink:
+    uri: str
+    name: str | None = None
+    description: str | None = None
+    mimeType: str | None = None
+    type: str = "resource_link"
+```
+
+A lightweight reference to a resource by URI. Unlike `EmbeddedResource`, a `ResourceLink`
+does **not** inline the resource's content — it carries only the URI and optional metadata.
+The MCP client may fetch the resource separately via `resources/read` if needed.
+
+---
+
 ### AnyContent
 
 ```python
-AnyContent = TextContent | ImageContent | EmbeddedResource
+AnyContent = TextContent | ImageContent | AudioContent | EmbeddedResource | ResourceLink
 ```
 
 Union alias for any content item that can appear in a tool result or message.
-Use this as a type annotation when a value may be any of the three content types.
+Use this as a type annotation when a value may be any of the five content types.
 
 ---
 
@@ -1293,6 +1435,51 @@ async def bundle(self, id: str) -> ResourceResult:
 
 ---
 
+### ToolUseContent
+
+```python
+@dataclass
+class ToolUseContent:
+    id: str                 # opaque identifier for this tool call
+    name: str               # tool name
+    input: dict[str, Any]   # tool arguments
+    type: str = "tool_use"
+
+    def to_dict(self) -> dict[str, Any]: ...
+
+    @classmethod
+    def from_dict(cls, obj: dict[str, Any]) -> ToolUseContent: ...
+```
+
+A tool invocation block inside a `SamplingMessage`. Represents the LLM requesting
+to call a tool — returned in a `sampling/createMessage` response when the model
+decides to use a tool, or included when re-sending past assistant turns that contained
+tool calls. The `id` must match the `tool_use_id` of the corresponding `ToolResultContent`.
+
+---
+
+### ToolResultContent
+
+```python
+@dataclass
+class ToolResultContent:
+    tool_use_id: str                          # must match ToolUseContent.id
+    content: list[TextContent | ImageContent] = field(default_factory=list)
+    is_error: bool = False
+    type: str = "tool_result"
+
+    def to_dict(self) -> dict[str, Any]: ...
+
+    @classmethod
+    def from_dict(cls, obj: dict[str, Any]) -> ToolResultContent: ...
+```
+
+The result of a prior tool invocation, placed in a `role="user"` `SamplingMessage`
+to continue the conversation after a `ToolUseContent`. `is_error=True` signals that
+the tool call failed; the LLM can decide how to proceed.
+
+---
+
 ### SamplingMessage
 
 ```python
@@ -1344,6 +1531,29 @@ Result of a `sampling/createMessage` request. Returned by `ctx.sample()`.
 
 ---
 
+### validate_sampling_messages
+
+```python
+def validate_sampling_messages(messages: list[SamplingMessage]) -> None:
+```
+
+Validate that `ToolResultContent` blocks are properly paired with preceding
+`ToolUseContent` blocks in a sampling message list.
+
+**Raises** `ValueError` if a `ToolResultContent` appears before a `ToolUseContent` with
+the matching `id`, or if the ordering is otherwise invalid. An empty list is valid.
+This performs a shallow ordering check only — it does not validate tool input schemas
+or result content types.
+
+```python
+from lauren_mcp import validate_sampling_messages, SamplingMessage, TextContent
+
+msgs = [SamplingMessage(role="user", content=TextContent(text="Hello"))]
+validate_sampling_messages(msgs)  # passes — no tool use blocks
+```
+
+---
+
 ### ElicitResult
 
 ```python
@@ -1364,6 +1574,32 @@ if answer.action == "accept":
 
 ---
 
+### UrlElicitResult
+
+```python
+@dataclass
+class UrlElicitResult:
+    action: Literal["accept", "cancel"]
+```
+
+Result of a URL-elicitation `elicitation/create` request. Unlike `ElicitResult`, there
+is no `"decline"` state — the only outcomes are completion (`"accept"`) or abandonment
+(`"cancel"`). No `content` field is present; the URL flow itself carries any data.
+
+---
+
+### McpUrlElicitationNotAvailable
+
+```python
+class McpUrlElicitationNotAvailable(RuntimeError): ...
+```
+
+Raised by `ctx.elicit_url()` when the connected client did not advertise the
+`urlElicitation` sub-capability, the `elicitation` capability is absent, or the
+transport cannot carry server-to-client requests.
+
+---
+
 ### Root
 
 ```python
@@ -1375,6 +1611,33 @@ class Root:
 
 A filesystem root exposed by an MCP client to servers that request them via
 `roots/list`. Pass a list to `McpServer.*(..., roots=[Root("file:///workspace")])`.
+
+---
+
+### CompletionResult
+
+```python
+@dataclass
+class CompletionResult:
+    values: list[str]
+    total: int | None = None
+    has_more: bool = False
+```
+
+Result of a `completion/complete` request. Returned by `@mcp_completion` handlers
+(or by the framework after collecting them). `values` contains the completion strings
+to offer to the user. `total` reports the total number of matches when only a subset
+is returned; `has_more` signals there are additional results beyond `values`.
+
+```python
+from lauren_mcp import CompletionResult
+from lauren_mcp.server import mcp_completion
+
+@mcp_completion("greet", "name")
+async def complete_name(self, partial: str) -> CompletionResult:
+    matches = [n for n in self.NAMES if n.lower().startswith(partial.lower())]
+    return CompletionResult(values=matches[:5], total=len(matches), has_more=len(matches) > 5)
+```
 
 ---
 
@@ -1409,6 +1672,57 @@ class McpToolNameCollision(Exception): ...
 Raised at server startup when two composition sources (from `mounts=` or `proxies=`)
 produce the same tool name after applying the prefix. Fix by choosing a different
 prefix or renaming the conflicting tool.
+
+---
+
+### make_mount_binder
+
+```python
+# from lauren_mcp.server import make_mount_binder
+
+def make_mount_binder(mounted_cls: type, prefix: str) -> type:
+```
+
+Build an `@injectable(Singleton)` class that registers all tools, resources, and prompts
+from `mounted_cls` into the shared catalogue with `prefix` applied to their names.
+Add the returned class (and `mounted_cls` itself) to `McpServerModule.for_root(providers=[...])`.
+
+This is the low-level primitive behind `McpServerModule.for_root(mounts=[...])`. Use
+`mounts=` directly unless you need custom DI wiring.
+
+**Raises** `TypeError` if `mounted_cls` is not decorated with `@mcp_server`.
+
+```python
+from lauren_mcp.server import make_mount_binder
+
+binder = make_mount_binder(AnalyticsServer, "analytics_")
+# pass binder + AnalyticsServer to providers=[...]
+```
+
+---
+
+### make_proxy_binder
+
+```python
+# from lauren_mcp.server import make_proxy_binder
+
+def make_proxy_binder(client: McpClientProtocol, prefix: str) -> type:
+```
+
+Build an `@injectable(Singleton)` class that connects `client` at startup, fetches its
+remote tool catalogue, and registers each tool locally under `{prefix}{name}`. At
+shutdown it deregisters the tools and closes the connection.
+
+This is the low-level primitive behind `McpServerModule.for_root(proxies=[...])`. Use
+`proxies=` directly unless you need custom DI wiring.
+
+```python
+from lauren_mcp import McpServer
+from lauren_mcp.server import make_proxy_binder
+
+binder = make_proxy_binder(McpServer.streamable_http("http://remote/mcp"), "remote_")
+# pass binder to providers=[...]
+```
 
 ---
 
@@ -1472,6 +1786,148 @@ ApiServer = build_openapi_server_class(
     route_map=[RouteEntry(r"/admin", expose_as="exclude")],
 )
 ```
+
+---
+
+## Built-in resource classes
+
+### FileResource
+
+```python
+# from lauren_mcp.server import FileResource
+
+class FileResource:
+    def __init__(
+        self,
+        path: str | Path,
+        uri: str,
+        *,
+        name: str | None = None,
+        description: str | None = None,
+        mime_type: str | None = None,
+    ) -> None: ...
+```
+
+Expose a local file as a static MCP resource. MIME type is auto-detected from the file
+extension when `mime_type` is omitted. Text-like MIME types (`text/*`,
+`application/json`, `application/xml`) are served as UTF-8 strings; all others are
+returned as `BlobResource`.
+
+```python
+from lauren_mcp.server import FileResource, register_file_resource
+
+readme = FileResource("README.md", "file:///project/README.md")
+```
+
+---
+
+### HttpResource
+
+```python
+# from lauren_mcp.server import HttpResource
+
+class HttpResource:
+    def __init__(
+        self,
+        url: str,
+        uri: str,
+        *,
+        name: str | None = None,
+        description: str | None = None,
+        mime_type: str | None = None,
+        headers: dict[str, str] | None = None,
+        timeout: float = 30.0,
+    ) -> None: ...
+```
+
+Fetch an HTTP URL and expose the response body as an MCP resource. Requires the
+`[http]` extra (`httpx`). MIME type is taken from the response `Content-Type` header
+when `mime_type` is omitted. Text-like responses become strings; others become
+`BlobResource`.
+
+```python
+from lauren_mcp.server import HttpResource
+
+weather = HttpResource(
+    "https://api.example.com/weather",
+    "weather://current",
+    name="current-weather",
+    headers={"Authorization": "Bearer token"},
+)
+```
+
+---
+
+### DirectoryResource
+
+```python
+# from lauren_mcp.server import DirectoryResource
+
+class DirectoryResource:
+    def __init__(
+        self,
+        path: str | Path,
+        uri: str,
+        *,
+        name: str | None = None,
+        description: str | None = None,
+        pattern: str = "*",
+        recursive: bool = False,
+        include_hidden: bool = False,
+    ) -> None: ...
+```
+
+List files in a directory and expose the result as a JSON array resource. Returns a
+JSON-serialised list of relative file paths matching `pattern`. MIME type is always
+`"application/json"`. Hidden files (names starting with `.`) are excluded by default.
+
+```python
+from lauren_mcp.server import DirectoryResource
+
+src_files = DirectoryResource(
+    "src/",
+    "file:///project/src/",
+    pattern="**/*.py",
+    recursive=True,
+)
+```
+
+---
+
+### register_file_resource
+
+```python
+# from lauren_mcp.server import register_file_resource
+
+def register_file_resource(catalog: McpCatalogManager, resource: FileResource) -> None:
+```
+
+Register a `FileResource` with an `McpCatalogManager` instance. Convenience wrapper
+around `catalog.register_resource(resource.as_mcp_resource_meta())`.
+
+---
+
+### register_http_resource
+
+```python
+# from lauren_mcp.server import register_http_resource
+
+def register_http_resource(catalog: McpCatalogManager, resource: HttpResource) -> None:
+```
+
+Register an `HttpResource` with an `McpCatalogManager` instance.
+
+---
+
+### register_directory_resource
+
+```python
+# from lauren_mcp.server import register_directory_resource
+
+def register_directory_resource(catalog: McpCatalogManager, resource: DirectoryResource) -> None:
+```
+
+Register a `DirectoryResource` with an `McpCatalogManager` instance.
 
 ---
 

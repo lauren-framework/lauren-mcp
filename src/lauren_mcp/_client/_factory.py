@@ -38,9 +38,30 @@ class McpServer:
         current roots; advertised via the ``roots`` capability.
     ``progress_handler`` / ``log_handler`` / ``list_changed_handler``
         Callbacks invoked when the server pushes the matching notification.
+    ``resource_updated_handler``
+        Callback invoked with the resource URI string whenever the server
+        pushes a ``notifications/resources/updated`` notification.  Only
+        fired for resources that the client has subscribed to via
+        :meth:`~McpClientProtocol.subscribe_resource`.
     ``sampling_handler`` / ``elicitation_handler``
         Callbacks answering server-initiated ``sampling/createMessage`` /
         ``elicitation/create`` requests.
+    ``sampling_tools``
+        When ``True`` and a ``sampling_handler`` is provided, advertises
+        ``{"tools": True}`` in the ``sampling`` capability during the
+        handshake, indicating the client can handle tool-use sampling loops.
+
+    After ``connect()``, all clients expose:
+
+    ``set_logging_level(level)``
+        Send ``logging/setLevel`` to the server.  *level* is one of
+        ``"debug"``, ``"info"``, ``"notice"``, ``"warning"``, ``"error"``,
+        ``"critical"``, ``"alert"``, ``"emergency"``.
+    ``subscribe_resource(uri)`` / ``unsubscribe_resource(uri)``
+        Subscribe / unsubscribe to ``notifications/resources/updated`` for
+        the given URI.
+    ``complete(ref, argument)``
+        Request completion suggestions (``completion/complete``).
     """
 
     @staticmethod
@@ -110,6 +131,7 @@ class McpServer:
         url: str,
         *,
         headers: dict[str, str] | None = None,
+        auth: Any = None,
         max_retries: int = 3,
         startup_timeout: float = 10.0,
         **feature_kwargs: Any,
@@ -128,6 +150,9 @@ class McpServer:
             ``"http://localhost:8000/mcp"``.
         headers:
             Optional extra HTTP headers included in every request.
+        auth:
+            Optional ``httpx``-compatible auth object (e.g.
+            :class:`~lauren_mcp._client._oauth.ClientCredentialsProvider`).
         max_retries:
             Reconnect attempts after SSE stream closes unexpectedly.
         startup_timeout:
@@ -138,6 +163,7 @@ class McpServer:
         return McpHttpSseClient(
             url,
             headers=headers,
+            auth=auth,
             max_retries=max_retries,
             startup_timeout=startup_timeout,
             **feature_kwargs,
@@ -148,6 +174,7 @@ class McpServer:
         url: str,
         *,
         headers: dict[str, str] | None = None,
+        auth: Any = None,
         max_retries: int = 3,
         startup_timeout: float = 10.0,
         **feature_kwargs: Any,
@@ -162,6 +189,9 @@ class McpServer:
             Base URL of the MCP endpoint, e.g. ``"http://localhost:8000/mcp"``.
         headers:
             Optional extra HTTP headers included in every request.
+        auth:
+            Optional ``httpx``-compatible auth object (e.g.
+            :class:`~lauren_mcp._client._oauth.ClientCredentialsProvider`).
         max_retries:
             Reconnect attempts after the connection drops.
         startup_timeout:
@@ -172,6 +202,7 @@ class McpServer:
         return McpStreamableHttpClient(
             url,
             headers=headers,
+            auth=auth,
             max_retries=max_retries,
             startup_timeout=startup_timeout,
             **feature_kwargs,

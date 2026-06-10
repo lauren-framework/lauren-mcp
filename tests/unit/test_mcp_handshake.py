@@ -55,9 +55,9 @@ class TestNegotiateVersion:
         """LATEST > STABLE as date strings (lexicographic ordering)."""
         assert LATEST > STABLE
 
-    def test_supported_has_exactly_two_members(self):
-        """SUPPORTED currently tracks exactly 2 protocol versions."""
-        assert len(SUPPORTED) == 2
+    def test_supported_has_exactly_four_members(self):
+        """SUPPORTED now tracks exactly 4 protocol versions."""
+        assert len(SUPPORTED) == 4
 
     def test_supported_contains_latest(self):
         assert LATEST in SUPPORTED

@@ -95,6 +95,7 @@ async def build_wired_dispatcher(
     """Create a module, instantiate dispatcher + server directly, call _register_handlers."""
     from lauren_mcp._server._catalog import McpCatalogManager
     from lauren_mcp._server._registry import McpConnectionRegistry
+    from lauren_mcp._server._subscriptions import ResourceSubscriptionManager
 
     mod_cls = McpServerModule.for_root(server_cls, **for_root_kwargs)
     dispatcher = McpDispatcher()
@@ -104,7 +105,11 @@ async def build_wired_dispatcher(
     # The registrar class is stored on the module by for_root() for exactly this use.
     registrar_cls = mod_cls._handler_registrar_cls  # type: ignore[attr-defined]
     registrar = registrar_cls(
-        dispatcher, McpConnectionRegistry(), McpCatalogManager(), server_instance
+        dispatcher,
+        McpConnectionRegistry(),
+        McpCatalogManager(),
+        ResourceSubscriptionManager(),
+        server_instance,
     )
     await registrar._register_handlers()
     return dispatcher, server_instance

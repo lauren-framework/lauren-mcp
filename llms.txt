@@ -8,101 +8,124 @@
 Protocol. It provides two capabilities:
 
 **Server**: Expose any Lauren service as an MCP server. AI clients (Claude, custom
-agents, etc.) can discover and call your service's tools over WebSocket or HTTP+SSE.
+agents, etc.) can discover and call your service's tools over WebSocket, HTTP+SSE, or
+Streamable HTTP.
 
-**Client**: Connect to any remote MCP server (stdio, WebSocket, HTTP+SSE) and wire its
-tools into a Lauren AI agent with automatic namespacing.
+**Client**: Connect to any remote MCP server (stdio, WebSocket, HTTP+SSE, Streamable
+HTTP) and wire its tools into a Lauren AI agent with automatic namespacing.
 
 ## Installation
 
 ```
-pip install lauren-mcp               # core: wire types + server decorators + stdio client
-pip install "lauren-mcp[ws]"         # + WebSocket client (requires websockets)
-pip install "lauren-mcp[http]"       # + HTTP+SSE client (requires httpx + httpx-sse)
-pip install "lauren-mcp[all]"        # all transports
+pip install lauren-mcp                   # core
+pip install "lauren-mcp[ws]"             # WebSocket client
+pip install "lauren-mcp[http]"           # HTTP+SSE client (legacy 2024-11-05)
+pip install "lauren-mcp[pydantic]"       # Pydantic schema generation
+pip install "lauren-mcp[msgspec]"        # msgspec.Struct schema generation
+pip install "lauren-mcp[cli]"            # lmcp CLI (typer + uvicorn)
+pip install "lauren-mcp[otel]"           # OpenTelemetry tracing
+pip install "lauren-mcp[all]"            # everything
 ```
 
-## Key concepts
+## Protocol versions
 
-- `@mcp_server(path, *, transport="ws")` — register a class as an MCP server
-- `@mcp_tool()` — expose an async method as an MCP tool (JSON Schema from type hints)
-- `@mcp_resource(uri_template)` — expose a URI-addressable resource
-- `@mcp_prompt()` — expose a parameterised prompt template
-- `McpServerModule.for_root(server_cls, *, transport="ws")` — build a Lauren `@module`
-- `McpServer.stdio/ws/http` — factory methods returning `McpClientProtocol`
+Supported: `2024-11-05`, `2025-03-26`, `2025-06-18`, `2025-11-25` (LATEST)
+
+## Server API
+
+- `@mcp_server(path, *, transport="ws")` — transport: `"ws"` | `"sse"` | `"streamable"` | `"both"` | `"all"`
+- `@mcp_tool(*, name, description, annotations, timeout, tags, meta, output_schema, structured_output)`
+- `@mcp_resource(uri_template, *, name, description, mime_type)` — RFC 6570: `{+p}`, `{p*}`, `{?p1,p2}`
+- `@mcp_prompt(name, *, description)`, `@mcp_completion(target, argument)`, `@mcp_lifespan`
+- `McpToolContext` — injected via type annotation in tool methods
+  - `ctx.report_progress()`, `ctx.log()`, `ctx.sample()`, `ctx.elicit()`, `ctx.cancel_requested`
+  - `ctx.lifespan_context` — dict yielded by `@mcp_lifespan`
+- `McpServerModule.for_root(cls, *, transport, log_level, mounts, proxies, event_store, instrument_otel, stateless_http)`
+- `ToolAnnotations(readOnlyHint, destructiveHint, idempotentHint, openWorldHint)`
+- Schema: Pydantic, `msgspec.Struct`, `@dataclass`, `TypedDict`, `Literal`, `Annotated+Field` all supported
+- Binary resources: `bytes` → blob; `BlobResource(data, mime_type)`; `ResourceResult(contents)`
+- Server composition: `mounts=[(OtherCls, "prefix_")]`, `proxies=[(client, "prefix_")]`
+- Built-in resources: `FileResource`, `HttpResource`, `DirectoryResource`
+- `build_openapi_server_class(spec, http_client=...)` — OpenAPI → MCP
+
+## Client API
+
+- `McpServer.stdio(command)` — subprocess stdin/stdout, no extra deps
+- `McpServer.ws(url)` — WebSocket (requires `[ws]`)
+- `McpServer.http(url)` — legacy HTTP+SSE 2024-11-05 (requires `[http]`)
+- `McpServer.streamable_http(url)` — Streamable HTTP, recommended (requires `[http]`)
+
+All factories accept: `protocol_version=`, `roots=[Root(...)]`, `progress_handler=`,
+`log_handler=`, `list_changed_handler=`, `resource_updated_handler=`,
+`sampling_handler=`, `elicitation_handler=`
+
+Post-connect: `client.protocol_version`, `client.on_progress/on_log/on_list_changed()` → unsubscribe callable
+
+Additional methods: `client.subscribe_resource(uri)`, `client.unsubscribe_resource(uri)`,
+`client.complete(ref, argument)`, `client.set_logging_level(level)`
+
+OAuth: `ClientCredentialsProvider(token_endpoint, client_id, client_secret, scopes=)`
+
+## Wire types (selected)
+
+`TextContent`, `ImageContent`, `AudioContent`, `EmbeddedResource`, `ResourceLink`,
+`AnyContent`, `ToolUseContent`, `ToolResultContent`, `ResourceAnnotations`,
+`UrlElicitResult`, `CompletionResult`, `validate_sampling_messages`
+
+## Quick example
+
+```python
+from lauren_mcp import mcp_server, mcp_tool, McpToolContext, McpServerModule, McpServer
+from lauren_mcp.server import mcp_lifespan
+from lauren import LaurenFactory, module
+
+@mcp_server("/mcp")
+class MyServer:
+    @mcp_lifespan
+    async def lifespan(self):
+        db = await init_db()
+        try:
+            yield {"db": db}
+        finally:
+            await db.close()
+
+    @mcp_tool(timeout=30.0)
+    async def search(self, query: str, ctx: McpToolContext) -> list:
+        """Search items. Args: query: Search terms."""
+        await ctx.report_progress(0, 100, "searching")
+        return await ctx.lifespan_context["db"].search(query)
+
+@module(imports=[McpServerModule.for_root(MyServer, transport="all")])
+class App:
+    pass
+
+app = LaurenFactory.create(App)
+
+# Client
+client = McpServer.streamable_http("http://localhost:8000/mcp",
+    progress_handler=lambda p: print(p["message"]))
+await client.connect()
+result = await client.call_tool("search", {"query": "coffee"})
+```
+
+## Wire protocol
+
+JSON-RPC 2.0 over four transports:
+
+| Transport | Extra | Endpoint |
+|---|---|---|
+| stdio | (none) | subprocess stdin/stdout |
+| WebSocket | `[ws]` | `{path}/ws` |
+| HTTP+SSE (legacy) | `[http]` | `GET {path}/sse` + `POST {path}/` |
+| Streamable HTTP | `[http]` | `POST/GET/DELETE {path}/` |
+
+## Key utility types
+
 - `McpCallError` — raised when the server returns a JSON-RPC error response
 - `McpServerConfig(alias, client)` — config for one remote MCP server
 - `McpToolBridge([configs])` — lifecycle manager for a list of McpServerConfig
 - Tool namespacing: `{alias}__{tool_name}` prevents collisions
-
-## Wire protocol
-
-JSON-RPC 2.0 over three transports:
-
-| Transport | Extra | Endpoint path |
-|---|---|---|
-| stdio | (none) | subprocess stdin/stdout |
-| WebSocket | `[ws]` | `{path}/ws` |
-| HTTP+SSE | `[http]` | `{path}` (GET = SSE stream, POST = messages) |
-
-## Public API (`__all__`)
-
-Server: `mcp_server`, `mcp_tool`, `mcp_resource`, `mcp_prompt`, `McpServerModule`
-
-Client: `McpServer`, `McpClientProtocol`, `McpCallError`, `McpServerConfig`,
-`McpToolBridge`
-
-Wire types: `JsonRpcRequest`, `JsonRpcNotification`, `JsonRpcResponse`,
-`JsonRpcErrorResponse`, `McpErrorCode`, `McpParseError`,
-`parse_message`, `build_error_response`,
-`ToolSchema`, `ResourceSchema`, `PromptSchema`,
-`TextContent`, `ImageContent`, `EmbeddedResource`, `AnyContent`,
-`PromptArgument`, `PromptMessage`,
-`InitializeParams`, `InitializeResult`,
-`ClientCapabilities`, `ServerCapabilities`, `Implementation`,
-`ToolCallParams`, `ToolResult`,
-`ReadResourceParams`, `ReadResourceResult`,
-`GetPromptParams`, `GetPromptResult`
-
-Version constants: `LATEST`, `STABLE`, `SUPPORTED`
-
-## Using with Lauren
-
-```python
-from lauren import LaurenFactory, module
-from lauren_mcp import mcp_server, mcp_tool, McpServerModule
-
-@mcp_server("/mcp")
-class MyServer:
-    @mcp_tool()
-    async def greet(self, name: str) -> str:
-        """Greet someone. Args: name: Person's name."""
-        return f"Hello, {name}!"
-
-@module(imports=[McpServerModule.for_root(MyServer)])
-class AppModule:
-    pass
-
-app = LaurenFactory.create(AppModule)
-# WebSocket at ws://host/mcp/ws
-```
-
-## Connecting a client
-
-```python
-import asyncio
-from lauren_mcp import McpServer, McpCallError
-
-async def main():
-    client = McpServer.stdio(["python", "-m", "my_server"])
-    await client.connect()
-    tools = await client.list_tools()
-    result = await client.call_tool("greet", {"name": "World"})
-    print(result["content"][0]["text"])  # raw dict return
-    await client.close()
-
-asyncio.run(main())
-```
+- `LATEST`, `STABLE`, `SUPPORTED` — protocol version constants
 
 ## Links
 

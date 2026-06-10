@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 import json
 from dataclasses import dataclass, field
 from enum import IntEnum
@@ -139,6 +140,7 @@ class ServerCapabilities:
     resources: dict[str, Any] | None = None
     prompts: dict[str, Any] | None = None
     logging: dict[str, Any] | None = None
+    completions: dict[str, Any] | None = None
     experimental: dict[str, Any] | None = None
 
 
@@ -204,8 +206,44 @@ class EmbeddedResource:
     type: str = "resource"
 
 
+@dataclass
+class AudioContent:
+    """A base64-encoded audio content item.
+
+    ``data`` must be base64-encoded audio bytes.  ``mimeType`` should be a
+    valid audio MIME type such as ``"audio/wav"``, ``"audio/mpeg"``, or
+    ``"audio/ogg"``.
+    """
+
+    data: str  # base64-encoded audio bytes
+    mimeType: str  # e.g. "audio/wav"
+    type: str = "audio"
+
+    @classmethod
+    def from_bytes(cls, data: bytes, mime_type: str = "audio/wav") -> AudioContent:
+        """Construct from raw audio *data*, base64-encoding it automatically."""
+        return cls(data=base64.b64encode(data).decode("ascii"), mimeType=mime_type)
+
+
+@dataclass
+class ResourceLink:
+    """A lightweight reference to a resource by URI.
+
+    Unlike :class:`EmbeddedResource`, a ``ResourceLink`` does **not** inline
+    the resource's content — it provides only the URI and optional metadata.
+    The MCP client may choose to fetch the resource separately via
+    ``resources/read`` if needed.
+    """
+
+    uri: str
+    name: str | None = None
+    description: str | None = None
+    mimeType: str | None = None
+    type: str = "resource_link"
+
+
 #: Union alias for any content item that can appear in a tool result or message.
-AnyContent = TextContent | ImageContent | EmbeddedResource
+AnyContent = TextContent | ImageContent | AudioContent | EmbeddedResource | ResourceLink
 
 
 # ---------------------------------------------------------------------------
@@ -244,6 +282,7 @@ class ToolSchema:
     inputSchema: dict[str, Any] = field(default_factory=dict)
     outputSchema: dict[str, Any] | None = None
     annotations: dict[str, Any] | None = None
+    title: str | None = None
 
 
 @dataclass
@@ -258,7 +297,15 @@ class ToolCallParams:
 class ToolResult:
     """Result returned from a ``tools/call`` invocation."""
 
-    content: list[TextContent | ImageContent | EmbeddedResource] = field(default_factory=list)
+    content: list[
+        TextContent
+        | ImageContent
+        | AudioContent
+        | EmbeddedResource
+        | ResourceLink
+        | ToolUseContent
+        | ToolResultContent
+    ] = field(default_factory=list)
     isError: bool = False
     structuredContent: dict[str, Any] | None = None
 
@@ -280,6 +327,47 @@ class ToolOutput:
 # Resources
 # ---------------------------------------------------------------------------
 
+#: Role type alias for MCP audience annotations.
+Role = Literal["user", "assistant"]
+
+
+@dataclass
+class ResourceAnnotations:
+    """Annotations attached to an MCP resource for UI and routing hints.
+
+    Attributes:
+        audience: List of intended readers; omitted means unrestricted.
+            Valid values are ``"user"`` and ``"assistant"``.
+        priority: Relevance weighting in ``[0.0, 1.0]``.  Higher values
+            indicate higher priority.  Omitted when not specified.
+    """
+
+    audience: list[Role] | None = None
+    priority: float | None = None
+
+    def __post_init__(self) -> None:
+        if self.priority is not None and not (0.0 <= self.priority <= 1.0):
+            raise ValueError(
+                f"ResourceAnnotations.priority must be in [0.0, 1.0], got {self.priority}"
+            )
+
+    def to_dict(self) -> dict[str, Any]:
+        """Serialise to the MCP wire representation."""
+        out: dict[str, Any] = {}
+        if self.audience is not None:
+            out["audience"] = list(self.audience)
+        if self.priority is not None:
+            out["priority"] = self.priority
+        return out
+
+    @classmethod
+    def from_dict(cls, obj: dict[str, Any]) -> ResourceAnnotations:
+        """Deserialise from a wire ``annotations`` dict."""
+        return cls(
+            audience=obj.get("audience"),
+            priority=obj.get("priority"),
+        )
+
 
 @dataclass
 class ResourceSchema:
@@ -289,6 +377,8 @@ class ResourceSchema:
     name: str
     description: str | None = None
     mimeType: str | None = None
+    title: str | None = None
+    annotations: ResourceAnnotations | None = None
 
 
 @dataclass
@@ -355,6 +445,7 @@ class PromptSchema:
     name: str
     description: str | None = None
     arguments: list[PromptArgument] = field(default_factory=list)
+    title: str | None = None
 
 
 @dataclass
@@ -362,7 +453,7 @@ class PromptMessage:
     """A single message within a prompt response."""
 
     role: Literal["user", "assistant"]
-    content: TextContent | ImageContent | EmbeddedResource = field(
+    content: TextContent | ImageContent | AudioContent | EmbeddedResource | ResourceLink = field(
         default_factory=lambda: TextContent(text="")
     )
 
@@ -444,22 +535,138 @@ class ProgressNotification(JsonRpcNotification):
 
 
 @dataclass
+class ToolUseContent:
+    """A tool invocation block inside a sampling message.
+
+    Represents the LLM requesting to call a tool, as returned inside a
+    ``sampling/createMessage`` response when the model decides to use a tool.
+    Also used when re-sending past assistant turns that contained tool calls.
+
+    Attributes
+    ----------
+    id:
+        Unique opaque identifier for this tool call, supplied by the model.
+        Must match the ``tool_use_id`` of the corresponding
+        :class:`ToolResultContent`.
+    name:
+        Name of the tool to call.
+    input:
+        Tool arguments as a JSON-serialisable dict.  No schema validation is
+        performed here — the tool author is responsible.
+    type:
+        Wire discriminator.  Always ``"tool_use"``; do not override.
+    """
+
+    id: str
+    name: str
+    input: dict[str, Any]
+    type: str = "tool_use"
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "type": self.type,
+            "id": self.id,
+            "name": self.name,
+            "input": self.input,
+        }
+
+    @classmethod
+    def from_dict(cls, obj: dict[str, Any]) -> ToolUseContent:
+        return cls(
+            id=obj.get("id", ""),
+            name=obj.get("name", ""),
+            input=obj.get("input") or {},
+        )
+
+
+@dataclass
+class ToolResultContent:
+    """The result of a prior tool invocation, placed in a user-role message.
+
+    When the tool author has handled the :class:`ToolUseContent` from an
+    assistant turn, they create a ``ToolResultContent`` and append it as a
+    ``role="user"`` :class:`SamplingMessage` to continue the conversation.
+
+    Attributes
+    ----------
+    tool_use_id:
+        Must match the ``id`` of the :class:`ToolUseContent` this result
+        corresponds to.
+    content:
+        One or more content blocks (text or image) that constitute the tool's
+        output.  An empty list is valid (the tool produced no output).
+    is_error:
+        Set to ``True`` when the tool call failed; the LLM can then decide
+        how to proceed.
+    type:
+        Wire discriminator.  Always ``"tool_result"``; do not override.
+    """
+
+    tool_use_id: str
+    content: list[TextContent | ImageContent] = field(default_factory=list)
+    is_error: bool = False
+    type: str = "tool_result"
+
+    def to_dict(self) -> dict[str, Any]:
+        content_list: list[dict[str, Any]] = []
+        for block in self.content:
+            if isinstance(block, TextContent):
+                content_list.append({"type": "text", "text": block.text})
+            elif isinstance(block, ImageContent):
+                content_list.append(
+                    {"type": "image", "data": block.data, "mimeType": block.mimeType}
+                )
+        return {
+            "type": self.type,
+            "tool_use_id": self.tool_use_id,
+            "content": content_list,
+            "is_error": self.is_error,
+        }
+
+    @classmethod
+    def from_dict(cls, obj: dict[str, Any]) -> ToolResultContent:
+        raw_content = obj.get("content") or []
+        content: list[TextContent | ImageContent] = []
+        for block in raw_content:
+            if isinstance(block, dict):
+                if block.get("type") == "image":
+                    content.append(
+                        ImageContent(
+                            data=block.get("data", ""),
+                            mimeType=block.get("mimeType", ""),
+                        )
+                    )
+                else:
+                    content.append(TextContent(text=block.get("text", "")))
+        return cls(
+            tool_use_id=obj.get("tool_use_id", ""),
+            content=content,
+            is_error=bool(obj.get("is_error", False)),
+        )
+
+
+@dataclass
 class SamplingMessage:
     """A single message in a ``sampling/createMessage`` request."""
 
     role: Literal["user", "assistant"]
-    content: TextContent | ImageContent = field(default_factory=lambda: TextContent(text=""))
+    content: TextContent | ImageContent | ToolUseContent | ToolResultContent = field(
+        default_factory=lambda: TextContent(text="")
+    )
 
     def to_dict(self) -> dict[str, Any]:
-        if isinstance(self.content, TextContent):
-            content: dict[str, Any] = {"type": "text", "text": self.content.text}
+        content_dict: dict[str, Any]
+        if isinstance(self.content, (ToolUseContent, ToolResultContent)):
+            content_dict = self.content.to_dict()
+        elif isinstance(self.content, TextContent):
+            content_dict = {"type": "text", "text": self.content.text}
         else:
-            content = {
+            content_dict = {
                 "type": "image",
                 "data": self.content.data,
                 "mimeType": self.content.mimeType,
             }
-        return {"role": self.role, "content": content}
+        return {"role": self.role, "content": content_dict}
 
 
 @dataclass
@@ -499,21 +706,23 @@ class CreateMessageResult:
     """Result of a ``sampling/createMessage`` request."""
 
     role: Literal["assistant"]
-    content: TextContent | ImageContent
+    content: TextContent | ImageContent | ToolUseContent
     model: str
     stopReason: str | None = None
 
     @property
     def text(self) -> str:
-        """The text of the assistant's reply ('' for image content)."""
+        """The text of the assistant's reply ('' for image or tool_use content)."""
         return self.content.text if isinstance(self.content, TextContent) else ""
 
     @classmethod
     def from_dict(cls, obj: dict[str, Any]) -> CreateMessageResult:
         raw = obj.get("content") or {}
-        content: TextContent | ImageContent
+        content: TextContent | ImageContent | ToolUseContent
         if raw.get("type") == "image":
             content = ImageContent(data=raw.get("data", ""), mimeType=raw.get("mimeType", ""))
+        elif raw.get("type") == "tool_use":
+            content = ToolUseContent.from_dict(raw)
         else:
             content = TextContent(text=raw.get("text", ""))
         return cls(
@@ -528,6 +737,34 @@ class McpSamplingNotAvailable(RuntimeError):
     """Raised when ``ctx.sample()`` is called but the connected client did not
     advertise the ``sampling`` capability (or the transport cannot deliver
     server-to-client requests)."""
+
+
+def validate_sampling_messages(messages: list[SamplingMessage]) -> None:
+    """Validate that ``ToolResultContent`` blocks are properly paired.
+
+    Raises
+    ------
+    ValueError
+        If a ``ToolResultContent`` appears before a ``ToolUseContent`` with the
+        same ``id``, or if a ``ToolUseContent`` is never followed by any
+        ``ToolResultContent`` when more messages follow.
+
+    Notes
+    -----
+    This performs a shallow ordering check only.  It does not validate tool
+    input schemas or result content types.  An empty list is valid.
+    """
+    seen_use_ids: set[str] = set()
+    for i, msg in enumerate(messages):
+        if isinstance(msg.content, ToolUseContent):
+            seen_use_ids.add(msg.content.id)
+        elif isinstance(msg.content, ToolResultContent):  # noqa: SIM102
+            if msg.content.tool_use_id not in seen_use_ids:
+                raise ValueError(
+                    f"SamplingMessage[{i}] contains ToolResultContent with "
+                    f"tool_use_id={msg.content.tool_use_id!r} but no preceding "
+                    f"ToolUseContent with that id was found in the messages list."
+                )
 
 
 # ---------------------------------------------------------------------------
@@ -553,6 +790,35 @@ class McpElicitationNotAvailable(RuntimeError):
     server-to-client requests)."""
 
 
+@dataclass
+class UrlElicitResult:
+    """Result of a URL-elicitation ``elicitation/create`` request.
+
+    ``action`` values:
+
+    - ``"accept"`` — the user completed the external URL flow successfully.
+    - ``"cancel"`` — the user dismissed the dialog or the flow was aborted.
+
+    Note: URL elicitation has no ``"decline"`` state. The only outcomes are
+    completion (``"accept"``) or abandonment (``"cancel"``).
+    """
+
+    action: Literal["accept", "cancel"]
+
+    @classmethod
+    def from_dict(cls, obj: dict[str, Any]) -> UrlElicitResult:
+        action = obj.get("action", "cancel")
+        if action not in ("accept", "cancel"):
+            action = "cancel"
+        return cls(action=action)
+
+
+class McpUrlElicitationNotAvailable(RuntimeError):
+    """Raised when ``ctx.elicit_url()`` is called but the connected client did not
+    advertise the ``urlElicitation`` sub-capability, the ``elicitation`` capability
+    is absent, or the transport cannot carry server-to-client requests."""
+
+
 # ---------------------------------------------------------------------------
 # Roots (client-exposed filesystem roots)
 # ---------------------------------------------------------------------------
@@ -570,6 +836,20 @@ class Root:
         if self.name is not None:
             obj["name"] = self.name
         return obj
+
+
+# ---------------------------------------------------------------------------
+# Argument completion
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class CompletionResult:
+    """Result of a ``completion/complete`` request."""
+
+    values: list[str]
+    total: int | None = None
+    has_more: bool = False
 
 
 # ---------------------------------------------------------------------------
@@ -688,11 +968,16 @@ __all__ = [
     "TextContent",
     "ImageContent",
     "EmbeddedResource",
+    "AudioContent",
+    "ResourceLink",
+    "AnyContent",
     "ToolAnnotations",
     "ToolSchema",
     "ToolCallParams",
     "ToolResult",
     "ToolOutput",
+    "Role",
+    "ResourceAnnotations",
     "ResourceSchema",
     "ResourceContent",
     "ReadResourceParams",
@@ -709,13 +994,19 @@ __all__ = [
     "PromptListChangedNotification",
     "LoggingMessageNotification",
     "ProgressNotification",
+    "ToolUseContent",
+    "ToolResultContent",
     "SamplingMessage",
     "CreateMessageParams",
     "CreateMessageResult",
     "McpSamplingNotAvailable",
+    "validate_sampling_messages",
     "ElicitResult",
     "McpElicitationNotAvailable",
+    "UrlElicitResult",
+    "McpUrlElicitationNotAvailable",
     "Root",
+    "CompletionResult",
     "McpParseError",
     "parse_message",
     "build_error_response",

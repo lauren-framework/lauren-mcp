@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import enum
 import json
 import logging
@@ -23,8 +24,37 @@ from lauren_mcp._types import (
 
 _logger = logging.getLogger(__name__)
 
-LogLevel = Literal["debug", "info", "warning", "error"]
-_LEVEL_RANK: dict[str, int] = {"debug": 0, "info": 1, "warning": 2, "error": 3}
+LogLevel = Literal["debug", "info", "notice", "warning", "error", "critical", "alert", "emergency"]
+_LEVEL_RANK: dict[str, int] = {
+    "debug": 0,
+    "info": 1,
+    "notice": 2,
+    "warning": 3,
+    "error": 4,
+    "critical": 5,
+    "alert": 6,
+    "emergency": 7,
+}
+
+#: Frozenset of all valid MCP log level strings (all 8 syslog-aligned levels).
+VALID_LOG_LEVELS: frozenset[str] = frozenset(_LEVEL_RANK.keys())
+
+
+class McpSamplingLoopError(RuntimeError):
+    """Raised by tool authors to signal the agentic sampling loop should stop.
+
+    ``ctx.sample()`` does not raise this automatically — it is provided for
+    tool authors to use in their own loop guards::
+
+        for _ in range(max_tool_iterations):
+            result = await ctx.sample(messages, tools=[...])
+            if not isinstance(result.content, ToolUseContent):
+                return result.text
+            # handle tool call ...
+        raise McpSamplingLoopError(
+            f"Tool loop exceeded {max_tool_iterations} iterations"
+        )
+    """
 
 
 class LogLevelState:
@@ -196,7 +226,49 @@ def _scalar_schema(annotation: Any) -> dict[str, Any] | None:
         return {"type": "string", "enum": values}
     if isinstance(annotation, type) and issubclass(annotation, enum.Enum):
         return {"type": "string", "enum": [m.value for m in annotation]}
+    # list[str] is explicitly allowed in MCP elicitation spec
+    origin = typing.get_origin(annotation)
+    if origin is list:
+        args = typing.get_args(annotation)
+        if args == (str,):
+            return {"type": "array", "items": {"type": "string"}}
     return None
+
+
+def _coerce_tools(tools: list[Any]) -> list[dict[str, Any]]:
+    """Normalise tool descriptors to wire dicts.
+
+    Accepts :class:`~lauren_mcp._types.ToolSchema`,
+    :class:`~lauren_mcp.server._meta.McpToolMeta` (duck-typed), or plain
+    ``dict`` entries.  Raises ``TypeError`` for unrecognised types.
+    """
+    from lauren_mcp._types import ToolSchema  # local import to avoid cycle
+
+    result: list[dict[str, Any]] = []
+    for item in tools:
+        if isinstance(item, dict):
+            result.append(item)
+        elif isinstance(item, ToolSchema):
+            entry: dict[str, Any] = {
+                "name": item.name,
+                "description": item.description,
+                "inputSchema": item.inputSchema,
+            }
+            result.append(entry)
+        elif hasattr(item, "name") and hasattr(item, "input_schema"):
+            # McpToolMeta duck-type check (avoids import cycle via server._meta)
+            entry = {
+                "name": item.name,
+                "description": item.description,
+                "inputSchema": item.input_schema,
+            }
+            result.append(entry)
+        else:
+            raise TypeError(
+                f"Unsupported tool descriptor type: {type(item).__name__}. "
+                "Expected ToolSchema, McpToolMeta, or dict."
+            )
+    return result
 
 
 @dataclass(frozen=True)
@@ -232,21 +304,63 @@ class McpToolContext:
     _client_capabilities: ClientCapabilities | None = None
     _log_level_state: LogLevelState | None = None
 
+    # ---------- cancellation ----------
+    # Private — set by the dispatcher when $/cancelRequest arrives.
+    # The frozen dataclass can be constructed without specifying it;
+    # the property allocates the event on first access.
+    _cancel_event: asyncio.Event | None = field(default=None, repr=False)
+
     def get_metadata(self, key: str, default: Any = None) -> Any:
         return self.metadata.get(key, default)
+
+    # ------------------------------------------------------------------
+    # Cancellation
+    # ------------------------------------------------------------------
+
+    @property
+    def cancel_requested(self) -> asyncio.Event:
+        """An ``asyncio.Event`` set when the client cancels this call.
+
+        The event is created lazily on first access and stored in the
+        (normally immutable) dataclass via ``object.__setattr__``.  This is
+        safe because the event is local to this call instance and is only
+        written once (by the dispatcher, before ``task.cancel()`` is called).
+
+        Tools should treat this as a *read-only* hint: check
+        ``cancel_requested.is_set()`` between work units and return early for
+        graceful shutdown.  The containing ``asyncio.Task`` will still be
+        hard-cancelled shortly after the event fires.
+
+        .. note::
+            The event is never set on the legacy HTTP+SSE transport (which
+            does not implement ``$/cancelRequest``).
+        """
+        if self._cancel_event is None:
+            object.__setattr__(self, "_cancel_event", asyncio.Event())
+        return self._cancel_event  # type: ignore[return-value]
 
     # ------------------------------------------------------------------
     # Progress
     # ------------------------------------------------------------------
 
     async def report_progress(
-        self, progress: float | int, total: float | int | None = None
+        self,
+        progress: float | int,
+        total: float | int | None = None,
+        message: str | None = None,
     ) -> None:
         """Send ``notifications/progress`` to the client.
 
         No-op when the client did not supply a ``progressToken`` in the
         ``tools/call`` request, or when the transport has no notification
         channel.
+
+        Args:
+            progress: Current progress value (e.g. number of items processed).
+            total: Optional upper bound.  When omitted the client treats
+                progress as indeterminate.
+            message: Optional human-readable status string displayed alongside
+                the progress indicator (e.g. ``"Scanning 3 of 10 files"``).
         """
         if self._progress_token is None or self._send_notification is None:
             return
@@ -256,6 +370,8 @@ class McpToolContext:
         }
         if total is not None:
             params["total"] = total
+        if message is not None:
+            params["message"] = message
         await self._send_notification(
             {"jsonrpc": "2.0", "method": "notifications/progress", "params": params}
         )
@@ -291,11 +407,28 @@ class McpToolContext:
     async def info(self, message: str, data: dict[str, Any] | None = None) -> None:
         await self.log("info", message, data)
 
+    async def notice(self, message: str, data: dict[str, Any] | None = None) -> None:
+        """Send a ``notice``-level log notification.
+
+        Use for normal but significant conditions that operators should be aware
+        of (e.g. a configuration override taking effect, a fallback path used).
+        """
+        await self.log("notice", message, data)
+
     async def warning(self, message: str, data: dict[str, Any] | None = None) -> None:
         await self.log("warning", message, data)
 
     async def error(self, message: str, data: dict[str, Any] | None = None) -> None:
         await self.log("error", message, data)
+
+    async def critical(self, message: str, data: dict[str, Any] | None = None) -> None:
+        """Send a ``critical``-level log notification.
+
+        Use for conditions that require immediate attention but have not yet
+        caused complete service failure (e.g. a primary data source is down and
+        a fallback is active).
+        """
+        await self.log("critical", message, data)
 
     # ------------------------------------------------------------------
     # Sampling
@@ -303,7 +436,7 @@ class McpToolContext:
 
     async def sample(
         self,
-        messages: str | list[SamplingMessage],
+        messages: str | list[Any],  # list[SamplingMessage]
         *,
         max_tokens: int = 1024,
         system_prompt: str | None = None,
@@ -312,6 +445,10 @@ class McpToolContext:
         model_preferences: dict[str, Any] | None = None,
         include_context: Literal["none", "thisServer", "allServers"] = "none",
         result_type: type[Any] | None = None,
+        # New agentic loop parameters:
+        tools: list[Any] | None = None,
+        tool_choice: dict[str, Any] | None = None,
+        max_tool_iterations: int = 10,
     ) -> Any:
         """Ask the connected MCP client to run an LLM call on our behalf.
 
@@ -319,9 +456,32 @@ class McpToolContext:
         Pydantic model class — an instance of that model parsed from the
         reply text.
 
-        Raises :class:`McpSamplingNotAvailable` when the client did not
-        advertise the ``sampling`` capability or the transport cannot carry
-        server-to-client requests (legacy SSE).
+        When *tools* is supplied the client's LLM may respond with a
+        ``ToolUseContent`` block instead of a ``TextContent`` block.
+        ``ctx.sample()`` does **not** execute tools automatically.  The caller
+        is responsible for handling ``ToolUseContent`` responses and building
+        the agentic loop.
+
+        Parameters
+        ----------
+        tools:
+            Tool descriptors to pass to the LLM.  Each entry may be a
+            :class:`~lauren_mcp._types.ToolSchema`, a
+            :class:`~lauren_mcp.server._meta.McpToolMeta` (auto-converted), or a
+            raw ``dict`` with ``name``, ``description``, and ``inputSchema`` keys.
+            ``None`` means no tools are passed (single-turn text/image only).
+        tool_choice:
+            Forwarded to the client as-is.  ``None`` omits the field (client default).
+        max_tool_iterations:
+            Advisory upper bound on agentic loop iterations passed to the client
+            in ``CreateMessageParams.metadata["max_tool_iterations"]``.  Default: 10.
+
+        Raises
+        ------
+        McpSamplingNotAvailable
+            Client did not advertise ``sampling`` capability, or did not advertise
+            ``tools`` support within ``sampling`` when ``tools=`` is supplied, or
+            the transport does not support server-to-client requests.
         """
         if self._client_rpc is None:
             raise McpSamplingNotAvailable("This transport cannot deliver server-to-client requests")
@@ -331,8 +491,26 @@ class McpToolContext:
                 "The connected client did not advertise the 'sampling' capability"
             )
 
+        # Capability check for tool-enabled sampling
+        if tools is not None:
+            sampling_caps = caps.sampling
+            if not (isinstance(sampling_caps, dict) and sampling_caps.get("tools")):
+                raise McpSamplingNotAvailable(
+                    "The connected client does not support tool-enabled sampling "
+                    "('tools' not set in sampling capability). "
+                    "Pass tools=None or upgrade the client."
+                )
+
         if isinstance(messages, str):
             messages = [SamplingMessage(role="user", content=TextContent(text=messages))]
+
+        # Build metadata: include max_tool_iterations advisory when tools are used
+        metadata: dict[str, Any] | None = model_preferences
+        if tools is not None:
+            metadata = {**(model_preferences or {}), "max_tool_iterations": max_tool_iterations}
+
+        # Coerce tools to wire dicts
+        coerced_tools = _coerce_tools(tools) if tools is not None else None
 
         params = CreateMessageParams(
             messages=messages,
@@ -342,8 +520,15 @@ class McpToolContext:
             temperature=temperature,
             stopSequences=stop_sequences or [],
             modelPreferences=model_preferences,
+            metadata=metadata,
         )
-        raw = await self._client_rpc("sampling/createMessage", params.to_dict())
+        params_dict = params.to_dict()
+        # Add tools / toolChoice to the wire dict (not yet in CreateMessageParams dataclass)
+        if coerced_tools is not None:
+            params_dict["tools"] = coerced_tools
+        if tool_choice is not None:
+            params_dict["toolChoice"] = tool_choice
+        raw = await self._client_rpc("sampling/createMessage", params_dict)
         result = CreateMessageResult.from_dict(raw if isinstance(raw, dict) else {})
         if result_type is None:
             return result
@@ -367,8 +552,9 @@ class McpToolContext:
         """Ask the connected MCP client to prompt its user for input.
 
         *response_type* may be ``None`` (approval only), ``str``, ``bool``,
-        ``int``, ``float``, a ``Literal[...]``, an ``Enum`` subclass, or a
-        flat Pydantic model.
+        ``int``, ``float``, a ``Literal[...]``, an ``Enum`` subclass,
+        ``list[str]`` (multi-select string array), or a flat Pydantic model /
+        dataclass / TypedDict whose fields are all of the above scalar types.
 
         Raises :class:`McpElicitationNotAvailable` when the client did not
         advertise the ``elicitation`` capability or the transport cannot carry
@@ -390,3 +576,74 @@ class McpToolContext:
             params["requestedSchema"] = schema
         raw = await self._client_rpc("elicitation/create", params)
         return ElicitResult.from_dict(raw if isinstance(raw, dict) else {})
+
+    async def elicit_url(
+        self,
+        message: str,
+        url: str,
+        *,
+        elicitation_id: str | None = None,
+    ) -> Any:  # returns UrlElicitResult
+        """Direct the user to an external URL and await completion.
+
+        The server sends ``elicitation/create`` with ``requestedUrl`` (and
+        ``elicitationId``) rather than ``requestedSchema``.  The client opens
+        the URL in a browser; the user completes the external flow; the client
+        responds with ``{"action": "accept"}`` or ``{"action": "cancel"}``.
+
+        Parameters
+        ----------
+        message:
+            Human-readable prompt shown to the user before the URL is opened.
+        url:
+            The URL to open.
+        elicitation_id:
+            An opaque string identifying this elicitation instance.
+            Auto-generated as a UUID4 hex string when not provided.
+
+        Returns
+        -------
+        UrlElicitResult
+            ``action`` is ``"accept"`` (flow completed) or ``"cancel"``
+            (user dismissed or flow was abandoned).
+
+        Raises
+        ------
+        McpUrlElicitationNotAvailable
+            Client did not advertise the ``urlElicitation`` sub-capability,
+            ``elicitation`` capability is absent, or the transport does not
+            support server-to-client requests (e.g. legacy HTTP+SSE).
+        """
+        from lauren_mcp._types import (  # noqa: PLC0415
+            McpUrlElicitationNotAvailable,
+            UrlElicitResult,
+        )
+
+        # -- capability gate --
+        caps = self._client_capabilities
+        if caps is None or caps.elicitation is None:
+            raise McpUrlElicitationNotAvailable(
+                "The connected client did not advertise the 'elicitation' capability"
+            )
+        elicitation_caps = caps.elicitation
+        if not (isinstance(elicitation_caps, dict) and elicitation_caps.get("urlElicitation")):
+            raise McpUrlElicitationNotAvailable(
+                "The connected client does not support URL elicitation "
+                "('urlElicitation' not set in elicitation capability)"
+            )
+        if self._client_rpc is None:
+            raise McpUrlElicitationNotAvailable(
+                "This transport cannot deliver server-to-client requests"
+            )
+
+        import uuid  # noqa: PLC0415
+
+        eid = elicitation_id if elicitation_id is not None else uuid.uuid4().hex
+
+        rpc_params: dict[str, Any] = {
+            "message": message,
+            "requestedUrl": url,
+            "elicitationId": eid,
+        }
+        raw = await self._client_rpc("elicitation/create", rpc_params)
+        return UrlElicitResult.from_dict(raw if isinstance(raw, dict) else {})

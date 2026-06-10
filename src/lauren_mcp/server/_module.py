@@ -7,7 +7,7 @@ from typing import Any
 from lauren import Scope, injectable, module, post_construct, pre_destruct
 
 from lauren_mcp._server._catalog import McpCatalogManager
-from lauren_mcp._server._context import LogLevelState
+from lauren_mcp._server._context import VALID_LOG_LEVELS, LogLevelState
 from lauren_mcp._server._dispatcher import McpDispatcher
 from lauren_mcp._server._handshake import build_initialize_result
 from lauren_mcp._server._registry import McpConnectionRegistry
@@ -17,6 +17,7 @@ from lauren_mcp._server._streamable import (
     StreamableSessionStore,
     mcp_streamable_http_controller,
 )
+from lauren_mcp._server._subscriptions import ResourceSubscriptionManager
 from lauren_mcp._server._ws import mcp_ws_controller
 from lauren_mcp._types import (
     ClientCapabilities,
@@ -26,6 +27,7 @@ from lauren_mcp._types import (
 )
 
 from ._handlers import (
+    make_completion_handler,
     make_context_factory,
     make_prompts_get_handler,
     make_prompts_list_handler,
@@ -35,11 +37,13 @@ from ._handlers import (
     make_tools_list_handler,
 )
 from ._meta import (
+    MCP_COMPLETION_META,
     MCP_LIFESPAN_META,
     MCP_PROMPT_META,
     MCP_RESOURCE_META,
     MCP_SERVER_META,
     MCP_TOOL_META,
+    McpCompletionMeta,
     McpLifespanMeta,
     McpPromptMeta,
     McpResourceMeta,
@@ -67,6 +71,7 @@ class McpServerModule:
         log_level: str = "debug",
         mounts: list[tuple[type, str]] | None = None,
         proxies: list[tuple[Any, str]] | None = None,
+        instrument_otel: bool | None = None,
     ) -> type:
         """Build a Lauren ``@module`` that wires *server_cls* into the MCP stack.
 
@@ -114,6 +119,12 @@ class McpServerModule:
             :class:`~lauren_mcp.McpClientProtocol` at startup and re-export
             the remote server's tools under the prefix.  Calls are forwarded
             over the client; connections close at shutdown.
+        instrument_otel:
+            ``True``  — always instrument with OpenTelemetry (raises
+            ``ImportError`` if ``opentelemetry-api`` is not installed).
+            ``False`` — never instrument.
+            ``None``  — auto-detect: instrument if ``opentelemetry-api`` is
+            installed (default).
 
         Returns
         -------
@@ -144,11 +155,12 @@ class McpServerModule:
             )
 
         # ------------------------------------------------------------------
-        # 2. Collect tool / resource / prompt / lifespan metadata
+        # 2. Collect tool / resource / prompt / lifespan / completion metadata
         # ------------------------------------------------------------------
         tools: list[McpToolMeta] = []
         resources: list[McpResourceMeta] = []
         prompts: list[McpPromptMeta] = []
+        completions: list[McpCompletionMeta] = []
         lifespan_meta: McpLifespanMeta | None = None
 
         for attr_name in dir(server_cls):
@@ -169,6 +181,10 @@ class McpServerModule:
             if prompt_meta is not None:
                 prompts.append(prompt_meta)
 
+            completion_meta_val: McpCompletionMeta | None = getattr(attr, MCP_COMPLETION_META, None)
+            if completion_meta_val is not None:
+                completions.append(completion_meta_val)
+
             ls_meta: McpLifespanMeta | None = getattr(attr, MCP_LIFESPAN_META, None)
             if ls_meta is not None:
                 if lifespan_meta is not None:
@@ -184,12 +200,17 @@ class McpServerModule:
         if capabilities is None:
             resolved_caps = ServerCapabilities(
                 tools={"listChanged": True} if tools else None,
-                resources={"listChanged": True} if resources else None,
+                resources={"listChanged": True, "subscribe": True} if resources else None,
                 prompts={"listChanged": True} if prompts else None,
                 logging={},
             )
         else:
             resolved_caps = capabilities
+
+        # Whether to include completions capability in the initialize response.
+        # Stored separately because ServerCapabilities doesn't (yet) have a
+        # completions field — avoids touching _types.py.
+        _has_completions = bool(completions)
 
         # ------------------------------------------------------------------
         # 4. Resolve server_info
@@ -223,10 +244,12 @@ class McpServerModule:
         _tools = tools
         _resources = resources
         _prompts = prompts
+        _completions = completions
         _lifespan_meta = lifespan_meta
         _resolved_caps = resolved_caps
         _resolved_server_info = resolved_server_info
         _log_level = log_level
+        _instrument_otel = instrument_otel
         _server_metadata: dict[str, Any] = dict(
             getattr(server_cls, "__lauren_metadata__", None) or {}
         )
@@ -243,11 +266,13 @@ class McpServerModule:
                 dispatcher: McpDispatcher,
                 registry: McpConnectionRegistry,
                 catalog: McpCatalogManager,
+                subscriptions: ResourceSubscriptionManager,
                 server_instance: server_cls,  # type: ignore[valid-type]
             ) -> None:
                 self._dispatcher = dispatcher
                 self._registry = registry
                 self._catalog = catalog
+                self._subscriptions = subscriptions
                 self._server_instance = server_instance
                 self._lifespan_gen: Any = None
                 self._lifespan_ctx: dict[str, Any] = {}
@@ -259,6 +284,7 @@ class McpServerModule:
                 dispatcher = self._dispatcher
                 srv = self._server_instance
                 catalog = self._catalog
+                sub_mgr = self._subscriptions
 
                 # --- lifespan ---
                 if _lifespan_meta is not None:
@@ -307,19 +333,23 @@ class McpServerModule:
                         clientInfo=client_info,
                     )
                     result = build_initialize_result(init_params, _si, _sc)
+                    caps_dict: dict[str, Any] = {}
+                    if result.capabilities.tools is not None:
+                        caps_dict["tools"] = result.capabilities.tools
+                    if result.capabilities.resources is not None:
+                        caps_dict["resources"] = result.capabilities.resources
+                    if result.capabilities.prompts is not None:
+                        caps_dict["prompts"] = result.capabilities.prompts
+                    if result.capabilities.logging is not None:
+                        caps_dict["logging"] = result.capabilities.logging
+                    if result.capabilities.experimental is not None:
+                        caps_dict["experimental"] = result.capabilities.experimental
+                    # completions is not a field on ServerCapabilities yet; handle separately
+                    if _has_completions:
+                        caps_dict["completions"] = {}
                     return {
                         "protocolVersion": result.protocolVersion,
-                        "capabilities": {
-                            k: v
-                            for k, v in {
-                                "tools": result.capabilities.tools,
-                                "resources": result.capabilities.resources,
-                                "prompts": result.capabilities.prompts,
-                                "logging": result.capabilities.logging,
-                                "experimental": result.capabilities.experimental,
-                            }.items()
-                            if v is not None
-                        },
+                        "capabilities": caps_dict,
                         "serverInfo": {
                             "name": result.serverInfo.name,
                             "version": result.serverInfo.version,
@@ -338,7 +368,7 @@ class McpServerModule:
 
                 async def _set_level(params: dict[str, Any] | None) -> dict[str, Any]:
                     level = (params or {}).get("level")
-                    if level not in ("debug", "info", "warning", "error"):
+                    if level not in VALID_LOG_LEVELS:
                         raise ValueError(f"Invalid log level: {level!r}")
                     log_state.level = level
                     return {}
@@ -358,7 +388,10 @@ class McpServerModule:
                 #     dynamically added tools work) ---
                 _tl_inner = make_tools_list_handler(catalog.list_tools)
                 _tc_inner = make_tools_call_handler(
-                    srv, catalog.list_tools, context_factory=context_factory
+                    srv,
+                    catalog.list_tools,
+                    context_factory=context_factory,
+                    dispatcher=dispatcher,
                 )
 
                 async def _tools_list(params: dict[str, Any] | None) -> dict[str, Any]:
@@ -383,6 +416,49 @@ class McpServerModule:
                 dispatcher.register("resources/list", _resources_list)
                 dispatcher.register("resources/read", _resources_read)
 
+                # --- resources/subscribe, resources/unsubscribe ---
+                async def _resources_subscribe(
+                    params: dict[str, Any] | None,
+                ) -> dict[str, Any]:
+                    from lauren_mcp._server._binding import CURRENT_BINDING  # noqa: PLC0415
+
+                    p = params or {}
+                    uri = p.get("uri")
+                    if not uri:
+                        raise ValueError("resources/subscribe requires 'uri'")
+                    binding = CURRENT_BINDING.get()
+                    session_key = (binding.session_id or "unknown") if binding else "unknown"
+                    send_notification = binding.send_notification if binding else None
+                    if send_notification is None:
+                        raise ValueError("resources/subscribe requires a push-capable transport")
+                    # Wrap the dict-based send_notification into a raw-string SendFn
+                    import json as _json  # noqa: PLC0415
+
+                    _sn = send_notification
+
+                    async def _raw_send(raw: str) -> None:
+                        await _sn(_json.loads(raw))
+
+                    sub_mgr.subscribe(uri, session_key, _raw_send)
+                    return {}
+
+                async def _resources_unsubscribe(
+                    params: dict[str, Any] | None,
+                ) -> dict[str, Any]:
+                    from lauren_mcp._server._binding import CURRENT_BINDING  # noqa: PLC0415
+
+                    p = params or {}
+                    uri = p.get("uri")
+                    if not uri:
+                        raise ValueError("resources/unsubscribe requires 'uri'")
+                    binding = CURRENT_BINDING.get()
+                    session_key = (binding.session_id or "unknown") if binding else "unknown"
+                    sub_mgr.unsubscribe(uri, session_key)
+                    return {}
+
+                dispatcher.register("resources/subscribe", _resources_subscribe)
+                dispatcher.register("resources/unsubscribe", _resources_unsubscribe)
+
                 # --- prompts ---
                 _pl_inner = make_prompts_list_handler(catalog.list_prompts)
                 _pg_inner = make_prompts_get_handler(srv, catalog.list_prompts)
@@ -395,6 +471,35 @@ class McpServerModule:
 
                 dispatcher.register("prompts/list", _prompts_list)
                 dispatcher.register("prompts/get", _prompts_get)
+
+                # --- completion/complete ---
+                if _completions:
+                    _cc_inner = make_completion_handler(srv, _completions)
+
+                    async def _completion_complete(
+                        params: dict[str, Any] | None,
+                    ) -> dict[str, Any]:
+                        return await _cc_inner(_Req(method="completion/complete", params=params))
+
+                    dispatcher.register("completion/complete", _completion_complete)
+
+                # --- OpenTelemetry instrumentation ---
+                from lauren_mcp._server._otel import (  # noqa: PLC0415
+                    instrument_dispatcher,
+                    is_otel_available,
+                )
+
+                effective_otel = _instrument_otel
+                if effective_otel is None:
+                    effective_otel = is_otel_available()
+
+                if effective_otel:
+                    if not is_otel_available():
+                        raise ImportError(
+                            "instrument_otel=True requires opentelemetry-api; "
+                            "install it with: pip install 'lauren-mcp[otel]'"
+                        )
+                    instrument_dispatcher(dispatcher)
 
             @pre_destruct
             async def _shutdown(self) -> None:
@@ -455,6 +560,7 @@ class McpServerModule:
             StreamableSessionStore,
             McpConnectionRegistry,
             McpCatalogManager,
+            ResourceSubscriptionManager,
             _McpHandlerRegistrar,
             *_composition_providers,
             *_auto_guard_providers,

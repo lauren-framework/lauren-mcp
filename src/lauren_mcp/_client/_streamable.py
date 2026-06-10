@@ -44,6 +44,7 @@ class McpStreamableHttpClient(_McpBaseRemoteClient):
         url: str,
         *,
         headers: dict[str, str] | None = None,
+        auth: Any = None,
         max_retries: int = 3,
         startup_timeout: float = 10.0,
         client_info: Implementation | None = None,
@@ -62,6 +63,7 @@ class McpStreamableHttpClient(_McpBaseRemoteClient):
             **feature_kwargs,
         )
         self._url = url.rstrip("/")
+        self._auth = auth
         self._session_id: str | None = None
         self._http_client: httpx.AsyncClient | None = None
         self._push_task: asyncio.Task[None] | None = None
@@ -88,7 +90,9 @@ class McpStreamableHttpClient(_McpBaseRemoteClient):
     # ------------------------------------------------------------------
 
     async def _start_connection(self) -> None:
-        self._http_client = httpx.AsyncClient(headers={**self._headers}, timeout=None)
+        self._http_client = httpx.AsyncClient(
+            headers={**self._headers}, auth=self._auth, timeout=None
+        )
         self._session_id = None
 
     async def _close_connection(self) -> None:

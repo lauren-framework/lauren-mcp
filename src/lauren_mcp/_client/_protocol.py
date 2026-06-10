@@ -104,6 +104,37 @@ class McpClientProtocol(ABC):
             The raw contents returned by the server.
         """
 
+    @abstractmethod
+    async def subscribe_resource(self, uri: str) -> None:
+        """Subscribe to change notifications for the resource at *uri*.
+
+        Sends ``resources/subscribe`` with ``{"uri": uri}``.  After a
+        successful subscription the server will push
+        ``notifications/resources/updated`` whenever the resource changes.
+
+        The server returns ``METHOD_NOT_FOUND`` if it does not support
+        subscriptions; this is surfaced as :class:`McpCallError` with
+        ``code == -32601``.
+
+        Parameters
+        ----------
+        uri:
+            The exact resource URI previously returned by :meth:`list_resources`.
+        """
+
+    @abstractmethod
+    async def unsubscribe_resource(self, uri: str) -> None:
+        """Cancel a previously established resource subscription.
+
+        Sends ``resources/unsubscribe`` with ``{"uri": uri}``.  The server
+        will stop pushing ``notifications/resources/updated`` for this URI.
+
+        Parameters
+        ----------
+        uri:
+            The URI that was passed to :meth:`subscribe_resource`.
+        """
+
     # ------------------------------------------------------------------
     # Prompts
     # ------------------------------------------------------------------
@@ -147,4 +178,45 @@ class McpClientProtocol(ABC):
 
         Useful for connection health-checks and keep-alive probing.
         Raises :class:`McpCallError` (or a subclass) on failure.
+        """
+
+    @abstractmethod
+    async def set_logging_level(self, level: str) -> None:
+        """Ask the server to change its minimum log-notification threshold.
+
+        Sends ``logging/setLevel`` with ``{"level": level}``.  The server
+        will suppress ``notifications/message`` entries below *level* from
+        that point forward.
+
+        Parameters
+        ----------
+        level:
+            One of ``"debug"``, ``"info"``, ``"notice"``, ``"warning"``,
+            ``"error"``, ``"critical"``, ``"alert"``, ``"emergency"``.
+
+        Raises
+        ------
+        ValueError
+            If *level* is not one of the accepted strings.
+        McpCallError
+            If the server returns a JSON-RPC error response.
+        """
+
+    @abstractmethod
+    async def complete(self, ref: dict[str, Any], argument: dict[str, Any]) -> Any:
+        """Request completion suggestions from the server (``completion/complete``).
+
+        Parameters
+        ----------
+        ref:
+            A reference object identifying the completable item, e.g.
+            ``{"type": "ref/prompt", "name": "greet"}``.
+        argument:
+            The argument being completed, e.g.
+            ``{"name": "nam", "value": "Jo"}``.
+
+        Returns
+        -------
+        Any
+            The raw completion result from the server.
         """

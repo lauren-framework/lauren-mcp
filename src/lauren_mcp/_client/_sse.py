@@ -61,6 +61,7 @@ class McpHttpSseClient(_McpBaseRemoteClient):
         url: str,
         *,
         headers: dict[str, str] | None = None,
+        auth: Any = None,
         max_retries: int = 3,
         startup_timeout: float = 10.0,
         client_info: Implementation | None = None,
@@ -79,6 +80,7 @@ class McpHttpSseClient(_McpBaseRemoteClient):
             **feature_kwargs,
         )
         self._url = url.rstrip("/")
+        self._auth = auth
         self._session_id: str | None = None
         self._http_client: httpx.AsyncClient | None = None
 
@@ -104,6 +106,7 @@ class McpHttpSseClient(_McpBaseRemoteClient):
         """Create the httpx client and start the SSE reader loop."""
         self._http_client = httpx.AsyncClient(
             headers={**self._headers},
+            auth=self._auth,
             timeout=None,  # SSE streams are long-lived
         )
         self._session_id = None

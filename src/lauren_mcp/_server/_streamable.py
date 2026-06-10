@@ -10,15 +10,20 @@ from collections.abc import AsyncGenerator
 from dataclasses import dataclass, field
 from typing import Any
 
-from lauren import Scope, controller, delete, get, injectable, post
+from lauren import Scope, controller, delete, get, injectable, post, use_guards
 from lauren.sse import EventStream, ServerSentEvent
 from lauren.types import ExecutionContext, Headers, Request, Response
 
 from lauren_mcp._server._binding import CURRENT_BINDING, TransportBinding
 from lauren_mcp._server._dispatcher import McpDispatcher
+from lauren_mcp._server._event_store import EventStore
 from lauren_mcp._server._handshake import negotiate_version
 from lauren_mcp._server._propagate import _apply_server_metadata
 from lauren_mcp._server._registry import McpConnectionRegistry
+from lauren_mcp._server._transport_security import (
+    McpTransportSecurityGuard,
+    TransportSecuritySettings,
+)
 from lauren_mcp._types import (
     ClientCapabilities,
     JsonRpcErrorResponse,
@@ -51,6 +56,8 @@ class StreamableSession:
     #: Server-initiated RPCs awaiting a client response (via a later POST).
     pending_client_rpcs: dict[str, asyncio.Future[Any]] = field(default_factory=dict)
     next_srv_id: int = 0
+    #: Counter for SSE event IDs on the GET push channel.
+    next_event_id: int = 0
 
 
 @injectable(scope=Scope.SINGLETON)
@@ -94,6 +101,10 @@ def mcp_streamable_http_controller(
     base_path: str,
     *,
     source: Any | None = None,
+    stateless: bool = False,
+    event_store: EventStore | None = None,
+    transport_security: TransportSecuritySettings | None = None,
+    oauth_settings: Any | None = None,
 ) -> type:
     """Return a ``@controller(base_path)`` implementing Streamable HTTP.
 
@@ -108,13 +119,32 @@ def mcp_streamable_http_controller(
         response.  Notifications return ``202``.  JSON-RPC *responses* from
         the client resolve pending server-initiated RPCs.
 
+        When *stateless* is ``True`` no session is created or required.
+
     ``GET <base_path>/``
         Optional server-push channel: an SSE stream delivering server
         notifications and server-initiated requests for the session.
+        Returns ``405`` when *stateless* is ``True``.
 
     ``DELETE <base_path>/``
-        Explicit session teardown.
+        Explicit session teardown.  Returns ``405`` when *stateless* is
+        ``True``.
+
+    ``GET <base_path>/.well-known/oauth-authorization-server``
+        OAuth 2.1 authorization server discovery (RFC 8414).  Only
+        available when *oauth_settings* is provided and its
+        ``authorization_server_metadata`` field is set.
+
+    ``GET <base_path>/.well-known/oauth-protected-resource``
+        OAuth 2.1 protected resource discovery (RFC 9728).  Only
+        available when *oauth_settings* is provided and its
+        ``protected_resource_metadata`` field is set.
     """
+    # Capture OAuth metadata from settings for use in handlers
+    _oauth_as_meta = (
+        None if oauth_settings is None else oauth_settings.authorization_server_metadata
+    )
+    _oauth_pr_meta = None if oauth_settings is None else oauth_settings.protected_resource_metadata
 
     @controller(base_path)
     class McpStreamableController:
@@ -147,6 +177,9 @@ def mcp_streamable_http_controller(
                     None, McpErrorCode.INTERNAL_ERROR, f"Could not read request body: {exc}"
                 )
                 return _json_response(err.to_json(), status=400)
+
+            if stateless:
+                return await self._handle_stateless(request, msg)
 
             # --- Client responses to server-initiated RPCs ---
             if isinstance(msg, (JsonRpcResponse, JsonRpcErrorResponse)):
@@ -189,6 +222,87 @@ def mcp_streamable_http_controller(
 
             err = build_error_response(None, McpErrorCode.INVALID_REQUEST, "Unsupported message")
             return _json_response(err.to_json(), status=400)
+
+        async def _handle_stateless(self, request: Request, msg: Any) -> Response | EventStream:
+            """Process a single JSON-RPC message with no session state."""
+
+            # Notifications in stateless mode: accept and discard.
+            if isinstance(msg, JsonRpcNotification):
+                return Response(body=b"", status=202)
+
+            # Client response frames in stateless mode: unexpected, discard.
+            if isinstance(msg, (JsonRpcResponse, JsonRpcErrorResponse)):
+                return Response(body=b"", status=202)
+
+            if not isinstance(msg, JsonRpcRequest):
+                err = build_error_response(
+                    None, McpErrorCode.INVALID_REQUEST, "Unsupported message"
+                )
+                return _json_response(err.to_json(), status=400)
+
+            # Build a per-request binding with a local queue for notifications.
+            local_queue: asyncio.Queue[str] = asyncio.Queue()
+
+            async def _send_notification(payload: dict[str, Any]) -> None:
+                await local_queue.put(json.dumps(payload))
+
+            async def _client_rpc_unavailable(method: str, params: dict[str, Any]) -> Any:
+                raise RuntimeError(
+                    "Stateless mode does not support server-to-client requests "
+                    f"(attempted: {method!r})"
+                )
+
+            binding = TransportBinding(
+                headers=request.headers,
+                execution_context=ExecutionContext(request=request),
+                session_id=None,
+                send_notification=_send_notification,
+                client_rpc=_client_rpc_unavailable,
+                client_capabilities=None,
+            )
+
+            if not _accepts_sse(request):
+                # Plain JSON: dispatch, return response; notifications silently dropped
+                # (no push channel in stateless mode).
+                token = CURRENT_BINDING.set(binding)
+                try:
+                    response = await self._dispatcher.dispatch(msg)
+                finally:
+                    CURRENT_BINDING.reset(token)
+                return _json_response(response.to_json())
+
+            # SSE: buffer notifications and return them before the final response.
+            async def _run() -> str:
+                tok = CURRENT_BINDING.set(binding)
+                try:
+                    resp = await self._dispatcher.dispatch(msg)
+                finally:
+                    CURRENT_BINDING.reset(tok)
+                return resp.to_json()
+
+            dispatch_task: asyncio.Task[str] = asyncio.create_task(_run())
+
+            async def _stateless_generator() -> AsyncGenerator[ServerSentEvent, None]:
+                try:
+                    while True:
+                        queue_get: asyncio.Task[str] = asyncio.create_task(local_queue.get())
+                        done, _ = await asyncio.wait(
+                            {queue_get, dispatch_task},
+                            return_when=asyncio.FIRST_COMPLETED,
+                        )
+                        if queue_get in done:
+                            yield ServerSentEvent(event="message", data=queue_get.result())
+                            continue
+                        queue_get.cancel()
+                        while not local_queue.empty():
+                            yield ServerSentEvent(event="message", data=local_queue.get_nowait())
+                        yield ServerSentEvent(event="message", data=dispatch_task.result())
+                        break
+                except asyncio.CancelledError:
+                    dispatch_task.cancel()
+                    raise
+
+            return EventStream(_stateless_generator())
 
         async def _handle_initialize(self, request: Request, msg: JsonRpcRequest) -> Response:
             params = msg.params if isinstance(msg.params, dict) else {}
@@ -324,6 +438,13 @@ def mcp_streamable_http_controller(
 
         @get("/")
         async def handle_get(self, request: Request) -> Response | EventStream:
+            if stateless:
+                return Response(
+                    body=json.dumps({"error": "GET is not supported in stateless mode"}).encode(),
+                    status=405,
+                    headers=Headers([("content-type", "application/json"), ("allow", "POST")]),
+                )
+
             if not _accepts_sse(request):
                 return _json_response(
                     json.dumps({"error": "GET requires 'Accept: text/event-stream'"}),
@@ -333,6 +454,7 @@ def mcp_streamable_http_controller(
             if isinstance(session, Response):
                 return session
 
+            last_event_id: str | None = request.headers.get("last-event-id")
             queue = session.push_queue
 
             async def _push(raw: str) -> None:
@@ -340,17 +462,39 @@ def mcp_streamable_http_controller(
 
             registry_key = self._registry.register(_push)
 
-            async def _generator() -> AsyncGenerator[ServerSentEvent, None]:
+            async def _push_generator() -> AsyncGenerator[ServerSentEvent, None]:
+                # Replay missed events first if event_store is configured
+                if event_store is not None and last_event_id is not None:
+                    replayed: list[tuple[str, str]] = []
+
+                    async def _collect(eid: str, data: str) -> None:
+                        replayed.append((eid, data))
+
+                    await event_store.replay_events_after(
+                        session.session_id, last_event_id, _collect
+                    )
+                    for eid, data in replayed:
+                        yield ServerSentEvent(event="message", data=data, id=eid)
+
+                # Normal queue-drain loop (with event ID assignment if event_store set)
                 try:
                     while True:
                         payload = await queue.get()
                         if payload is None:
                             break
-                        yield ServerSentEvent(event="message", data=payload)
+                        if event_store is not None:
+                            eid = f"{session.session_id}:{session.next_event_id}"
+                            session.next_event_id += 1
+                            await event_store.store_event(session.session_id, eid, payload)
+                            yield ServerSentEvent(event="message", data=payload, id=eid)
+                        else:
+                            yield ServerSentEvent(event="message", data=payload)
                 finally:
                     self._registry.unregister(registry_key)
+                    if event_store is not None:
+                        pass  # session eviction handled by StreamableSessionStore.remove
 
-            return EventStream(_generator())
+            return EventStream(_push_generator())
 
         # --------------------------------------------------------------
         # DELETE — explicit session teardown
@@ -358,6 +502,15 @@ def mcp_streamable_http_controller(
 
         @delete("/")
         async def handle_delete(self, request: Request) -> Response:
+            if stateless:
+                return Response(
+                    body=json.dumps(
+                        {"error": "DELETE is not supported in stateless mode"}
+                    ).encode(),
+                    status=405,
+                    headers=Headers([("content-type", "application/json"), ("allow", "POST")]),
+                )
+
             session_id = request.headers.get(_SESSION_HEADER)
             if not session_id:
                 return _json_response(
@@ -366,6 +519,33 @@ def mcp_streamable_http_controller(
             self._sessions.remove(session_id)
             return Response(body=b"", status=204)
 
+        # --------------------------------------------------------------
+        # OAuth 2.1 discovery endpoints (unauthenticated)
+        # These are only active when oauth_settings is provided.
+        # --------------------------------------------------------------
+
+        @get("/.well-known/oauth-authorization-server")
+        async def oauth_authorization_server(self, request: Request) -> Response:
+            if _oauth_as_meta is None:
+                return Response(body=b"", status=404)
+            body = json.dumps(_oauth_as_meta.to_dict()).encode()
+            return Response(
+                body=body,
+                status=200,
+                headers=Headers([("content-type", "application/json")]),
+            )
+
+        @get("/.well-known/oauth-protected-resource")
+        async def oauth_protected_resource(self, request: Request) -> Response:
+            if _oauth_pr_meta is None:
+                return Response(body=b"", status=404)
+            body = json.dumps(_oauth_pr_meta.to_dict()).encode()
+            return Response(
+                body=body,
+                status=200,
+                headers=Headers([("content-type", "application/json")]),
+            )
+
     McpStreamableController.__name__ = "McpStreamableController"
     McpStreamableController.__qualname__ = (
         f"mcp_streamable_http_controller.<locals>.McpStreamableController[{base_path}]"
@@ -373,5 +553,17 @@ def mcp_streamable_http_controller(
 
     if source is not None:
         _apply_server_metadata(source, McpStreamableController)
+
+    # Apply transport security guard if configured.
+    if transport_security is not None:
+        _guard = McpTransportSecurityGuard()
+        _guard.configure(transport_security)
+        _ts = transport_security
+
+        class _BoundTransportSecurityGuard:
+            async def can_activate(self, ctx: ExecutionContext) -> bool:
+                return await _guard.can_activate(ctx)
+
+        McpStreamableController = use_guards(_BoundTransportSecurityGuard)(McpStreamableController)  # type: ignore[misc]
 
     return McpStreamableController

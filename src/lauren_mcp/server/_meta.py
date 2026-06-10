@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from lauren_mcp._types import ToolAnnotations
+
+if TYPE_CHECKING:
+    from lauren_mcp._types import ResourceAnnotations
 
 # Attribute names used to store metadata on decorated objects
 MCP_SERVER_META = "__mcp_server_meta__"
@@ -13,6 +16,7 @@ MCP_TOOL_META = "__mcp_tool_meta__"
 MCP_RESOURCE_META = "__mcp_resource_meta__"
 MCP_PROMPT_META = "__mcp_prompt_meta__"
 MCP_LIFESPAN_META = "__mcp_lifespan_meta__"
+MCP_COMPLETION_META = "__mcp_completion_meta__"
 
 
 @dataclass
@@ -39,6 +43,8 @@ class McpToolMeta:
     tags: frozenset[str] = field(default_factory=frozenset)
     meta: dict[str, Any] = field(default_factory=dict)
     param_descriptions: dict[str, str] = field(default_factory=dict)
+    structured_output: bool | None = None
+    title: str | None = None
 
 
 @dataclass
@@ -52,6 +58,8 @@ class McpResourceMeta:
     method_name: str
     query_params: list[str] = field(default_factory=list)
     param_type_hints: dict[str, Any] = field(default_factory=dict)
+    annotations: ResourceAnnotations | None = None
+    title: str | None = None
 
 
 @dataclass
@@ -62,6 +70,7 @@ class McpPromptMeta:
     description: str | None
     arguments: list[dict[str, Any]]  # [{name, description, required}]
     method_name: str
+    title: str | None = None
 
 
 @dataclass
@@ -69,3 +78,13 @@ class McpLifespanMeta:
     """Metadata attached to a method decorated with ``@mcp_lifespan``."""
 
     method_name: str
+
+
+@dataclass
+class McpCompletionMeta:
+    """Metadata attached to a method decorated with ``@mcp_completion``."""
+
+    ref_type: str  # "ref/prompt" or "ref/resource"
+    target_name: str  # prompt name or resource URI template
+    argument_name: str  # the argument this function completes
+    method_name: str  # the method to call on the server instance
