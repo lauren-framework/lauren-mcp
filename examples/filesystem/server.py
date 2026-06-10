@@ -72,11 +72,11 @@ def _resolve_safe_path(path: str, root: Path) -> Path:
     # candidate must be equal to root or a descendant of root.
     try:
         candidate.relative_to(root)
-    except ValueError:
+    except ValueError as exc:
         raise ValueError(
             f"Path traversal detected: {path!r} resolves to {candidate} "
             f"which is outside the sandbox {root}"
-        )
+        ) from exc
     return candidate
 
 

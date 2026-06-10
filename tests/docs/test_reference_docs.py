@@ -204,16 +204,12 @@ class TestServerReferenceDecorators:
         meta = getattr(_S.search, MCP_TOOL_META)
         assert meta.name == "catalogue_search"
 
-    def test_mcp_tool_required_vs_optional_schema(self, ref_client):
-        # limit has a default → not required; query has no default → required
-        async def _check():
-            tools = await asyncio.wait_for(ref_client.list_tools(), timeout=5.0)
-            search = next(t for t in tools if t.name == "catalogue_search")
-            required = search.inputSchema.get("required", [])
-            assert "query" in required
-            assert "limit" not in required
-
-        asyncio.get_event_loop().run_until_complete(_check())
+    async def test_mcp_tool_required_vs_optional_schema(self, ref_client):
+        tools = await asyncio.wait_for(ref_client.list_tools(), timeout=5.0)
+        search = next(t for t in tools if t.name == "catalogue_search")
+        required = search.inputSchema.get("required", [])
+        assert "query" in required
+        assert "limit" not in required
 
     async def test_mcp_tool_schema_types_in_inputschema(self, ref_client):
         tools = await asyncio.wait_for(ref_client.list_tools(), timeout=5.0)
