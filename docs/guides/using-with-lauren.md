@@ -253,26 +253,109 @@ app = LaurenFactory.create(
 
 ## 5. Guards
 
-Guards run before every HTTP request and can allow or reject it.  Use them to
-protect HTTP routes in apps that also host an MCP server.
+### `@use_guards` directly on `@mcp_server` ✅
 
-### Global guard
+Stack `@use_guards(...)` directly on your `@mcp_server` class — no middleware,
+no extra wiring.  Guards are checked **at connection time** (before the MCP
+handshake); rejected clients receive close code `1008` (Policy Violation).
 
 ```python
-from lauren import injectable, Scope
-from lauren.types import ExecutionContext
+from lauren import injectable, Scope, use_guards
+from lauren_mcp import mcp_server, mcp_tool, McpServerModule
 
 @injectable(scope=Scope.SINGLETON)
 class ApiKeyGuard:
-    async def can_activate(self, ctx: ExecutionContext) -> bool:
+    async def can_activate(self, ctx) -> bool:
+        # ctx.request.headers holds the WS upgrade request headers
         return ctx.request.headers.get("x-api-key") == "secret-key"
 
 
-app = LaurenFactory.create(AppModule, global_guards=[ApiKeyGuard])
+@use_guards(ApiKeyGuard)          # ← stacked directly on @mcp_server
+@mcp_server("/mcp")
+class SecureServer:
+    @mcp_tool()
+    async def secret(self) -> str:
+        "Run a secured action."
+        return "classified"
+
+
+@module(imports=[McpServerModule.for_root(SecureServer)])
+class AppModule:
+    pass
+
+app = LaurenFactory.create(AppModule)
+TestClient(app)  # triggers @post_construct
 ```
 
-Every HTTP route now requires `X-Api-Key: secret-key`.  If rejected, Lauren
-returns 403 Forbidden automatically.
+`ApiKeyGuard` is injected automatically — no need to add it to `providers=`.
+
+**Connection flow:**
+
+```
+Client → WS upgrade (X-Api-Key: secret-key)
+           ↓
+        ApiKeyGuard.can_activate(ctx)  →  True  →  ws.accept()  →  MCP handshake
+                                        →  False →  ws.close(1008)
+```
+
+**Multiple guards:**
+
+```python
+@use_guards(ApiKeyGuard, RateLimitGuard)
+@mcp_server("/mcp")
+class SecureServer: ...
+```
+
+All guards are checked in order; the first rejection closes the connection.
+
+**Guard context:** Inside `can_activate(ctx)`, access the WS upgrade headers:
+
+```python
+@injectable(scope=Scope.SINGLETON)
+class BearerGuard:
+    async def can_activate(self, ctx) -> bool:
+        auth = ctx.request.headers.get("authorization", "")
+        if not auth.startswith("Bearer "):
+            return False
+        token = auth[len("Bearer "):]
+        return await self._verify(token)  # async verify OK
+```
+
+### `@use_guards` on `@mcp_server` with DI dependencies
+
+Guards are resolved from Lauren's DI container per-connection (REQUEST scope).
+If a guard needs a service, inject it via the constructor:
+
+```python
+@injectable(scope=Scope.SINGLETON)
+class TokenAuthGuard:
+    def __init__(self, token_store: TokenStore) -> None:
+        self._store = token_store
+
+    async def can_activate(self, ctx) -> bool:
+        token = ctx.request.headers.get("authorization", "")
+        return await self._store.is_valid(token)
+
+
+@use_guards(TokenAuthGuard)
+@mcp_server("/mcp")
+class SecureServer: ...
+
+
+@module(
+    imports=[McpServerModule.for_root(SecureServer, providers=[TokenStore])]
+)
+class AppModule: ...
+```
+
+### Global guard on HTTP routes only
+
+Global guards apply to HTTP routes only, not to WS connections.  Use
+`@use_guards` on the server class for MCP, and `global_guards=` for HTTP:
+
+```python
+app = LaurenFactory.create(AppModule, global_guards=[SomeHttpGuard])
+```
 
 ### Class-level guard on an HTTP controller
 
@@ -285,27 +368,6 @@ class AdminController:
     @get("/dashboard")
     async def dashboard(self) -> dict:
         return {"page": "dashboard"}
-```
-
-Guards applied to a controller class cover all its routes.  Other controllers
-in the same app are unaffected.
-
-### Guards and MCP
-
-Global guards apply to HTTP.  MCP WebSocket connections use a different ASGI
-scope, so for MCP auth use a **global middleware** that inspects the path:
-
-```python
-@middleware()
-class McpAuthMiddleware:
-    async def dispatch(self, request: Request, call_next: CallNext) -> Response:
-        if request.path.startswith("/mcp"):
-            key = request.headers.get("x-api-key")
-            if key != "secret-key":
-                return Response.json({"error": "Unauthorised"}, status=401)
-        return await call_next(request)
-
-app = LaurenFactory.create(AppModule, global_middlewares=[McpAuthMiddleware])
 ```
 
 ---

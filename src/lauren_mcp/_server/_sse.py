@@ -30,7 +30,13 @@ _logger = logging.getLogger(__name__)
 _SESSION_HEADER = "mcp-session-id"
 
 
-def mcp_http_sse_controller(base_path: str) -> type:
+def mcp_http_sse_controller(
+    base_path: str,
+    *,
+    guard_classes: tuple[type, ...] = (),
+    interceptor_classes: tuple[type, ...] = (),
+    middleware_classes: tuple[type, ...] = (),
+) -> type:
     """Return a ``@controller(base_path)`` class implementing the MCP HTTP+SSE transport.
 
     The returned controller exposes two endpoints:
@@ -172,5 +178,23 @@ def mcp_http_sse_controller(base_path: str) -> type:
     McpSseController.__qualname__ = (
         f"mcp_http_sse_controller.<locals>.McpSseController[{base_path}]"
     )
+
+    # Apply Lauren's cross-cutting-concern decorators to the HTTP controller.
+    # Because McpSseController is a real Lauren @controller, these are
+    # processed by Lauren's HTTP pipeline — no manual checking needed.
+    if middleware_classes:
+        from lauren import use_middlewares  # noqa: PLC0415
+
+        McpSseController = use_middlewares(*middleware_classes)(McpSseController)
+
+    if guard_classes:
+        from lauren import use_guards  # noqa: PLC0415
+
+        McpSseController = use_guards(*guard_classes)(McpSseController)
+
+    if interceptor_classes:
+        from lauren import use_interceptors  # noqa: PLC0415
+
+        McpSseController = use_interceptors(*interceptor_classes)(McpSseController)
 
     return McpSseController
