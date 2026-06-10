@@ -86,7 +86,7 @@ for line in sys.stdin:
 """
 
 
-@pytest.fixture
+@pytest.fixture(scope="module")
 def server_command():
     """Return argv for the e2e server subprocess."""
     with tempfile.NamedTemporaryFile(mode="w", suffix=".py", delete=False) as f:

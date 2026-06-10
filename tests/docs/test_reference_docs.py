@@ -15,6 +15,7 @@ import tempfile
 import textwrap
 
 import pytest
+import pytest_asyncio
 
 from lauren_mcp import (
     McpCallError,
@@ -39,7 +40,7 @@ from lauren_mcp._types import (
     ToolSchema,
 )
 
-pytestmark = pytest.mark.asyncio
+pytestmark = pytest.mark.asyncio(loop_scope="session")
 
 # ---------------------------------------------------------------------------
 # Inline server used by client reference tests
@@ -149,7 +150,7 @@ _REF_SERVER = textwrap.dedent("""\
 """)
 
 
-@pytest.fixture
+@pytest.fixture(scope="session")
 def ref_server_cmd():
     with tempfile.NamedTemporaryFile(mode="w", suffix=".py", delete=False) as f:
         f.write(_REF_SERVER)
@@ -158,7 +159,7 @@ def ref_server_cmd():
     os.unlink(fname)
 
 
-@pytest.fixture
+@pytest_asyncio.fixture(scope="session", loop_scope="session")
 async def ref_client(ref_server_cmd) -> McpStdioClient:
     c: McpStdioClient = McpServer.stdio(ref_server_cmd, startup_timeout=10.0, max_retries=0)
     await asyncio.wait_for(c.connect(), timeout=10.0)

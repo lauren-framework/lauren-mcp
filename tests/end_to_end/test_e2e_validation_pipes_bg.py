@@ -34,11 +34,12 @@ import tempfile
 import textwrap
 
 import pytest
+import pytest_asyncio
 
 from lauren_mcp import McpServer
 from lauren_mcp._client._stdio import McpCallError, McpStdioClient
 
-pytestmark = pytest.mark.asyncio
+pytestmark = pytest.mark.asyncio(loop_scope="session")
 
 # ---------------------------------------------------------------------------
 # Subprocess server script — ValidSrv
@@ -173,7 +174,7 @@ _VALID_SERVER_SCRIPT = textwrap.dedent("""\
 # ---------------------------------------------------------------------------
 
 
-@pytest.fixture
+@pytest.fixture(scope="session")
 def server_command():
     """Write the server script to a temp file and return the launch command."""
     with tempfile.NamedTemporaryFile(mode="w", suffix=".py", delete=False) as f:
@@ -183,7 +184,7 @@ def server_command():
     os.unlink(fname)
 
 
-@pytest.fixture
+@pytest_asyncio.fixture(scope="session", loop_scope="session")
 async def client(server_command):
     """Connected McpStdioClient backed by ValidSrv subprocess."""
     c: McpStdioClient = McpServer.stdio(server_command, max_retries=0)

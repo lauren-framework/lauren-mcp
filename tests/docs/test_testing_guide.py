@@ -18,12 +18,13 @@ import textwrap
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+import pytest_asyncio
 
 from lauren_mcp import McpServer
 from lauren_mcp._client._stdio import McpStdioClient
 from lauren_mcp._types import ToolSchema
 
-pytestmark = pytest.mark.asyncio
+pytestmark = pytest.mark.asyncio(loop_scope="session")
 
 # ---------------------------------------------------------------------------
 # The BookServer from the testing guide (Section 3 subprocess example)
@@ -148,7 +149,7 @@ class TestDirectMethodTesting:
 # ---------------------------------------------------------------------------
 
 
-@pytest.fixture
+@pytest.fixture(scope="session")
 def book_server_cmd():
     with tempfile.NamedTemporaryFile(mode="w", suffix=".py", delete=False) as f:
         f.write(_BOOK_SERVER_FROM_GUIDE)
@@ -157,7 +158,7 @@ def book_server_cmd():
     os.unlink(fname)
 
 
-@pytest.fixture
+@pytest_asyncio.fixture(scope="session", loop_scope="session")
 async def book_client(book_server_cmd):
     client: McpStdioClient = McpServer.stdio(book_server_cmd, startup_timeout=10.0, max_retries=0)
     await asyncio.wait_for(client.connect(), timeout=10.0)

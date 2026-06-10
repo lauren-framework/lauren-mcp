@@ -22,11 +22,12 @@ import sys
 import tempfile
 
 import pytest
+import pytest_asyncio
 
 from lauren_mcp import McpServer, McpServerConfig, McpToolBridge
 from lauren_mcp._types import ToolSchema
 
-pytestmark = pytest.mark.asyncio
+pytestmark = pytest.mark.asyncio(loop_scope="session")
 
 
 # ---------------------------------------------------------------------------
@@ -68,13 +69,13 @@ class MockRegistry:
 # ---------------------------------------------------------------------------
 
 
-@pytest.fixture
+@pytest.fixture(scope="session")
 def alpha_command(echo_server_command):
     """First echo server — aliased as 'alpha'."""
     return echo_server_command
 
 
-@pytest.fixture
+@pytest.fixture(scope="session")
 def beta_command():
     """Second independent echo server — aliased as 'beta'.
 
@@ -125,7 +126,7 @@ for line in sys.stdin:
     os.unlink(fname)
 
 
-@pytest.fixture
+@pytest_asyncio.fixture(scope="session", loop_scope="session")
 async def two_server_bridge(alpha_command, beta_command):
     """McpToolBridge connecting alpha and beta echo servers, with a MockRegistry."""
     registry = MockRegistry()

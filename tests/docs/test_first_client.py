@@ -15,11 +15,12 @@ import tempfile
 import textwrap
 
 import pytest
+import pytest_asyncio
 
 from lauren_mcp import McpServer
 from lauren_mcp._client._stdio import McpStdioClient
 
-pytestmark = pytest.mark.asyncio
+pytestmark = pytest.mark.asyncio(loop_scope="session")
 
 # ---------------------------------------------------------------------------
 # Reusable server script (covers all client guide examples)
@@ -149,7 +150,7 @@ _SERVER = textwrap.dedent("""\
 """)
 
 
-@pytest.fixture
+@pytest.fixture(scope="session")
 def server_cmd():
     with tempfile.NamedTemporaryFile(mode="w", suffix=".py", delete=False) as f:
         f.write(_SERVER)
@@ -158,7 +159,7 @@ def server_cmd():
     os.unlink(fname)
 
 
-@pytest.fixture
+@pytest_asyncio.fixture(scope="session", loop_scope="session")
 async def client(server_cmd):
     c: McpStdioClient = McpServer.stdio(server_cmd, startup_timeout=10.0, max_retries=0)
     await asyncio.wait_for(c.connect(), timeout=10.0)

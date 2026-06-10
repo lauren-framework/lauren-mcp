@@ -16,12 +16,13 @@ import tempfile
 import textwrap
 
 import pytest
+import pytest_asyncio
 
 from lauren_mcp import McpServer
 from lauren_mcp._client._stdio import McpStdioClient
 from lauren_mcp._types import PromptSchema, ResourceSchema, ToolSchema
 
-pytestmark = pytest.mark.asyncio
+pytestmark = pytest.mark.asyncio(loop_scope="session")
 
 # ---------------------------------------------------------------------------
 # Subprocess server script — CatalogueServer (README Quick Start example)
@@ -175,7 +176,7 @@ _CATALOGUE_SERVER_SCRIPT = textwrap.dedent("""\
 # ---------------------------------------------------------------------------
 
 
-@pytest.fixture
+@pytest.fixture(scope="session")
 def catalogue_server_command():
     """Return argv that launches the CatalogueServer over stdin/stdout."""
     with tempfile.NamedTemporaryFile(mode="w", suffix=".py", delete=False) as f:
@@ -185,7 +186,7 @@ def catalogue_server_command():
     os.unlink(fname)
 
 
-@pytest.fixture
+@pytest_asyncio.fixture(scope="session", loop_scope="session")
 async def catalogue_client(catalogue_server_command):
     """Connected McpStdioClient backed by the CatalogueServer subprocess."""
     client: McpStdioClient = McpServer.stdio(catalogue_server_command)

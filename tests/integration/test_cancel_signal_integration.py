@@ -36,14 +36,14 @@ class _CancelApp:
 # ---------------------------------------------------------------------------
 
 
-@pytest.fixture(scope="module")
+@pytest.fixture(scope="session")
 def app():
     a = LaurenFactory.create(_CancelApp)
     TestClient(a)  # trigger @post_construct hooks
     return a
 
 
-@pytest.fixture
+@pytest.fixture(scope="session")
 def ws(app):
     return WsTestClient(app)
 

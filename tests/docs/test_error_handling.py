@@ -15,11 +15,12 @@ import tempfile
 import textwrap
 
 import pytest
+import pytest_asyncio
 
 from lauren_mcp import McpServer
 from lauren_mcp._client._stdio import McpCallError, McpStdioClient
 
-pytestmark = pytest.mark.asyncio
+pytestmark = pytest.mark.asyncio(loop_scope="session")
 
 # ---------------------------------------------------------------------------
 # Server that exercises error paths
@@ -129,7 +130,7 @@ _ERROR_SERVER = textwrap.dedent("""\
 """)
 
 
-@pytest.fixture
+@pytest.fixture(scope="session")
 def error_server_cmd():
     with tempfile.NamedTemporaryFile(mode="w", suffix=".py", delete=False) as f:
         f.write(_ERROR_SERVER)
@@ -138,7 +139,7 @@ def error_server_cmd():
     os.unlink(fname)
 
 
-@pytest.fixture
+@pytest_asyncio.fixture(scope="session", loop_scope="session")
 async def error_client(error_server_cmd):
     c: McpStdioClient = McpServer.stdio(error_server_cmd, startup_timeout=10.0, max_retries=0)
     await asyncio.wait_for(c.connect(), timeout=10.0)

@@ -61,7 +61,7 @@ def clear_side_effects():
     _side_effects.clear()
 
 
-@pytest.fixture
+@pytest.fixture(scope="session")
 def lauren_app():
     @module(imports=[McpServerModule.for_root(BgTaskServer)])
     class AppModule:
@@ -72,7 +72,7 @@ def lauren_app():
     return a
 
 
-@pytest.fixture
+@pytest.fixture(scope="session")
 def ws(lauren_app):
     return WsTestClient(lauren_app)
 

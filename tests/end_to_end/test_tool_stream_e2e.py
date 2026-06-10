@@ -147,7 +147,7 @@ _STREAM_SERVER_SCRIPT = textwrap.dedent("""\
 """).format(worktree_src=_WORKTREE_SRC)
 
 
-@pytest.fixture
+@pytest.fixture(scope="module")
 def stream_server_command():
     """Write the server script to a temp file and return the argv."""
     with tempfile.NamedTemporaryFile(mode="w", suffix=".py", delete=False) as f:

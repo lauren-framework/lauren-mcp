@@ -16,11 +16,12 @@ import tempfile
 import textwrap
 
 import pytest
+import pytest_asyncio
 
 from lauren_mcp import McpServer
 from lauren_mcp._client._stdio import McpStdioClient
 
-pytestmark = pytest.mark.asyncio
+pytestmark = pytest.mark.asyncio(loop_scope="session")
 
 # ---------------------------------------------------------------------------
 # ShopServer — the "Putting it all together" example from decorators.md
@@ -178,7 +179,7 @@ _SHOP_SERVER = textwrap.dedent("""\
 """)
 
 
-@pytest.fixture
+@pytest.fixture(scope="session")
 def shop_cmd():
     with tempfile.NamedTemporaryFile(mode="w", suffix=".py", delete=False) as f:
         f.write(_SHOP_SERVER)
@@ -187,7 +188,7 @@ def shop_cmd():
     os.unlink(fname)
 
 
-@pytest.fixture
+@pytest_asyncio.fixture(scope="session", loop_scope="session")
 async def shop_client(shop_cmd):
     c: McpStdioClient = McpServer.stdio(shop_cmd, startup_timeout=10.0, max_retries=0)
     await asyncio.wait_for(c.connect(), timeout=10.0)

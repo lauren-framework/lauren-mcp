@@ -80,7 +80,7 @@ class PipeTestServer:
 # ---------------------------------------------------------------------------
 
 
-@pytest.fixture
+@pytest.fixture(scope="session")
 def lauren_app():
     @module(imports=[McpServerModule.for_root(PipeTestServer)])
     class AppModule:
@@ -91,7 +91,7 @@ def lauren_app():
     return a
 
 
-@pytest.fixture
+@pytest.fixture(scope="session")
 def ws(lauren_app):
     return WsTestClient(lauren_app)
 

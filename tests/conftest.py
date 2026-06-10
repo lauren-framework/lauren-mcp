@@ -49,7 +49,7 @@ for line in sys.stdin:
 """
 
 
-@pytest.fixture
+@pytest.fixture(scope="session")
 def echo_server_command():
     """Return argv list for the echo MCP server subprocess."""
     import os
