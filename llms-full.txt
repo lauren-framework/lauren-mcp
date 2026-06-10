@@ -135,6 +135,27 @@ Google/Sphinx/NumPy docstring `Args:` sections populate per-parameter descriptio
 | `UUID`, `datetime`, `date`, `Path` | string with format |
 | `McpToolContext` | **excluded** from schema, injected by framework |
 
+**Per-method Lauren decorators**
+
+`@use_guards`, `@use_interceptors`, `@use_exception_handlers`, and `@set_metadata`
+from the Lauren framework can be applied to individual `@mcp_tool` methods.
+`@mcp_tool()` must be the **outermost** decorator; Lauren decorators go **inside**:
+
+```python
+from lauren import use_guards, use_interceptors, use_exception_handlers, set_metadata
+from lauren_mcp import mcp_tool
+
+@set_metadata("required_role", "admin")   # readable via ctx.get_metadata(...)
+@use_guards(AdminGuard)                   # runs before method; False → FORBIDDEN
+@use_interceptors(AuditInterceptor)       # wraps the call; call call_handler.handle()
+@use_exception_handlers(DomainErrHandler) # maps domain exceptions to isError: True
+@mcp_tool()
+async def admin_op(self, ctx: McpToolContext) -> dict: ...
+```
+
+See also: `McpExecutionContext` (passed to guards/interceptors), `McpForbiddenError`
+(guard rejection), `McpCallHandler` (`call_handler.handle()` in interceptors).
+
 **Example**
 
 ```python
@@ -1974,6 +1995,91 @@ return ToolStream(
     total=expected_count,
     accumulate=lambda chunks: sum(chunks),
 )
+```
+
+---
+
+### McpExecutionContext
+
+```python
+@dataclass(frozen=True)
+class McpExecutionContext:
+    tool_name: str
+    method_name: str
+    server_class: type
+    headers: Any | None
+    execution_context: Any | None
+    session_id: str | None
+    metadata: dict[str, Any]
+    tool_use_id: str | int | None
+
+    def get_metadata(self, key: str, default: Any = None) -> Any: ...
+```
+
+Lightweight context passed to per-tool `@use_guards` and `@use_interceptors`.
+Built at dispatch time — before the tool method is invoked. Distinct from
+`McpToolContext` which is injected into the tool body itself.
+
+`headers` is `None` on stdio and WebSocket (upgrade headers available on WS).
+`execution_context` is `None` on WebSocket and stdio; a Lauren
+`ExecutionContext` on SSE / Streamable HTTP.
+
+---
+
+### McpForbiddenError
+
+```python
+class McpForbiddenError(RuntimeError):
+    guard_name: str  # name of the guard that rejected the call
+```
+
+Raised inside `make_tools_call_handler` when a per-tool `@use_guards` guard
+returns `False`.  The dispatcher catches it and returns `INTERNAL_ERROR`
+with `data = {"type": "FORBIDDEN", "guard": guard_name}`.
+
+```python
+from lauren import injectable, use_guards
+from lauren_mcp import McpForbiddenError, mcp_tool
+
+@injectable()
+class AdminGuard:
+    async def can_activate(self, ctx: McpExecutionContext) -> bool:
+        return ctx.headers.get("x-role") == "admin" if ctx.headers else False
+
+@use_guards(AdminGuard)
+@mcp_tool()
+async def admin_only(self) -> dict: ...
+# Calling this without the x-role header → INTERNAL_ERROR with data.type="FORBIDDEN"
+```
+
+---
+
+### McpCallHandler
+
+```python
+class McpCallHandler:
+    async def handle(self) -> dict[str, Any]: ...
+```
+
+Passed to per-tool interceptors as the "next step" in the chain.
+Call `await call_handler.handle()` to invoke the next interceptor or ultimately
+the tool method itself.  Mirrors `lauren.types.CallHandler` but returns
+`dict[str, Any]` (the tools/call result) instead of an HTTP Response.
+
+```python
+from lauren import interceptor, use_interceptors
+from lauren_mcp import McpCallHandler
+
+@interceptor()
+class AuditInterceptor:
+    async def intercept(self, ctx: McpExecutionContext, call_handler: McpCallHandler) -> dict:
+        result = await call_handler.handle()
+        print(f"Tool {ctx.tool_name} completed, isError={result.get('isError')}")
+        return result
+
+@use_interceptors(AuditInterceptor)
+@mcp_tool()
+async def my_tool(self) -> dict: ...
 ```
 
 ---

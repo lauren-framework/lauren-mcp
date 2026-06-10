@@ -126,6 +126,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `instrument_dispatcher()` standalone helper; requires `[otel]` extra
 - `lmcp` CLI: `run`, `dev`, `inspect`, `call`, `install` commands; requires `[cli]` extra
 
+### Added — Per-method cross-cutting decorators
+
+- `@use_guards` on individual `@mcp_tool` / `@mcp_resource` / `@mcp_prompt` methods;
+  guard runs per-call and receives `McpExecutionContext`
+- `@use_interceptors` on individual methods; `McpCallHandler` abstraction wraps the
+  next step in the chain (`await call_handler.handle() -> dict`)
+- `@use_exception_handlers` on individual methods; maps domain exceptions to
+  `isError: True` tool results
+- `@set_metadata(key, value)` on individual methods; merged into `McpToolContext.metadata`
+  at call time; method-level value wins over class-level value for the same key
+- `@use_middlewares` on `@mcp_tool` / `@mcp_resource` / `@mcp_prompt` methods raises
+  `TypeError` at decoration time (correct — middlewares are not meaningful at the
+  per-tool dispatch level)
+- `McpExecutionContext` frozen dataclass passed to guards and interceptors; fields:
+  `tool_name`, `method_name`, `server_class`, `headers`, `execution_context`,
+  `session_id`, `metadata`, `tool_use_id`; method `get_metadata(key)`
+- `McpForbiddenError(guard_name)` exception raised by the dispatcher when a guard's
+  `can_activate()` returns `False`; serialised as `INTERNAL_ERROR` with
+  `data.type = "FORBIDDEN"`
+- `McpCallHandler` class for interceptor chains; `await handle() -> dict`
+- Guard, interceptor, and exception-handler classes referenced in per-method decorators
+  are auto-registered as DI providers by `_McpHandlerRegistrar` at `@post_construct` time
+- `guards`, `interceptors`, `exception_handlers`, `tool_metadata` fields added to
+  `McpToolMeta`, `McpResourceMeta`, and `McpPromptMeta`
+- New file `src/lauren_mcp/_server/_exec_context.py` — `McpExecutionContext`,
+  `McpForbiddenError`, `McpCallHandler`
+- Tests: `tests/unit/test_per_tool_*.py`, `tests/integration/test_per_tool_*.py`,
+  `tests/end_to_end/test_per_tool_*.py`
+
 ### Changed
 
 - `LATEST` protocol version updated: `"2025-03-26"` → `"2025-11-25"`

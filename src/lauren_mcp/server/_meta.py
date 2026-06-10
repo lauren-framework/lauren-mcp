@@ -82,6 +82,18 @@ class McpToolMeta:
     #: In the merged code, validation is embedded in pipe_chains; this field is
     #: kept for backward compatibility with tests that construct McpToolMeta directly.
     param_specs: dict[str, Any] = field(default_factory=dict)
+    # --- Feature: per-method Lauren decorator metadata ---
+    #: Guard classes from @use_guards on this method. Executed before method call.
+    guards: tuple[type, ...] = field(default_factory=tuple)
+    #: Interceptor classes from @use_interceptors on this method.
+    #: These wrap the method call in an interceptor chain.
+    interceptors: tuple[type, ...] = field(default_factory=tuple)
+    #: Exception handler classes from @use_exception_handlers on this method.
+    #: Used to map exceptions to isError result blocks.
+    exception_handlers: tuple[Any, ...] = field(default_factory=tuple)
+    #: Per-tool metadata from @set_metadata on this method.
+    #: Merged into McpToolContext.metadata at call time (method wins over class).
+    tool_metadata: dict[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         # Sync bg_param_name ↔ bg_tasks_param so both APIs work.
@@ -114,6 +126,15 @@ class McpResourceMeta:
     header_params: dict[str, HeaderParamSpec] = field(default_factory=dict)
     # --- Feature: State[T] ---
     state_params: dict[str, type] = field(default_factory=dict)
+    # --- Feature: per-method Lauren decorator metadata ---
+    #: Guard classes from @use_guards on this method.
+    guards: tuple[type, ...] = field(default_factory=tuple)
+    #: Interceptor classes from @use_interceptors on this method.
+    interceptors: tuple[type, ...] = field(default_factory=tuple)
+    #: Exception handler classes from @use_exception_handlers on this method.
+    exception_handlers: tuple[Any, ...] = field(default_factory=tuple)
+    #: Per-resource metadata from @set_metadata on this method.
+    tool_metadata: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
@@ -125,6 +146,15 @@ class McpPromptMeta:
     arguments: list[dict[str, Any]]  # [{name, description, required}]
     method_name: str
     title: str | None = None
+    # --- Feature: per-method Lauren decorator metadata ---
+    #: Guard classes from @use_guards on this method.
+    guards: tuple[type, ...] = field(default_factory=tuple)
+    #: Interceptor classes from @use_interceptors on this method.
+    interceptors: tuple[type, ...] = field(default_factory=tuple)
+    #: Exception handler classes from @use_exception_handlers on this method.
+    exception_handlers: tuple[Any, ...] = field(default_factory=tuple)
+    #: Per-prompt metadata from @set_metadata on this method.
+    tool_metadata: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass

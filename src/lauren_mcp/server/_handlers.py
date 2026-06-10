@@ -38,9 +38,6 @@ _logger = logging.getLogger(__name__)
 
 _Handler = Callable[[JsonRpcRequest], Coroutine[Any, Any, dict[str, Any]]]
 
-#: Builds an McpToolContext for one tool call.
-ContextFactory = Callable[[str, str | int | None, str | int | None], McpToolContext]
-
 
 # ---------------------------------------------------------------------------
 # Pipe validation helpers
@@ -217,6 +214,302 @@ def _state_key(T: type) -> str:
     return T.__qualname__
 
 
+# ---------------------------------------------------------------------------
+# Per-tool guard execution
+# ---------------------------------------------------------------------------
+
+
+async def _run_tool_guards(
+    guards: tuple[type, ...],
+    exec_ctx: Any,  # McpExecutionContext
+    container: Any,  # Lauren DI container, or None
+    owning_module: Any,  # module type, or None
+) -> None:
+    """Resolve and call each guard in order.
+
+    Raises :exc:`McpForbiddenError` on the first rejection.
+    Guard exceptions are caught, logged at ERROR level, and treated as
+    rejections — consistent with ``lauren.reflect.apply_guards`` semantics.
+
+    When *container* is ``None`` (e.g. in unit tests without full DI),
+    guards are silently skipped so the tool method is always called.
+    """
+    if not guards or container is None:
+        return
+
+    from lauren_mcp._server._dispatcher import McpForbiddenError  # noqa: PLC0415
+
+    for guard_cls in guards:
+        try:
+            guard = await container.resolve(
+                guard_cls,
+                request_cache={},
+                framework_values={},
+                owning_module=owning_module,
+            )
+            allowed: bool = await guard.can_activate(exec_ctx)
+        except Exception:  # noqa: BLE001
+            _logger.exception(
+                "Guard %r raised during tool call check for %r — treating as rejection",
+                guard_cls.__name__,
+                exec_ctx.tool_name,
+            )
+            allowed = False
+
+        if not allowed:
+            _logger.debug(
+                "Tool call %r rejected by guard %r",
+                exec_ctx.tool_name,
+                guard_cls.__name__,
+            )
+            raise McpForbiddenError(
+                f"Guard {guard_cls.__name__!r} denied the tool call for {exec_ctx.tool_name!r}",
+                guard_name=guard_cls.__name__,
+            )
+
+
+# ---------------------------------------------------------------------------
+# McpCallHandler — interceptor chain handle
+# ---------------------------------------------------------------------------
+
+
+class McpCallHandler:
+    """Represents the next step in the MCP tool interceptor chain.
+
+    Passed to every ``@interceptor``-decorated class as the second argument
+    to ``intercept(ctx, call_handler)``.  Call :meth:`handle` to advance
+    to the next interceptor or, for the innermost interceptor, to execute
+    the tool method and return the coerced result dict.
+
+    The return type is ``dict[str, Any]`` — the tools/call result shape
+    ``{"content": [...], "isError": bool, "structuredContent": {...}}``.
+    For resources, ``handle()`` returns ``{"contents": [...]}``.
+    For prompts, ``handle()`` returns ``{"description": "...", "messages": [...]}``.
+
+    Unlike ``lauren.types.CallHandler`` (which returns a ``Response``),
+    ``McpCallHandler`` returns a plain dict.  Interceptors written for
+    MCP tools must not attempt to call ``.status_code`` or ``.headers``
+    on the return value.
+    """
+
+    def __init__(self, next_fn: Callable[[], Any]) -> None:
+        self._next = next_fn
+
+    async def handle(self) -> dict[str, Any]:
+        """Invoke the next stage in the pipeline and return the result dict."""
+        result = self._next()
+        if asyncio.iscoroutine(result):
+            return await result  # type: ignore[no-any-return]
+        return result  # type: ignore[no-any-return]
+
+
+# ---------------------------------------------------------------------------
+# DI resolution helper
+# ---------------------------------------------------------------------------
+
+
+async def _resolve_di(
+    container: Any,
+    cls: type,
+    owning_module: type | None,
+) -> Any:
+    """Resolve *cls* from the Lauren DI container.
+
+    Falls back to direct instantiation when no container is available
+    (e.g. in unit tests that call the handler directly).
+    """
+    if container is None:
+        return cls()
+    try:
+        return await container.resolve(cls, module=owning_module)
+    except Exception:  # noqa: BLE001
+        # Fallback: try sync resolution then bare construction.
+        try:
+            return container.resolve_sync(cls, module=owning_module)
+        except Exception:  # noqa: BLE001
+            return cls()
+
+
+# ---------------------------------------------------------------------------
+# Interceptor chain executor
+# ---------------------------------------------------------------------------
+
+
+async def _execute_with_interceptors(
+    meta: McpToolMeta,
+    method: Any,
+    kwargs: dict[str, Any],
+    exec_ctx: Any,  # McpExecutionContext or None
+    container: Any,
+    owning_module: type | None,
+    tool_ctx: McpToolContext | None = None,
+) -> dict[str, Any]:
+    """Invoke *method* wrapped by the interceptor chain declared in *meta*.
+
+    When ``meta.interceptors`` is empty this is equivalent to calling the
+    method directly and coercing the result — no overhead beyond the function
+    call.
+
+    The chain is built inside-out: the last interceptor in ``meta.interceptors``
+    is innermost (closest to the method); the first is outermost.
+
+    Parameters
+    ----------
+    tool_ctx:
+        The ``McpToolContext`` for this call.  Used by ``base()`` when draining
+        a ``ToolStream`` to emit progress notifications, even when the tool does
+        not declare a ``McpToolContext`` parameter.
+    """
+
+    async def base() -> dict[str, Any]:
+        result = await method(**kwargs)
+        if isinstance(result, ToolStream):
+            ctx_obj: McpToolContext | None = (
+                kwargs.get(meta.context_param_name) if meta.context_param_name else None
+            ) or tool_ctx
+            return await _drain_tool_stream(result, meta, ctx_obj)
+        return _coerce_tool_result(result, meta)
+
+    interceptors = getattr(meta, "interceptors", ())
+    if not interceptors:
+        return await base()
+
+    # Build chain: reversed so the last declared interceptor is innermost.
+    current_fn: Callable[[], Any] = base
+    for interceptor_cls in reversed(interceptors):
+        instance = await _resolve_di(container, interceptor_cls, owning_module)
+        # Capture loop variables via default args to avoid the Python
+        # late-binding closure bug.
+        _ic = instance
+        _inner: Callable[[], Any] = current_fn
+
+        async def _make_next(
+            ic: Any = _ic,
+            inner: Callable[[], Any] = _inner,
+        ) -> dict[str, Any]:
+            return await ic.intercept(exec_ctx, McpCallHandler(inner))  # type: ignore[no-any-return]
+
+        current_fn = _make_next
+
+    return await current_fn()  # type: ignore[no-any-return]
+
+
+# ---------------------------------------------------------------------------
+# Per-tool exception handler pipeline
+# ---------------------------------------------------------------------------
+
+
+async def _run_tool_exception_handlers(
+    exc: Exception,
+    handlers: tuple[Any, ...],
+    exec_ctx: Any,
+    container: Any | None = None,
+    owning_module: type | None = None,
+) -> dict[str, Any] | None:
+    """Walk the per-tool exception handler chain for *exc*.
+
+    Returns the result dict from the first matching handler, or ``None`` if no
+    handler matched or every matching handler returned ``None``.  Re-raises if a
+    handler re-raises or throws a new exception.
+
+    Parameters
+    ----------
+    exc:
+        The exception that escaped the tool method.
+    handlers:
+        Tuple of handler classes decorated with ``@exception_handler``.
+        Order matters: first match wins.
+    exec_ctx:
+        The context object passed to ``handler_instance.catch(exc, exec_ctx)``.
+    container:
+        Optional Lauren DI container.  When provided, handlers are resolved via
+        DI (supporting ``__init__`` dependencies).  Falls back to no-arg
+        instantiation when ``None``.
+    owning_module:
+        Optional module type forwarded to ``container.resolve``.
+    """
+    if not handlers:
+        return None
+
+    try:
+        from lauren.decorators import EXCEPTION_HANDLER_META  # noqa: PLC0415
+    except ImportError:
+        return None
+
+    for handler_cls in handlers:
+        meta_obj = getattr(handler_cls, EXCEPTION_HANDLER_META, None)
+        if meta_obj is None:
+            continue
+        handled_types: tuple[type, ...] = getattr(meta_obj, "exceptions", (Exception,))
+        if not isinstance(exc, handled_types):
+            continue
+
+        # Match — instantiate (via DI if available, else direct)
+        if container is not None:
+            instance = await container.resolve(
+                handler_cls,
+                owning_module=owning_module,
+            )
+        else:
+            if not isinstance(handler_cls, type):
+                # Function-form handler — call directly
+                result = handler_cls(exc, exec_ctx)
+                if inspect.isawaitable(result):
+                    result = await result
+                if result is not None:
+                    if isinstance(result, dict) and "content" not in result:
+                        continue
+                    return result  # type: ignore[no-any-return]
+                continue
+
+            try:
+                instance = handler_cls()
+            except TypeError:
+                _logger.warning(
+                    "Per-tool exception handler %r requires DI constructor arguments "
+                    "but no container is available; skipping. "
+                    "Pass a DI container to make_tools_call_handler to enable DI resolution.",
+                    handler_cls.__name__,
+                )
+                continue
+
+        result = instance.catch(exc, exec_ctx)
+        if inspect.isawaitable(result):
+            result = await result
+        if result is not None:
+            if isinstance(result, dict) and "content" not in result:
+                # Malformed return (missing required key) — treat as unhandled
+                continue
+            # Coerce ToolOutput if returned
+            if hasattr(result, "content") and not isinstance(result, dict):
+                try:
+                    from lauren_mcp._types import ToolOutput as _ToolOutput  # noqa: PLC0415
+
+                    if isinstance(result, _ToolOutput):
+                        content = [
+                            c if isinstance(c, dict) else {"type": "text", "text": str(c)}
+                            for c in (result.content or [])
+                        ]
+                        out: dict[str, Any] = {
+                            "content": content,
+                            "isError": bool(result.is_error),
+                        }
+                        if result.structured_content is not None:
+                            out["structuredContent"] = result.structured_content
+                        return out
+                except ImportError:
+                    pass
+            return result  # type: ignore[no-any-return]
+        # Handler returned None → try next handler
+    return None
+
+
+#: Builds an McpToolContext for one tool call.
+# The factory accepts 3 positional args plus an optional tool_metadata keyword arg.
+# We type it as Any to avoid mypy issues with the extended keyword signature.
+ContextFactory = Any
+
+
 def make_context_factory(
     metadata: dict[str, Any] | None = None,
     *,
@@ -224,13 +517,23 @@ def make_context_factory(
     log_level_state: LogLevelState | None = None,
 ) -> ContextFactory:
     """Build a ContextFactory that merges server-level state with the
-    per-call transport binding (CURRENT_BINDING)."""
+    per-call transport binding (CURRENT_BINDING).
+
+    The returned factory accepts ``(tool_name, tool_use_id, progress_token)`` as
+    positional args plus an optional ``tool_metadata`` keyword arg containing
+    per-tool ``@set_metadata`` entries.  When ``tool_metadata`` is supplied, it is
+    merged with the server-class metadata: tool-level keys win for the same key.
+    """
+    _server_meta = dict(metadata or {})
 
     def factory(
         tool_name: str,
         tool_use_id: str | int | None,
         progress_token: str | int | None,
+        *,
+        tool_metadata: dict[str, Any] | None = None,
     ) -> McpToolContext:
+        merged_meta = {**_server_meta, **(tool_metadata or {})}
         binding = CURRENT_BINDING.get()
         return McpToolContext(
             tool_name=tool_name,
@@ -238,7 +541,7 @@ def make_context_factory(
             headers=binding.headers if binding else None,
             execution_context=binding.execution_context if binding else None,
             session_id=binding.session_id if binding else None,
-            metadata=dict(metadata or {}),
+            metadata=merged_meta,
             state={},
             extras=dict(binding.extras) if binding else {},
             lifespan_context=lifespan_getter() if lifespan_getter else {},
@@ -436,6 +739,9 @@ def make_tools_call_handler(
     *,
     context_factory: ContextFactory | None = None,
     dispatcher: Any | None = None,
+    container: Any | None = None,
+    owning_module: type | None = None,
+    server_metadata: dict[str, Any] | None = None,
 ) -> _Handler:
     """Return an async handler for tools/call.
 
@@ -450,6 +756,17 @@ def make_tools_call_handler(
         is registered via dispatcher.register_context(req.id, ctx) so that
         $/cancelRequest can set the cooperative cancel_requested event on the
         context before hard-cancelling the task.
+    container:
+        Optional Lauren DI container.  When provided and a tool declares
+        ``meta.guards`` or ``meta.interceptors``, they are resolved and
+        executed.  When ``None``, guards and interceptors are silently skipped.
+    owning_module:
+        The Lauren module class that owns this server; used for DI provider
+        visibility when resolving guards and interceptors.
+    server_metadata:
+        Class-level ``@set_metadata`` dict from the ``@mcp_server`` class;
+        merged with the per-tool metadata before being passed to guards and
+        interceptors.
     """
     get_tools = tools if callable(tools) else (lambda: tools)
 
@@ -502,7 +819,12 @@ def make_tools_call_handler(
         )
         ctx: McpToolContext | None = None
         if context_factory is not None:
-            ctx = context_factory(meta.name, req.id, progress_token)
+            ctx = context_factory(
+                meta.name,
+                req.id,
+                progress_token,
+                tool_metadata=meta.tool_metadata if meta.tool_metadata else None,
+            )
         if meta.reads_context and meta.context_param_name and ctx is not None:
             kwargs[meta.context_param_name] = ctx
             # Register the context so cancel() can signal it cooperatively.
@@ -573,28 +895,87 @@ def make_tools_call_handler(
             except ImportError:
                 pass
 
+        # Build McpExecutionContext when guards or interceptors or exception
+        # handlers are present.
+        _guards = getattr(meta, "guards", ())
+        _interceptors = getattr(meta, "interceptors", ())
+        _exc_handlers = getattr(meta, "exception_handlers", ())
+        exec_ctx: Any = None
+        if _guards or _interceptors or _exc_handlers:
+            from lauren_mcp._server._exec_context import McpExecutionContext  # noqa: PLC0415
+
+            binding = CURRENT_BINDING.get()
+            _tool_metadata: dict[str, Any] = {
+                **(server_metadata or {}),
+                **getattr(meta, "tool_metadata", {}),
+            }
+            exec_ctx = McpExecutionContext(
+                tool_name=meta.name,
+                method_name=meta.method_name,
+                server_class=type(server_instance),
+                headers=binding.headers if binding else None,
+                execution_context=binding.execution_context if binding else None,
+                session_id=binding.session_id if binding else None,
+                metadata=_tool_metadata,
+                tool_use_id=req.id,
+            )
+
         try:
             for param_name, provider in meta.depends_params.items():
                 kwargs[param_name] = await _resolve_depends(provider, resolved, cleanup)
 
-            # 8. Call the method.
-            if meta.timeout is not None:
-                try:
-                    result = await asyncio.wait_for(method(**kwargs), timeout=meta.timeout)
-                except TimeoutError:
-                    raise ValueError(
-                        f"Tool {meta.name!r} execution timed out after {meta.timeout}s"
-                    ) from None
-            else:
-                result = await method(**kwargs)
+            # 4c. Per-tool guard execution (before method call).
+            if _guards:
+                await _run_tool_guards(_guards, exec_ctx, container, owning_module)
 
-            # 9a. Detect ToolStream before coercion.
-            if isinstance(result, ToolStream):
-                out = await _drain_tool_stream(result, meta, ctx)
-            else:
-                out = _coerce_tool_result(result, meta)
-            _validate_output(out.get("structuredContent"), meta)
-            return out
+            # 8. Call the method, wrapped in interceptors and exception handlers.
+            try:
+                if meta.timeout is not None:
+                    try:
+                        out = await asyncio.wait_for(
+                            _execute_with_interceptors(
+                                meta,
+                                method,
+                                kwargs,
+                                exec_ctx,
+                                container,
+                                owning_module,
+                                tool_ctx=ctx,
+                            ),
+                            timeout=meta.timeout,
+                        )
+                    except TimeoutError:
+                        raise ValueError(
+                            f"Tool {meta.name!r} execution timed out after {meta.timeout}s"
+                        ) from None
+                else:
+                    out = await _execute_with_interceptors(
+                        meta,
+                        method,
+                        kwargs,
+                        exec_ctx,
+                        container,
+                        owning_module,
+                        tool_ctx=ctx,
+                    )
+
+                _validate_output(out.get("structuredContent"), meta)
+                return out
+
+            except Exception as exc:
+                if not _exc_handlers:
+                    raise
+
+                handled = await _run_tool_exception_handlers(
+                    exc,
+                    _exc_handlers,
+                    exec_ctx,
+                    container=container,
+                    owning_module=owning_module,
+                )
+                if handled is not None:
+                    return handled
+                raise  # no handler matched or all returned None
 
         finally:
             # 9b. Run background tasks — await them so they complete before
@@ -692,6 +1073,10 @@ def _coerce_resource_result(result: Any, uri: str, meta: McpResourceMeta) -> lis
 def make_resources_read_handler(
     server_instance: Any,
     resources: list[McpResourceMeta] | Callable[[], list[McpResourceMeta]],
+    *,
+    container: Any | None = None,
+    owning_module: type | None = None,
+    server_metadata: dict[str, Any] | None = None,
 ) -> _Handler:
     """Return an async handler for resources/read.
 
@@ -801,6 +1186,47 @@ def make_resources_read_handler(
             try:
                 for param_name, provider in meta.depends_params.items():
                     kwargs[param_name] = await _resolve_depends(provider, resolved, cleanup)
+
+                res_interceptors = getattr(meta, "interceptors", ())
+                if res_interceptors and container is not None:
+                    from lauren_mcp._server._exec_context import (
+                        McpExecutionContext,  # noqa: PLC0415
+                    )
+
+                    binding = CURRENT_BINDING.get()
+                    exec_ctx = McpExecutionContext(
+                        tool_name=meta.name,
+                        method_name=meta.method_name,
+                        server_class=type(server_instance),
+                        headers=binding.headers if binding else None,
+                        execution_context=binding.execution_context if binding else None,
+                        session_id=binding.session_id if binding else None,
+                        metadata={**(server_metadata or {}), **getattr(meta, "tool_metadata", {})},
+                        tool_use_id=None,
+                    )
+
+                    async def _resource_base(
+                        _method: Any = method,
+                        _kwargs: dict[str, Any] = kwargs,
+                        _uri: str = uri,
+                        _meta: McpResourceMeta = meta,
+                    ) -> dict[str, Any]:
+                        _result = await _method(**_kwargs)
+                        return {"contents": _coerce_resource_result(_result, _uri, _meta)}
+
+                    current_fn: Any = _resource_base
+                    for ic_cls in reversed(res_interceptors):
+                        _ic = await _resolve_di(container, ic_cls, owning_module)
+                        _inner = current_fn
+
+                        async def _make_next(
+                            _ic: Any = _ic, _inner: Any = _inner, _ctx: Any = exec_ctx
+                        ) -> dict[str, Any]:
+                            return await _ic.intercept(_ctx, McpCallHandler(_inner))
+
+                        current_fn = _make_next
+                    return await current_fn()
+
                 result = await method(**kwargs)
                 return {"contents": _coerce_resource_result(result, uri, meta)}
             finally:

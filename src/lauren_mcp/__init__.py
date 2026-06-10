@@ -10,6 +10,8 @@ from ._client._protocol import McpClientProtocol
 from ._client._stdio import McpCallError
 from ._mcp_version import LATEST, STABLE, SUPPORTED
 from ._server._context import McpToolContext
+from ._server._dispatcher import McpForbiddenError
+from ._server._exec_context import McpExecutionContext
 from ._types import (
     AnyContent,
     AudioContent,
@@ -75,6 +77,7 @@ from .server import (
     mcp_server,
     mcp_tool,
 )
+from .server._handlers import McpCallHandler
 
 __all__ = [
     "mcp_server",
@@ -89,6 +92,9 @@ __all__ = [
     "McpServerConfig",
     "McpToolBridge",
     "McpToolContext",
+    "McpExecutionContext",
+    "McpForbiddenError",
+    "McpCallHandler",
     "McpToolNameCollision",
     "RouteEntry",
     "build_openapi_server_class",

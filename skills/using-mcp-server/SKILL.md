@@ -1,7 +1,7 @@
 ---
 skill: using-mcp-server
-version: 3.0.0
-tags: [mcp, server, decorator, lauren, lifespan, structured-output, composition, lauren-mcp]
+version: 3.1.0
+tags: [mcp, server, decorator, lauren, lifespan, structured-output, composition, guards, interceptors, exception-handlers, set-metadata, lauren-mcp]
 summary: Expose a Lauren service as an MCP server using @mcp_server, @mcp_tool, @mcp_resource, @mcp_prompt, and @mcp_lifespan.
 ---
 
@@ -375,6 +375,50 @@ async def get_archive(self, name: str) -> ResourceResult:
         BlobResource(uri=f"/archive/{name}", blob="<base64>", mimeType="application/zip"),
     ])
 ```
+
+## Per-Tool Decorators
+
+Apply Lauren cross-cutting decorators **inside** (below) `@mcp_tool()` to gate
+or wrap individual tools.  `@mcp_tool()` must be the outermost decorator so it
+can read the attributes set by Lauren:
+
+```python
+from lauren import injectable, set_metadata, use_guards
+from lauren_mcp import McpExecutionContext, mcp_server, mcp_tool
+
+@injectable()
+class RoleGuard:
+    async def can_activate(self, ctx: McpExecutionContext) -> bool:
+        return ctx.get_metadata("required_role") == "admin"
+
+@mcp_server("/mcp")
+class MyServer:
+    @set_metadata("required_role", "admin")
+    @use_guards(RoleGuard)
+    @mcp_tool()
+    async def admin_tool(self) -> dict:
+        # ctx.get_metadata("required_role") == "admin" inside the guard
+        return {"secret": "data"}
+```
+
+> **Ordering rule**: `@mcp_tool()` outermost, Lauren decorators inside.
+> Python applies decorators bottom-up; `@mcp_tool()` reads Lauren's attributes
+> from the raw function, so Lauren must run first.
+
+The four supported per-tool decorators and their behaviour:
+
+| Decorator | Runs | Effect on rejection |
+|---|---|---|
+| `@use_guards(GuardCls)` | before method call | `INTERNAL_ERROR` with `data.type="FORBIDDEN"` |
+| `@use_interceptors(InterceptorCls)` | wraps method call | can modify result dict |
+| `@use_exception_handlers(HandlerCls)` | catches method exceptions | returns `isError: True` result |
+| `@set_metadata(key, value)` | at decoration time | merges into `ctx.metadata`; method wins |
+
+Guard/interceptor/handler classes are auto-registered as DI providers — no
+`providers=[]` needed.  See the `mcp-per-tool-decorators` skill for the full
+reference.
+
+---
 
 ## Server composition — `mounts=` and `proxies=`
 

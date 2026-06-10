@@ -5,11 +5,11 @@
 | Path | Owns what |
 |---|---|
 | `src/lauren_mcp/_types.py` | All MCP wire types; `parse_message`; `build_error_response` |
-| `src/lauren_mcp/__init__.py` | Public `__all__` (~65+ symbols); re-exports including `McpCallError` |
+| `src/lauren_mcp/__init__.py` | Public `__all__` (~73+ symbols); re-exports including `McpCallError`, `McpExecutionContext`, `McpForbiddenError`, `McpCallHandler` |
 | `src/lauren_mcp/_mcp_version.py` | `LATEST`, `STABLE`, `SUPPORTED` protocol version constants |
 | `src/lauren_mcp/_bridge.py` | `McpServerConfig`, `McpToolBridge` (lifecycle manager) |
 | `src/lauren_mcp/server/_decorators.py` | `@mcp_server`, `@mcp_tool`, `@mcp_resource`, `@mcp_prompt`, `@mcp_completion`, `@mcp_lifespan`; name validation; auto output schema |
-| `src/lauren_mcp/server/_meta.py` | `McpServerMeta`, `McpToolMeta`, `McpResourceMeta`, `McpPromptMeta`, `McpCompletionMeta`, `McpLifespanMeta`; `MCP_*_META` attribute constants |
+| `src/lauren_mcp/server/_meta.py` | `McpServerMeta`, `McpToolMeta`, `McpResourceMeta`, `McpPromptMeta`, `McpCompletionMeta`, `McpLifespanMeta`; `MCP_*_META` attribute constants; `guards`, `interceptors`, `exception_handlers`, `tool_metadata` fields on all meta classes |
 | `src/lauren_mcp/server/_handlers.py` | Handler factory functions; `make_context_factory`; `make_completion_handler` |
 | `src/lauren_mcp/server/_module.py` | `McpServerModule.for_root()`, `_McpHandlerRegistrar` (DI wiring, lifespan, catalog seeding) |
 | `src/lauren_mcp/server/_schema.py` | `SchemaBuilder` — recursive JSON Schema for Pydantic/dataclass/TypedDict/msgspec |
@@ -18,7 +18,8 @@
 | `src/lauren_mcp/server/_builtin_resources.py` | `FileResource`, `HttpResource`, `DirectoryResource` |
 | `src/lauren_mcp/server/_composition.py` | `make_mount_binder`, `make_proxy_binder`, `McpToolNameCollision` |
 | `src/lauren_mcp/server/_openapi.py` | `build_openapi_server_class`, `RouteEntry` |
-| `src/lauren_mcp/_server/_dispatcher.py` | `McpDispatcher` (routes method → handler) |
+| `src/lauren_mcp/_server/_exec_context.py` | `McpExecutionContext` (frozen dataclass for guards/interceptors); `McpForbiddenError`, `McpCallHandler` |
+| `src/lauren_mcp/_server/_dispatcher.py` | `McpDispatcher` (routes method → handler; enforces per-tool guards/interceptors) |
 | `src/lauren_mcp/_server/_ws.py` | `mcp_ws_controller()` (Lauren WS gateway) |
 | `src/lauren_mcp/_server/_sse.py` | `mcp_http_sse_controller()` (Lauren HTTP+SSE gateway) |
 | `src/lauren_mcp/_server/_streamable.py` | `mcp_streamable_http_controller`, `StreamableSessionStore` |
@@ -85,6 +86,35 @@
 3. Add optional-dep guard (`try: import ...; _AVAIL = True except ImportError: ...`)
 4. Add extra to `pyproject.toml` and document in `docs/reference/client.md`
 
+### Adding per-tool guards
+
+1. Decorate the method with `@use_guards(GuardClass)` **inside** `@mcp_tool()`:
+   ```python
+   @use_guards(AdminGuard)   # inner
+   @mcp_tool()               # outer — must be outermost
+   async def my_tool(self, ctx: McpToolContext) -> dict: ...
+   ```
+2. `GuardClass` must be `@injectable()` and implement `async can_activate(ctx: McpExecutionContext) -> bool`.
+3. `_McpHandlerRegistrar` auto-registers `GuardClass` as a DI provider at `@post_construct` time — no manual provider registration needed.
+4. When `can_activate` returns `False` the dispatcher raises `McpForbiddenError`, which the client sees as `INTERNAL_ERROR` with `data.type="FORBIDDEN"`.
+5. Test with `WsTestClient`: set or omit the triggering header and assert the error code.
+6. Add to `tests/unit/test_per_tool_guards.py` (sync guard logic) and `tests/integration/test_per_tool_guards.py` (full DI).
+
+### Adding per-tool interceptors
+
+1. Decorate with `@use_interceptors(InterceptorClass)` inside `@mcp_tool()` (same ordering rule as guards).
+2. `InterceptorClass` must be `@interceptor()` and implement:
+   ```python
+   async def intercept(self, ctx: McpExecutionContext, handler: McpCallHandler) -> dict:
+       # pre-processing ...
+       result = await handler.handle()
+       # post-processing ...
+       return result
+   ```
+3. `McpCallHandler.handle()` calls the next interceptor in the chain or the actual tool.
+4. `_McpHandlerRegistrar` auto-registers the interceptor class as a DI provider.
+5. Test by asserting the result is transformed as expected via `WsTestClient`.
+
 ### Dynamic catalog mutation at runtime
 1. Inject `McpCatalogManager` into your service
 2. Call `catalog.register_tool(meta)` / `catalog.unregister_tool(name)`
@@ -123,6 +153,8 @@
 | `McpToolContext` param included in JSON schema | `_is_context_annotation` failed to match | Ensure the annotation string or type resolves to `McpToolContext`; check `from __future__ import annotations` is present |
 | Tool gets wrong transport context | `asyncio.to_thread` doesn't copy ContextVar | Copy `binding = CURRENT_BINDING.get()` before the thread call |
 | `ImportError: typer` in CLI test | `[cli]` extra not installed | Add `pytest.importorskip("typer")` at top of test file |
+| `@use_guards` ignored / guard never runs | Decorator ordering wrong — `@use_guards` is outermost | Move `@mcp_tool()` to be the outermost decorator and `@use_guards` inside |
+| Guard registered but `can_activate` not called | Guard class not discovered as provider | Confirm class is `@injectable()` and passed to `@use_guards`; registrar discovers it at `@post_construct` |
 
 ## Definition of done
 
@@ -131,7 +163,7 @@ A change is complete when ALL of the following pass:
 ```bash
 uv run --no-sync nox -s lint          # ruff: 0 errors
 uv run --no-sync nox -s typecheck     # mypy: 0 errors
-uv run --no-sync nox -s llms_check    # all 65+ public symbols documented
+uv run --no-sync nox -s llms_check    # all 73+ public symbols documented
 uv run --no-sync nox -s prek          # pre-release hooks pass
 uv run --no-sync pytest tests/ -q     # all tests pass
 ```

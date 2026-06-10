@@ -663,6 +663,69 @@ requests.
 
 ---
 
+### `McpForbiddenError`
+
+```python
+class McpForbiddenError(Exception):
+    guard_name: str
+```
+
+Raised by the MCP dispatch layer when a method-level guard returns `False`.
+The server converts it to an `INTERNAL_ERROR` JSON-RPC response with
+`data = {"type": "FORBIDDEN", "guard": guard_name}`.
+
+| Attribute | Type | Description |
+|---|---|---|
+| `guard_name` | `str` | Class name of the guard that rejected the call |
+
+---
+
+## Cross-cutting concern types
+
+### `McpExecutionContext`
+
+```python
+@dataclass(frozen=True)
+class McpExecutionContext:
+```
+
+Context object received by method-level guards (`@use_guards`) and
+interceptors (`@use_interceptors`) on `@mcp_tool`, `@mcp_resource`, and
+`@mcp_prompt` methods.
+
+**Fields**
+
+| Field | Type | Description |
+|---|---|---|
+| `headers` | `Headers \| None` | Transport headers; `None` for stdio |
+| `execution_context` | `ExecutionContext \| None` | Lauren execution context; `None` for WS and stdio |
+| `session_id` | `str \| None` | SSE/Streamable session identifier; `None` for WS and stdio |
+| `metadata` | `dict[str, Any]` | Merged class- and method-level metadata from `@set_metadata` decorators |
+
+**Methods**
+
+```python
+def get_metadata(self, key: str, default: Any = None) -> Any
+```
+
+Convenience accessor equivalent to `self.metadata.get(key, default)`.
+
+---
+
+### `McpCallHandler`
+
+```python
+class McpCallHandler:
+    async def handle(self) -> dict: ...
+```
+
+Passed as the second argument to an interceptor's `intercept()` method.
+Calling `await call_handler.handle()` invokes the next handler in the chain
+and returns the raw `tools/call` result dict.  Interceptors may return the
+result unmodified, a modified copy, or a replacement.
+
+---
+
 ## Version constants
 
 ```python

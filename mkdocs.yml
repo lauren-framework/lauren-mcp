@@ -94,6 +94,7 @@ nav:
     - MCP Client (full): guides/mcp-client.md
     - Agent Tools: guides/mcp-agent-tools.md
     - Tool Context: guides/tool-context.md
+    - Per-Tool Decorators: guides/per-tool-decorators.md
     - Lauren Parameters: guides/tool-lauren-params.md
   - API Reference:
     - reference/index.md

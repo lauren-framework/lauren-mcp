@@ -374,6 +374,119 @@ capability or the transport cannot deliver server-to-client requests.
 
 ---
 
+## `McpExecutionContext`
+
+```python
+@dataclass(frozen=True)
+class McpExecutionContext:
+```
+
+Context object passed to guards and interceptors registered with method-level
+`@use_guards` and `@use_interceptors` on `@mcp_tool`, `@mcp_resource`, and
+`@mcp_prompt` methods.  Guards run before the tool method; interceptors wrap it.
+
+**Fields**
+
+| Field | Type | Description |
+|---|---|---|
+| `headers` | `Headers \| None` | Transport headers — WS upgrade headers, HTTP request headers, or `None` for stdio |
+| `execution_context` | `ExecutionContext \| None` | Lauren execution context for SSE/Streamable transports; `None` for WS and stdio |
+| `session_id` | `str \| None` | SSE/Streamable session identifier; `None` for WS and stdio |
+| `metadata` | `dict[str, Any]` | Merged class- and method-level metadata from all `@set_metadata` decorators |
+
+**Methods**
+
+```python
+def get_metadata(self, key: str, default: Any = None) -> Any
+```
+
+Convenience accessor for `self.metadata`.
+
+**Example (guard)**
+
+```python
+from lauren import injectable
+from lauren_mcp import McpExecutionContext
+
+@injectable()
+class TokenGuard:
+    async def can_activate(self, ctx: McpExecutionContext) -> bool:
+        if ctx.headers is None:
+            return False
+        return ctx.headers.get("authorization", "").startswith("Bearer ")
+```
+
+---
+
+## `McpForbiddenError`
+
+```python
+class McpForbiddenError(Exception):
+    guard_name: str
+```
+
+Raised internally when a method-level guard returns `False`.  The server
+converts it to an `INTERNAL_ERROR` JSON-RPC response with
+`data = {"type": "FORBIDDEN", "guard": guard_name}`.
+
+**Attribute**
+
+| Name | Type | Description |
+|---|---|---|
+| `guard_name` | `str` | Class name of the guard that rejected the call |
+
+You may catch `McpForbiddenError` in a `@use_exception_handlers` handler to
+customise the error response:
+
+```python
+from lauren import exception_handler, use_exception_handlers
+from lauren_mcp import McpForbiddenError
+
+@exception_handler(McpForbiddenError)
+class ForbiddenHandler:
+    async def catch(self, exc: McpForbiddenError, ctx) -> dict:
+        return {
+            "content": [{"type": "text", "text": f"Access denied by {exc.guard_name}."}],
+            "isError": True,
+        }
+```
+
+---
+
+## `McpCallHandler`
+
+```python
+class McpCallHandler:
+    async def handle(self) -> dict: ...
+```
+
+Passed as the second argument to an interceptor's `intercept()` method.
+Calling `await call_handler.handle()` invokes the next handler in the chain
+(another interceptor or the tool method itself) and returns the raw
+`tools/call` result dict.
+
+Interceptors may return the result unmodified, return a modified copy, or
+replace it entirely.
+
+**Example**
+
+```python
+from lauren import interceptor
+from lauren_mcp import McpCallHandler, McpExecutionContext
+
+@interceptor()
+class LoggingInterceptor:
+    async def intercept(
+        self, ctx: McpExecutionContext, call_handler: McpCallHandler
+    ) -> dict:
+        result = await call_handler.handle()
+        if result.get("isError"):
+            print("Tool call failed:", result)
+        return result
+```
+
+---
+
 ## `ToolAnnotations`
 
 ```python

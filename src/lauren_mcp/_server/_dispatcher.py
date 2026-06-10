@@ -34,6 +34,26 @@ class McpInvalidParamsError(Exception):
         self.message = message
 
 
+class McpForbiddenError(RuntimeError):
+    """Raised when a per-tool guard rejects a tool/resource/prompt call.
+
+    Converted to an ``INTERNAL_ERROR`` JSON-RPC response with a
+    ``data.type = "FORBIDDEN"`` payload by :class:`McpDispatcher`.
+    The WebSocket connection or SSE session is *not* closed; only this
+    specific call fails.
+
+    Attributes
+    ----------
+    guard_name:
+        ``__name__`` of the guard class that rejected the call, or an
+        empty string when the rejection did not come from a named guard.
+    """
+
+    def __init__(self, message: str, guard_name: str = "") -> None:
+        super().__init__(message)
+        self.guard_name = guard_name
+
+
 @injectable(scope=Scope.SINGLETON)
 class McpDispatcher:
     """SINGLETON request dispatcher for MCP JSON-RPC messages.
@@ -122,6 +142,13 @@ class McpDispatcher:
                 code=McpErrorCode.INVALID_PARAMS,
                 message=f"Invalid parameter: {exc.field}",
                 data={"field": exc.field, "message": exc.message},
+            )
+        except McpForbiddenError as exc:
+            return build_error_response(
+                id=request.id,
+                code=McpErrorCode.INTERNAL_ERROR,
+                message=str(exc),
+                data={"type": "FORBIDDEN", "guard": exc.guard_name},
             )
         except Exception as exc:  # noqa: BLE001
             return build_error_response(

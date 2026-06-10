@@ -45,7 +45,8 @@ uv run --no-sync nox -s llms_check
 
 ```
 src/lauren_mcp/
-  __init__.py              Public __all__ (~65+ symbols); re-exports McpCallError
+  __init__.py              Public __all__ (~73+ symbols); re-exports McpCallError,
+                           McpExecutionContext, McpForbiddenError, McpCallHandler
   _types.py                Wire types (dataclasses): JsonRpc*, MCP types, parse_message
   _mcp_version.py          LATEST="2025-11-25", STABLE, SUPPORTED (4 versions)
   _bridge.py               McpServerConfig, McpToolBridge (lifecycle manager)
@@ -72,6 +73,8 @@ src/lauren_mcp/
     _openapi.py            build_openapi_server_class, RouteEntry
 
   _server/                 Transport layer (server side)
+    _exec_context.py       McpExecutionContext (frozen dataclass passed to guards/interceptors);
+                           McpForbiddenError, McpCallHandler
     _dispatcher.py         McpDispatcher (@injectable Singleton, body-based routing)
     _ws.py                 mcp_ws_controller() — Lauren @ws_controller factory
     _sse.py                mcp_http_sse_controller() — Lauren @controller factory
@@ -204,6 +207,46 @@ subsequent requests.  `StreamableSessionStore` maps session_id to `StreamableSes
 "2025-11-25"}`.  Client defaults to `LATEST`.  `negotiate_version()` in `_handshake.py`
 picks the best overlap.
 
+### Per-method `@use_*(...)` decorators
+
+`@mcp_tool`, `@mcp_resource`, and `@mcp_prompt` methods accept the standard Lauren
+cross-cutting decorators (`@use_guards`, `@use_interceptors`, `@use_exception_handlers`,
+`@set_metadata`) applied **inside** (closer to the `async def`) the `@mcp_tool()` call.
+
+**Decorator ordering rule — critical:** Python applies decorators inside-out.
+`@mcp_tool()` must be the **outermost** decorator so that it sees the Lauren attributes
+already set by the inner decorators.  Correct order:
+
+```python
+@set_metadata("required_role", "admin")   # innermost — applied first
+@use_guards(AdminGuard)
+@mcp_tool()                               # outermost — applied last, reads attrs
+async def delete_all(self, ctx: McpToolContext) -> dict: ...
+```
+
+**Why metadata is re-read at `for_root()` time:** `_read_method_decorators()` runs at
+`@mcp_tool()` decoration time, before inner decorators have attached their attributes.
+`McpServerModule.for_root()` re-reads the fully-decorated method attributes at startup
+so guards, interceptors, and exception handler classes are discovered correctly.
+
+**`McpExecutionContext`** (`frozen=True`) is passed to guards and interceptors.  Fields:
+`tool_name`, `method_name`, `server_class`, `headers`, `execution_context`, `session_id`,
+`metadata`, `tool_use_id`; method `get_metadata(key)`.
+
+**`McpForbiddenError`** — raised by the dispatcher when a guard's `can_activate()`
+returns `False`; serialised as `INTERNAL_ERROR` with `data.type = "FORBIDDEN"`.
+
+**`McpCallHandler`** — passed to interceptors; `await call_handler.handle() -> dict`
+invokes the next step in the chain (or the actual tool).
+
+**DI resolution:** Guard, interceptor, and exception-handler classes referenced in
+per-method decorators are automatically registered as DI providers by
+`_McpHandlerRegistrar` at `@post_construct` time and resolved via the Lauren container.
+
+**`@use_middlewares` is disallowed** on individual `@mcp_tool` methods — the dispatcher
+raises `TypeError` at decoration time (middlewares operate at the HTTP/WS transport
+level, not at the per-tool dispatch level).
+
 ### McpCallError
 
 Raised by client methods when the server returns a JSON-RPC error response.  Exported
@@ -235,3 +278,6 @@ from `lauren_mcp` directly: `from lauren_mcp import McpCallError`.
 | Tool context not visible in `asyncio.to_thread` | CURRENT_BINDING doesn't cross thread boundary | Copy `binding = CURRENT_BINDING.get()` before entering thread |
 | `@mcp_lifespan` cleanup not called | Lauren doesn't support async `@pre_destruct` in older versions | Requires lauren>=1.6.0 |
 | CLI test fails with `ModuleNotFoundError: typer` | typer is an optional dep | Add `pytest.importorskip("typer")` at top of test file |
+| `@use_guards` silently ignored / guard never runs | Decorator ordering wrong | `@mcp_tool()` must be the **outermost** decorator; `@use_guards` goes inside |
+| `McpForbiddenError` not raised even though guard returns `False` | Guard class not discovered by DI | Ensure guard is `@injectable()` and listed in `@use_guards`; registrar auto-adds it as provider at startup |
+| `@use_middlewares` on `@mcp_tool` method | Middlewares not meaningful at per-tool level | Remove it; `TypeError` is raised at decoration time by design |

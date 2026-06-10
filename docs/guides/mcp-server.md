@@ -843,6 +843,109 @@ class MyServer:
 
 ---
 
+## Per-Tool Guards and Interceptors
+
+Class-level `@use_guards` and `@use_interceptors` apply to the entire transport
+connection or every HTTP handler.  For finer-grained control, the same
+decorators can be placed directly on individual `@mcp_tool`, `@mcp_resource`,
+or `@mcp_prompt` methods.
+
+!!! important "Decorator order"
+    `@mcp_tool()` must be the **outermost** decorator. Lauren decorators go
+    **inside** (closer to the `async def`):
+
+    ```python
+    # Correct:
+    @set_metadata("required_role", "admin")
+    @use_guards(AdminGuard)
+    @mcp_tool()
+    async def admin_op(self) -> dict: ...
+    ```
+
+### Per-tool guard example
+
+```python
+from lauren import injectable, use_guards, set_metadata
+from lauren_mcp import McpExecutionContext
+
+@injectable()
+class RoleGuard:
+    async def can_activate(self, ctx: McpExecutionContext) -> bool:
+        required = ctx.get_metadata("required_role")
+        if required is None:
+            return True
+        role = ctx.headers.get("x-role", "guest") if ctx.headers else "guest"
+        return role == required
+
+
+@mcp_server("/mcp")
+class MyServer:
+
+    @set_metadata("required_role", "admin")
+    @use_guards(RoleGuard)
+    @mcp_tool()
+    async def admin_delete(self) -> dict:
+        """Delete all records. Requires admin role."""
+        ...
+
+    @mcp_tool()
+    async def public_search(self, query: str) -> list:
+        """Search — accessible to everyone."""
+        ...
+```
+
+When `RoleGuard.can_activate` returns `False`, the call returns
+`INTERNAL_ERROR` with `data = {"type": "FORBIDDEN", "guard": "RoleGuard"}`.
+The transport connection remains open; only that specific call is rejected.
+
+### Per-tool interceptor example
+
+```python
+from lauren import interceptor, use_interceptors
+from lauren_mcp import McpCallHandler, McpExecutionContext
+import time
+
+@interceptor()
+class TimingInterceptor:
+    async def intercept(
+        self, ctx: McpExecutionContext, call_handler: McpCallHandler
+    ) -> dict:
+        start = time.perf_counter()
+        result = await call_handler.handle()
+        elapsed_ms = int((time.perf_counter() - start) * 1000)
+        if isinstance(result.get("structuredContent"), dict):
+            result["structuredContent"]["_elapsed_ms"] = elapsed_ms
+        return result
+
+
+@mcp_server("/mcp")
+class CatalogueServer:
+
+    @use_interceptors(TimingInterceptor)
+    @mcp_tool()
+    async def search(self, query: str) -> dict:
+        ...
+```
+
+### Difference from class-level decorators
+
+| Scope | Applies to | Context type |
+|---|---|---|
+| Class-level `@use_guards` | Transport connection / HTTP handler | Lauren `ExecutionContext` |
+| Method-level `@use_guards` | Individual tool / resource / prompt call | `McpExecutionContext` |
+| Class-level `@use_interceptors` | Transport handler | Lauren `ExecutionContext` |
+| Method-level `@use_interceptors` | Individual tool call | `McpExecutionContext`, `McpCallHandler` |
+
+Guard and interceptor classes used in method-level decorators are automatically
+registered as DI providers — no need to add them to
+`McpServerModule.for_root(providers=[...])`.
+
+See **[Per-Method Cross-Cutting Decorators](per-tool-decorators.md)** for a
+comprehensive guide including exception handlers, transport availability, and
+decorator-stacking rules.
+
+---
+
 ## Server composition
 
 ### Mount a sibling server

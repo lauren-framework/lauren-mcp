@@ -48,6 +48,18 @@ Supported: `2024-11-05`, `2025-03-26`, `2025-06-18`, `2025-11-25` (LATEST)
 - Built-in resources: `FileResource`, `HttpResource`, `DirectoryResource`
 - `build_openapi_server_class(spec, http_client=...)` — OpenAPI → MCP
 
+## Per-method decorators (from Lauren framework)
+
+Order: `@mcp_tool()` outermost, Lauren decorators inside (closer to `async def`).
+
+- `@use_guards(GuardClass)` — runs before the method; guard receives `McpExecutionContext`; return `False` → `INTERNAL_ERROR` with `data.type="FORBIDDEN"`
+- `@use_interceptors(InterceptorClass)` — wraps the method call; call `await call_handler.handle()` to proceed; receives `McpExecutionContext` + `McpCallHandler`
+- `@use_exception_handlers(HandlerClass)` — catches domain exceptions and returns `isError: True` in the tool result
+- `@set_metadata(key, value)` — per-tool metadata; read via `ctx.get_metadata(key)` inside the tool body
+- `@use_middlewares` on `@mcp_tool` → `TypeError` (not meaningful at dispatch level)
+
+New types: `McpExecutionContext`, `McpForbiddenError`, `McpCallHandler`
+
 ## Client API
 
 - `McpServer.stdio(command)` — subprocess stdin/stdout, no extra deps

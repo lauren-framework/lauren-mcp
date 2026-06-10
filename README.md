@@ -116,7 +116,11 @@ consuming remote MCP tools, schema generation, transport configuration, and more
 - Server composition: `mounts=[(OtherCls, "prefix_")]`, `proxies=[(client, "prefix_")]`
 - OpenAPI import: `build_openapi_server_class(spec, http_client=...)`
 - Built-in resource types: `FileResource`, `HttpResource`, `DirectoryResource`
-- Guards, interceptors, and middleware via Lauren pipeline — `@use_guards`, `@use_interceptors`
+- Per-tool `@use_guards(G)` for method-level access control (e.g. admin-only tools)
+- Per-tool `@use_interceptors(I)` for cross-cutting concerns (audit, caching, timing)
+- Per-tool `@use_exception_handlers(H)` to map domain exceptions to `isError: True`
+- `@set_metadata(key, value)` per tool for guard-readable configuration
+- Class-level guards, interceptors, and middleware via Lauren pipeline — `@use_guards`, `@use_interceptors`
 - DNS rebinding protection: `TransportSecuritySettings`
 - SSE event store: `InMemoryEventStore` for resumable connections
 - OpenTelemetry tracing: `instrument_otel=True` on `for_root()`
@@ -132,6 +136,37 @@ consuming remote MCP tools, schema generation, transport configuration, and more
 - `client.set_logging_level(level)` — 8 severity levels
 - `client.complete(ref, argument)`
 - `ClientCredentialsProvider` for OAuth client credentials flow
+
+## Per-tool decorators
+
+Lauren's guard, interceptor, and exception-handler decorators can be applied to
+individual `@mcp_tool` / `@mcp_resource` / `@mcp_prompt` methods.
+`@mcp_tool()` must be the **outermost** decorator; Lauren decorators go **inside**
+(closer to `async def`):
+
+```python
+from lauren import use_guards, use_interceptors, use_exception_handlers, set_metadata
+from lauren import injectable
+from lauren_mcp import mcp_server, mcp_tool, McpToolContext, McpExecutionContext
+
+@injectable()
+class AdminGuard:
+    async def can_activate(self, ctx: McpExecutionContext) -> bool:
+        return ctx.headers.get("x-role") == "admin" if ctx.headers else False
+
+@mcp_server("/mcp")
+class AdminServer:
+    @set_metadata("required_role", "admin")
+    @use_guards(AdminGuard)
+    @mcp_tool()
+    async def purge_cache(self, ctx: McpToolContext) -> dict:
+        """Purge the application cache (admin only)."""
+        return {"purged": True}
+```
+
+Calling `purge_cache` without the `x-role: admin` header returns
+`INTERNAL_ERROR` with `data.type="FORBIDDEN"`. Use `McpForbiddenError` and
+`McpExecutionContext` (both in `lauren_mcp`) to inspect guard rejections.
 
 ## Quick start — Server
 

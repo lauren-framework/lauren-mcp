@@ -1,8 +1,8 @@
 ---
 skill: mcp-transport-internals
-version: 3.0.0
-tags: [mcp, internals, dispatcher, sse, session-store, streamable-http, binding, catalog, registry, subscriptions, security, lauren-mcp]
-summary: Understand McpDispatcher routing, CURRENT_BINDING, Streamable HTTP, McpCatalogManager, McpConnectionRegistry, and related transport internals.
+version: 3.1.0
+tags: [mcp, internals, dispatcher, sse, session-store, streamable-http, binding, catalog, registry, subscriptions, security, guards, interceptors, exec-context, lauren-mcp]
+summary: Understand McpDispatcher routing, CURRENT_BINDING, Streamable HTTP, McpCatalogManager, McpConnectionRegistry, per-tool guard pipeline, and related transport internals.
 ---
 
 # Skill: MCP Transport Internals
@@ -390,6 +390,92 @@ class _McpBaseRemoteClient(McpClientProtocol, _ClientFeaturesMixin):
 
 `McpStdioClient` does **not** inherit from `_McpBaseRemoteClient` — it uses
 the same pending-future pattern but reads from subprocess stdout directly.
+
+---
+
+## Per-Tool Guard Pipeline
+
+Guards declared with `@use_guards` on `@mcp_tool` / `@mcp_resource` /
+`@mcp_prompt` run **inside** the dispatcher, after `CURRENT_BINDING` is set
+and arguments have been parsed, but **before** the method is called.
+
+### Execution order
+
+```
+transport sets CURRENT_BINDING
+  → dispatcher.dispatch(request)
+    → tools/call handler (make_tools_call_handler)
+      1. parse arguments
+      2. set CURRENT_BINDING token
+      3. inject McpToolContext into kwargs (if declared)
+      4. inject Header[T], State[T], Depends[X] params
+      5. BUILD McpExecutionContext  ← happens here
+      6. _run_tool_guards()         ← guards run here, before method call
+      7. _execute_with_interceptors()  ← interceptors wrap the method
+      8. method(**kwargs)
+      9. _run_tool_exception_handlers()  ← if method raises
+```
+
+### `McpExecutionContext`
+
+`McpExecutionContext` (`src/lauren_mcp/_server/_exec_context.py`) is built
+once per call and passed to every guard and interceptor:
+
+```python
+@dataclass(frozen=True)
+class McpExecutionContext:
+    tool_name: str               # registered MCP tool name
+    method_name: str             # Python method name on the server class
+    server_class: type           # the @mcp_server class
+    headers: dict[str, str] | None  # None for stdio; populated for WS/HTTP
+    execution_context: Any       # Lauren ExecutionContext | None (HTTP only)
+    session_id: str | None       # MCP session ID | None
+    metadata: dict[str, Any]     # merged server-level + per-tool @set_metadata
+    tool_use_id: str | int | None  # JSON-RPC request id | None
+
+    def get_metadata(self, key, default=None): ...
+```
+
+`McpExecutionContext` differs from `McpToolContext` in scope:
+- `McpExecutionContext` is lightweight and available before the method runs.
+  Guards and interceptors receive it.
+- `McpToolContext` is richer (carries `sample()`, `log()`, `report_progress()`,
+  `lifespan_context`, …) and is injected into the tool method itself.
+
+### How it differs from transport-level guards
+
+Transport-level `@use_guards` on the `@mcp_server` class gate the **connection**:
+for WebSocket, the guard fires at `@on_connect`; rejection closes the socket
+before any MCP handshake.
+
+Per-tool guards gate individual **method calls** inside an already-established
+session.  A per-tool guard rejection does not close the connection; the client
+receives an error response and subsequent calls on the same session continue
+normally.
+
+### `McpForbiddenError` → `INTERNAL_ERROR` with `FORBIDDEN` data
+
+When a per-tool guard returns `False` (or raises), `_run_tool_guards()` raises
+`McpForbiddenError`.  `McpDispatcher.dispatch()` catches it and returns:
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": <request_id>,
+  "error": {
+    "code": -32603,
+    "message": "Guard 'DenyGuard' denied the tool call for 'my_tool'",
+    "data": {"type": "FORBIDDEN", "guard": "DenyGuard"}
+  }
+}
+```
+
+`McpForbiddenError` and `McpExecutionContext` are both exported from
+`lauren_mcp` directly:
+
+```python
+from lauren_mcp import McpExecutionContext, McpForbiddenError
+```
 
 ---
 

@@ -35,6 +35,72 @@ if TYPE_CHECKING:
 
 _SENTINEL = object()
 
+
+# ---------------------------------------------------------------------------
+# Per-method Lauren decorator metadata reader
+# ---------------------------------------------------------------------------
+
+
+def _read_method_decorators(fn: Callable[..., Any]) -> dict[str, Any]:
+    """Read ``@use_guards``, ``@use_interceptors``, ``@use_exception_handlers``, and
+    ``@set_metadata`` attributes from *fn*, as stored by Lauren's decorators.
+
+    Returns a dict with keys: ``guards``, ``interceptors``, ``exception_handlers``,
+    ``tool_metadata`` — all empty when lauren is not installed.
+
+    Also validates that ``@use_middlewares`` has not been applied to *fn*; raises
+    ``TypeError`` if it has.
+
+    Note: Lauren decorators are applied bottom-up (innermost first).  The canonical
+    ordering is::
+
+        @set_metadata("role", "admin")   # applied 3rd (outermost)
+        @use_guards(AdminGuard)          # applied 2nd
+        @mcp_tool()                      # applied 1st (innermost)
+        async def delete_all(self) -> dict: ...
+
+    When ``@mcp_tool()`` is the outermost decorator, Lauren attributes will not have
+    been set yet and this function will return empty defaults.
+    """
+    try:
+        from lauren.decorators import (  # noqa: PLC0415
+            SET_METADATA,
+            USE_EXCEPTION_HANDLERS,
+            USE_GUARDS,
+            USE_INTERCEPTORS,
+            USE_MIDDLEWARES,
+        )
+    except ImportError:
+        # lauren not installed — nothing to read, nothing to validate
+        return {
+            "guards": (),
+            "interceptors": (),
+            "exception_handlers": (),
+            "tool_metadata": {},
+        }
+
+    # Validate: @use_middlewares is meaningless at MCP tool/resource/prompt level
+    if getattr(fn, USE_MIDDLEWARES, None):
+        raise TypeError(
+            f"@use_middlewares cannot be applied to {fn.__name__!r} — MCP tool, "
+            "resource, and prompt methods have no HTTP request/response lifecycle. "
+            "Apply @use_middlewares to the @mcp_server class or a transport "
+            "controller instead."
+        )
+
+    guards = tuple(getattr(fn, USE_GUARDS, []))
+    interceptors = tuple(getattr(fn, USE_INTERCEPTORS, []))
+    exception_handlers = tuple(getattr(fn, USE_EXCEPTION_HANDLERS, []))
+    tool_metadata = dict(getattr(fn, SET_METADATA, {}) or {})
+
+    return {
+        "guards": guards,
+        "interceptors": interceptors,
+        "exception_handlers": exception_handlers,
+        "tool_metadata": tool_metadata,
+    }
+
+
 # ---------------------------------------------------------------------------
 # Tool name validation
 # ---------------------------------------------------------------------------
@@ -767,6 +833,9 @@ def mcp_tool(
             if _spec is not None:
                 _param_specs[_pname] = _spec
 
+        # Read @use_guards / @use_interceptors / @use_exception_handlers / @set_metadata
+        _method_deco = _read_method_decorators(fn)
+
         tool_meta = McpToolMeta(
             name=resolved_name,
             description=resolved_desc,
@@ -788,6 +857,10 @@ def mcp_tool(
             header_params=header_params,
             state_params=state_params,
             param_specs=_param_specs,
+            guards=_method_deco["guards"],
+            interceptors=_method_deco["interceptors"],
+            exception_handlers=_method_deco["exception_handlers"],
+            tool_metadata=_method_deco["tool_metadata"],
         )
         setattr(fn, MCP_TOOL_META, tool_meta)
         return fn
@@ -880,6 +953,9 @@ def mcp_resource(
             # Store the base type (stripped of Lauren markers) for coerce_params
             clean_hints[param_name] = base_type
 
+        # Read @use_guards / @use_interceptors / @use_exception_handlers / @set_metadata
+        _method_deco = _read_method_decorators(fn)
+
         resource_meta = McpResourceMeta(
             uri_template=uri_template,
             name=resolved_name,
@@ -895,6 +971,10 @@ def mcp_resource(
             depends_params=depends_params,
             header_params=header_params,
             state_params=state_params,
+            guards=_method_deco["guards"],
+            interceptors=_method_deco["interceptors"],
+            exception_handlers=_method_deco["exception_handlers"],
+            tool_metadata=_method_deco["tool_metadata"],
         )
         setattr(fn, MCP_RESOURCE_META, resource_meta)
         return fn
@@ -933,12 +1013,19 @@ def mcp_prompt(
             }
             arguments.append(arg_entry)
 
+        # Read @use_guards / @use_interceptors / @use_exception_handlers / @set_metadata
+        _method_deco = _read_method_decorators(fn)
+
         prompt_meta = McpPromptMeta(
             name=resolved_name,
             description=resolved_desc,
             arguments=arguments,
             method_name=fn.__name__,
             title=title,
+            guards=_method_deco["guards"],
+            interceptors=_method_deco["interceptors"],
+            exception_handlers=_method_deco["exception_handlers"],
+            tool_metadata=_method_deco["tool_metadata"],
         )
         setattr(fn, MCP_PROMPT_META, prompt_meta)
         return fn

@@ -163,6 +163,9 @@ class McpServerModule:
         completions: list[McpCompletionMeta] = []
         lifespan_meta: McpLifespanMeta | None = None
 
+        # Import decorator-reader helper once for the loop below.
+        from ._decorators import _read_method_decorators as _rmd  # noqa: PLC0415
+
         for attr_name in dir(server_cls):
             try:
                 attr = getattr(server_cls, attr_name)
@@ -171,14 +174,43 @@ class McpServerModule:
 
             tool_meta: McpToolMeta | None = getattr(attr, MCP_TOOL_META, None)
             if tool_meta is not None:
+                # Re-read all 4 decorator attrs at for_root() time from the
+                # fully-decorated method (all outer decorators already applied).
+                _deco = _rmd(attr)
+                if _deco["guards"] and not tool_meta.guards:
+                    tool_meta.guards = _deco["guards"]
+                if _deco["interceptors"] and not tool_meta.interceptors:
+                    tool_meta.interceptors = _deco["interceptors"]
+                if _deco["exception_handlers"] and not tool_meta.exception_handlers:
+                    tool_meta.exception_handlers = _deco["exception_handlers"]
+                if _deco["tool_metadata"] and not tool_meta.tool_metadata:
+                    tool_meta.tool_metadata = _deco["tool_metadata"]
                 tools.append(tool_meta)
 
             resource_meta: McpResourceMeta | None = getattr(attr, MCP_RESOURCE_META, None)
             if resource_meta is not None:
+                _deco = _rmd(attr)
+                if _deco["guards"] and not resource_meta.guards:
+                    resource_meta.guards = _deco["guards"]
+                if _deco["interceptors"] and not resource_meta.interceptors:
+                    resource_meta.interceptors = _deco["interceptors"]
+                if _deco["exception_handlers"] and not resource_meta.exception_handlers:
+                    resource_meta.exception_handlers = _deco["exception_handlers"]
+                if _deco["tool_metadata"] and not resource_meta.tool_metadata:
+                    resource_meta.tool_metadata = _deco["tool_metadata"]
                 resources.append(resource_meta)
 
             prompt_meta: McpPromptMeta | None = getattr(attr, MCP_PROMPT_META, None)
             if prompt_meta is not None:
+                _deco = _rmd(attr)
+                if _deco["guards"] and not prompt_meta.guards:
+                    prompt_meta.guards = _deco["guards"]
+                if _deco["interceptors"] and not prompt_meta.interceptors:
+                    prompt_meta.interceptors = _deco["interceptors"]
+                if _deco["exception_handlers"] and not prompt_meta.exception_handlers:
+                    prompt_meta.exception_handlers = _deco["exception_handlers"]
+                if _deco["tool_metadata"] and not prompt_meta.tool_metadata:
+                    prompt_meta.tool_metadata = _deco["tool_metadata"]
                 prompts.append(prompt_meta)
 
             completion_meta_val: McpCompletionMeta | None = getattr(attr, MCP_COMPLETION_META, None)
@@ -277,6 +309,7 @@ class McpServerModule:
                 self._lifespan_gen: Any = None
                 self._lifespan_ctx: dict[str, Any] = {}
                 self._log_state = LogLevelState(_log_level)
+                self._container: Any = None  # populated at @post_construct time via gc
 
             @post_construct
             async def _register_handlers(self) -> None:
@@ -285,6 +318,24 @@ class McpServerModule:
                 srv = self._server_instance
                 catalog = self._catalog
                 sub_mgr = self._subscriptions
+
+                # Discover the DI container that created this singleton via gc.
+                # This runs once at startup and is O(n) in live objects — acceptable
+                # for initialisation cost.  Allows per-tool guards/interceptors to
+                # resolve their DI dependencies without any user-side wiring.
+                try:
+                    import gc  # noqa: PLC0415
+
+                    from lauren import DIContainer  # noqa: PLC0415
+
+                    for _obj in gc.get_objects():
+                        if isinstance(_obj, DIContainer) and any(
+                            v is self for v in _obj._singletons.values()
+                        ):
+                            self._container = _obj
+                            break
+                except Exception:  # noqa: BLE001
+                    pass  # Container discovery failed — guards will be skipped
 
                 # --- lifespan ---
                 if _lifespan_meta is not None:
@@ -392,6 +443,9 @@ class McpServerModule:
                     catalog.list_tools,
                     context_factory=context_factory,
                     dispatcher=dispatcher,
+                    container=self._container,
+                    owning_module=_McpModule,
+                    server_metadata=_server_metadata,
                 )
 
                 async def _tools_list(params: dict[str, Any] | None) -> dict[str, Any]:
@@ -405,7 +459,13 @@ class McpServerModule:
 
                 # --- resources ---
                 _rl_inner = make_resources_list_handler(catalog.list_resources)
-                _rr_inner = make_resources_read_handler(srv, catalog.list_resources)
+                _rr_inner = make_resources_read_handler(
+                    srv,
+                    catalog.list_resources,
+                    container=self._container,
+                    owning_module=_McpModule,
+                    server_metadata=_server_metadata,
+                )
 
                 async def _resources_list(params: dict[str, Any] | None) -> dict[str, Any]:
                     return await _rl_inner(_Req(method="resources/list", params=params))
@@ -553,6 +613,25 @@ class McpServerModule:
             )
             if cls not in _existing_extra
         ]
+        _auto_guard_set = set(_auto_guard_providers)
+
+        # Collect per-method guard, interceptor, and exception_handler classes
+        # not already in providers — auto-register them so DI can resolve them.
+        _method_level_providers: list[type] = []
+        for _meta_item in (*_tools, *_resources, *_prompts):
+            for _cls in (
+                *getattr(_meta_item, "guards", ()),
+                *getattr(_meta_item, "interceptors", ()),
+                *getattr(_meta_item, "exception_handlers", ()),
+            ):
+                if (
+                    isinstance(_cls, type)
+                    and _cls not in _existing_extra
+                    and _cls not in _auto_guard_set
+                    and _cls not in _method_level_providers
+                ):
+                    _method_level_providers.append(_cls)
+
         _all_providers = [
             server_cls,
             McpDispatcher,
@@ -564,6 +643,7 @@ class McpServerModule:
             _McpHandlerRegistrar,
             *_composition_providers,
             *_auto_guard_providers,
+            *_method_level_providers,
             *(providers or []),
         ]
         _all_imports = list(imports or [])

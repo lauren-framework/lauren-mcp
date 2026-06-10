@@ -1013,8 +1013,51 @@ async def search(
 
 ---
 
+## Method-Level Cross-Cutting Decorators
+
+Lauren's `@use_guards`, `@use_interceptors`, `@use_exception_handlers`, and
+`@set_metadata` decorators can be placed directly on individual `@mcp_tool`,
+`@mcp_resource`, and `@mcp_prompt` methods for fine-grained, per-operation
+access control and cross-cutting concerns.
+
+!!! important "Decorator order"
+    `@mcp_tool()` (and `@mcp_resource()` / `@mcp_prompt()`) must be the
+    **outermost** decorator. Lauren decorators go **inside** (closer to the
+    `async def`). Python applies decorators inside-out, so Lauren's
+    attribute-setting decorators must execute before `@mcp_tool()` reads them.
+
+    ```python
+    # Correct:
+    @set_metadata("required_role", "admin")
+    @use_guards(AdminGuard)
+    @mcp_tool()
+    async def delete_all(self) -> dict: ...
+
+    # Wrong — guard is never read:
+    @mcp_tool()
+    @use_guards(AdminGuard)
+    async def delete_all(self) -> dict: ...
+    ```
+
+### Summary of per-method decorators
+
+| Decorator | Purpose | Context type received |
+|---|---|---|
+| `@use_guards(GuardClass)` | Block the call when `can_activate()` returns `False` | `McpExecutionContext` |
+| `@use_interceptors(InterceptorClass)` | Wrap the call; observe or rewrite the result | `McpExecutionContext`, `McpCallHandler` |
+| `@use_exception_handlers(HandlerClass)` | Map exceptions to `isError: True` responses | varies |
+| `@set_metadata(key, value)` | Attach per-tool metadata merged into `ctx.metadata` | — |
+
+For a complete guide with worked examples, transport availability notes, and
+the difference between class-level and method-level decorators, see
+**[Per-Method Cross-Cutting Decorators](per-tool-decorators.md)**.
+
+---
+
 ## Next steps
 
+- **[Per-Method Cross-Cutting Decorators](per-tool-decorators.md)** — guards,
+  interceptors, and exception handlers on individual tools
 - **[Lauren Parameters](tool-lauren-params.md)** — full guide with examples,
   transport tables, and edge cases
 - **[Multiple servers](multiple-servers.md)** — tool namespacing across servers
