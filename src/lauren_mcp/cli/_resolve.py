@@ -57,7 +57,7 @@ def resolve_server_class(spec: str) -> type:
             _die(f"No attribute {class_name!r} in {path}")
         if not hasattr(cls, MCP_SERVER_META):
             _die(f"{class_name!r} is not decorated with @mcp_server")
-        return type(cls)  # type: ignore[return-value]
+        assert isinstance(cls, type), f"{class_name!r} is not a class"
         return cls
 
     # Auto-discover: find all @mcp_server classes in module.

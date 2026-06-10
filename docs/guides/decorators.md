@@ -951,8 +951,72 @@ app.include_module(McpServerModule.for_root(ShopServer))
 
 ---
 
+---
+
+## Lauren Parameter Injection
+
+`@mcp_tool` and `@mcp_resource` methods can declare Lauren-framework parameters
+alongside their normal tool arguments.  These parameters are resolved and
+injected by the framework at call time; they are **invisible to MCP clients**
+and excluded from the tool's JSON Schema.
+
+See the **[Lauren Parameter Injection guide](tool-lauren-params.md)** for full
+examples and transport notes.  Quick-reference table:
+
+| Feature | Lauren type | Schema impact | Use case |
+|---|---|---|---|
+| Field validation | `QueryField(ge=1)` | Adds constraints to schema | Input validation and client hints |
+| Pipe transform | `@pipe()` | None (stripped from schema) | Value transformation and domain validation |
+| DI dependency | `Depends[callable]` | Excluded entirely | DB connections, auth tokens, config |
+| Header extraction | `Header[T]` | Excluded entirely | User ID, locale, auth headers |
+| Request state | `State[T]` | Excluded entirely | Per-call audit logs, accumulators |
+| Background tasks | `BackgroundTasks` | Excluded entirely | Fire-and-forget notifications |
+| Streaming output | `ToolStream[T]` | Return type only | LLM tokens, incremental progress |
+
+Brief example with all features:
+
+```python
+# No 'from __future__ import annotations' when using Depends/Header/State
+
+from typing import Annotated, Optional
+from lauren import BackgroundTasks, Depends, Header, QueryField, State
+from lauren_mcp import mcp_tool, McpToolContext, ToolStream
+
+
+async def get_db():
+    return await db_pool.acquire()
+
+
+@mcp_tool()
+async def search(
+    self,
+    query: str,
+    limit: Annotated[int, QueryField(ge=1, le=100)] = 10,
+    db=Depends[get_db],
+    x_user_id: Header[str] = "anonymous",
+    bg: BackgroundTasks = None,       # type: ignore[assignment]
+    ctx: McpToolContext | None = None,
+) -> list:
+    """Search items.
+
+    Args:
+        query: Search terms.
+        limit: Max results (1–100).
+    """
+    if ctx:
+        await ctx.info("searching", {"user": x_user_id})
+    results = await db.search(query, limit=limit)
+    if bg:
+        bg.add_task(log_search, query)
+    return results
+```
+
+---
+
 ## Next steps
 
+- **[Lauren Parameters](tool-lauren-params.md)** — full guide with examples,
+  transport tables, and edge cases
 - **[Multiple servers](multiple-servers.md)** — tool namespacing across servers
 - **[Testing](testing.md)** — test all four decorator types
 - **[MCP Server API](mcp-server.md)** — full generated reference

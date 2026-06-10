@@ -4,9 +4,12 @@ from __future__ import annotations
 
 import base64
 import json
+from collections.abc import AsyncGenerator, Callable
 from dataclasses import dataclass, field
 from enum import IntEnum
-from typing import Any, Literal
+from typing import Any, Generic, Literal, TypeVar
+
+_T = TypeVar("_T")
 
 # ---------------------------------------------------------------------------
 # JSON-RPC 2.0 primitives
@@ -321,6 +324,36 @@ class ToolOutput:
     content: list[Any] | None = None
     structured_content: dict[str, Any] | None = None
     is_error: bool = False
+
+
+@dataclass
+class ToolStream(Generic[_T]):
+    """Return type for streaming ``@mcp_tool`` methods.
+
+    Each value yielded by *generator* is sent to the client as a
+    ``notifications/progress`` message during the tool call.  When the
+    generator is exhausted the accumulated result becomes the ``tools/call``
+    response.
+
+    Attributes
+    ----------
+    generator:
+        An async generator producing ``_T`` values.
+    total:
+        Optional declared item count forwarded as the ``total`` field of each
+        progress notification.  Use when the total is known in advance (e.g.
+        transcribing a file of known duration).
+    accumulate:
+        Optional callable ``(chunks: list[_T]) -> Any`` that reduces all chunks
+        to a single final value.  Defaults:
+
+        - If all chunks are ``str``: ``"".join(chunks)``
+        - Otherwise: the last chunk, or ``None`` for an empty generator.
+    """
+
+    generator: AsyncGenerator[_T, None]
+    total: int | None = None
+    accumulate: Callable[[list[_T]], Any] | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -976,6 +1009,7 @@ __all__ = [
     "ToolCallParams",
     "ToolResult",
     "ToolOutput",
+    "ToolStream",
     "Role",
     "ResourceAnnotations",
     "ResourceSchema",

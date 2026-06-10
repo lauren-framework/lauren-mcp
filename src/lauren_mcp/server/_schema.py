@@ -333,6 +333,12 @@ class SchemaBuilder:
             for meta_item in getattr(extra, "metadata", []):
                 self._apply_metadata(schema, meta_item)
             return
+        # Lauren _ParamSpec — extract the embedded FieldDescriptor for schema
+        # keywords; pipes are not reflected in the JSON Schema.
+        fd = getattr(extra, "field_descriptor", None)
+        if fd is not None and type(extra).__name__ == "_ParamSpec":
+            self._apply_metadata(schema, fd)
+            return
         # annotated_types constraint objects (Ge, Le, MinLen, …) and pydantic
         # v1 FieldInfo both expose the constraint values as attributes.
         for attr, keyword in _CONSTRAINT_KEYWORDS.items():

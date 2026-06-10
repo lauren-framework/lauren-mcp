@@ -1931,6 +1931,53 @@ Register a `DirectoryResource` with an `McpCatalogManager` instance.
 
 ---
 
+### ToolStream
+
+```python
+@dataclass
+class ToolStream(Generic[T]):
+    generator: AsyncGenerator[T, None]
+    total: int | None = None
+    accumulate: Callable[[list[T]], Any] | None = None
+```
+
+Return type for ``@mcp_tool`` methods that produce results incrementally.
+Each value yielded by ``generator`` is sent to the client as a
+``notifications/progress`` event during the tool call; when the generator is
+exhausted the accumulated result becomes the ``tools/call`` response.
+
+**Accumulation:** ``str`` chunks are joined with ``""`` by default; all other
+types use the last yielded value (or ``None`` for an empty generator); supply
+``accumulate=lambda chunks: ...`` for custom reduction.
+
+**Progress notifications** are only delivered when the client includes a
+``progressToken`` in ``_meta`` of the ``tools/call`` request.  Without one the
+stream still runs and the accumulated result is returned normally.
+
+```python
+from lauren_mcp import ToolStream
+
+@mcp_tool()
+async def generate(self, prompt: str) -> ToolStream[str]:
+    """Stream completion tokens for *prompt*."""
+    async def gen():
+        async for token in llm.stream_complete(prompt):
+            yield token
+    return ToolStream(gen())
+```
+
+To produce a numeric total with ``accumulate``:
+
+```python
+return ToolStream(
+    number_generator(),
+    total=expected_count,
+    accumulate=lambda chunks: sum(chunks),
+)
+```
+
+---
+
 ## Exceptions
 
 These exceptions are not in `__all__` but are commonly caught by callers:

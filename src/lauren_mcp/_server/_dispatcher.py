@@ -21,6 +21,19 @@ from lauren_mcp._types import (
 AsyncHandler = Callable[[dict[str, Any] | None], Coroutine[Any, Any, Any]]
 
 
+class McpInvalidParamsError(Exception):
+    """Raised by tool/resource handlers when a parameter fails pipe validation.
+
+    Converted to an ``INVALID_PARAMS`` JSON-RPC error response by the dispatcher
+    instead of the default ``INTERNAL_ERROR``.
+    """
+
+    def __init__(self, field: str, message: str) -> None:
+        super().__init__(message)
+        self.field = field
+        self.message = message
+
+
 @injectable(scope=Scope.SINGLETON)
 class McpDispatcher:
     """SINGLETON request dispatcher for MCP JSON-RPC messages.
@@ -102,6 +115,13 @@ class McpDispatcher:
                 id=request.id,
                 code=McpErrorCode.REQUEST_CANCELLED,
                 message=f"Request {request.id!r} was cancelled",
+            )
+        except McpInvalidParamsError as exc:
+            return build_error_response(
+                id=request.id,
+                code=McpErrorCode.INVALID_PARAMS,
+                message=f"Invalid parameter: {exc.field}",
+                data={"field": exc.field, "message": exc.message},
             )
         except Exception as exc:  # noqa: BLE001
             return build_error_response(

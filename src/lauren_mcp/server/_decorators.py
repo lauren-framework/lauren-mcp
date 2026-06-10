@@ -20,6 +20,7 @@ from ._meta import (
     MCP_RESOURCE_META,
     MCP_SERVER_META,
     MCP_TOOL_META,
+    HeaderParamSpec,
     McpCompletionMeta,
     McpLifespanMeta,
     McpPromptMeta,
@@ -84,6 +85,131 @@ def _validate_tool_name(name: str, strict: bool = True) -> None:
         )
 
 
+# ---------------------------------------------------------------------------
+# Lauren extractor hint helpers (for pipe/FieldDescriptor validation)
+# ---------------------------------------------------------------------------
+
+_FD_TO_JSON_SCHEMA: dict[str, str] = {
+    "ge": "minimum",
+    "gt": "exclusiveMinimum",
+    "le": "maximum",
+    "lt": "exclusiveMaximum",
+    "min_length": "minLength",
+    "max_length": "maxLength",
+    "pattern": "pattern",
+    "description": "description",
+}
+
+
+def _extract_lauren_hint(
+    annotation: Any,
+) -> tuple[Any, Any | None, tuple[Any, ...]]:
+    """Strip Lauren extractor markers from *annotation*.
+
+    Returns ``(base_type, field_descriptor_or_None, pipe_tuple)``.
+
+    Works with:
+    * ``Annotated[T, ExtractionMarker, FieldDescriptor, pipe1, ...]``
+    * ``Annotated[T, FieldDescriptor, pipe1, ...]``  (no ExtractionMarker)
+    * ``Path[T, FieldDescriptor, pipe1, ...]`` (expanded to Annotated by Lauren)
+    * Plain ``T`` with no extras
+
+    Returns the annotation unchanged when lauren is not installed.
+    """
+    if typing.get_origin(annotation) is not typing.Annotated:
+        return annotation, None, ()
+
+    try:
+        from lauren.extractors import FieldDescriptor, is_pipe  # noqa: PLC0415
+    except ImportError:
+        # Lauren not installed — return as-is
+        return annotation, None, ()
+
+    try:
+        from lauren.extractors import parse_extractor_hint  # noqa: PLC0415
+
+        _source, inner, _reads_body, _marker_cls, fd, pipes = parse_extractor_hint(annotation)
+        if _source is not None:
+            # Extractor marker present — full result from parse_extractor_hint
+            return inner, fd, pipes
+    except Exception:
+        pass
+
+    # No ExtractionMarker (source is None) — manually scan the Annotated extras
+    # for FieldDescriptor, _ParamSpec, and pipe callables.
+    args = typing.get_args(annotation)
+    if not args:
+        return annotation, None, ()
+
+    base = args[0]
+    fd = None
+    pipes_list: list[Any] = []
+
+    _LParamSpec: type | None = None
+    import contextlib  # noqa: PLC0415
+
+    with contextlib.suppress(ImportError):
+        from lauren.extractors import _ParamSpec as _LParamSpec  # noqa: PLC0415
+
+    for extra in args[1:]:
+        if isinstance(extra, FieldDescriptor):
+            fd = extra
+        elif _LParamSpec is not None and isinstance(extra, _LParamSpec):
+            # _ParamSpec holds both a FieldDescriptor and pipe callables
+            _ps: Any = extra
+            if _ps.field_descriptor is not None and fd is None:
+                fd = _ps.field_descriptor
+            if _ps.pipes:
+                pipes_list.extend(_ps.pipes)
+        elif is_pipe(extra):
+            pipes_list.append(extra)
+        # ExtractionMarker instances/classes are silently ignored for MCP context
+
+    return base, fd, tuple(pipes_list)
+
+
+def _apply_field_descriptor(schema: dict[str, Any], fd: Any) -> None:
+    """Apply FieldDescriptor constraint attributes to a JSON Schema fragment."""
+    for attr, keyword in _FD_TO_JSON_SCHEMA.items():
+        value = getattr(fd, attr, None)
+        if value is not None:
+            schema[keyword] = value
+    alias = getattr(fd, "alias", None)
+    if alias:
+        schema["title"] = alias
+    default = getattr(fd, "default", None)
+    if default is not None and default is not ... and isinstance(default, (str, int, float, bool)):
+        schema.setdefault("default", default)
+
+
+# ---------------------------------------------------------------------------
+# BackgroundTasks annotation helper
+# ---------------------------------------------------------------------------
+
+
+def _is_background_tasks_annotation(annotation: Any) -> bool:
+    """True when *annotation* is BackgroundTasks or a string alias for it."""
+    try:
+        from lauren import BackgroundTasks as _BackgroundTasks  # noqa: PLC0415
+
+        if annotation is _BackgroundTasks:
+            return True
+    except ImportError:
+        pass
+    if isinstance(annotation, str):
+        stripped = annotation.replace(" ", "")
+        return stripped in (
+            "BackgroundTasks",
+            "lauren.BackgroundTasks",
+        )
+    return False
+
+
+# ---------------------------------------------------------------------------
+# McpToolContext annotation helper
+# ---------------------------------------------------------------------------
+
+
 def _is_context_annotation(annotation: Any) -> bool:
     """True when *annotation* is McpToolContext or Optional[McpToolContext]."""
     if annotation is McpToolContext:
@@ -105,16 +231,205 @@ def _is_context_annotation(annotation: Any) -> bool:
     return False
 
 
+# ---------------------------------------------------------------------------
+# Depends[callable] helpers
+#
+# Lauren's ExtractionMarker.__class_getitem__ returns Annotated[X, Depends]
+# for Depends[X].  So the wire shape is:
+#   typing.get_origin(annotation) is Annotated
+#   typing.get_args(annotation)[1] is Depends
+#   typing.get_args(annotation)[0] is the provider callable
+# ---------------------------------------------------------------------------
+
+
+def _is_depends_annotation(annotation: Any) -> bool:
+    """True when *annotation* is ``Depends[X]`` for any *X*.
+
+    ``Depends[X]`` expands to ``Annotated[X, Depends]`` via
+    :meth:`ExtractionMarker.__class_getitem__`.
+    """
+    try:
+        from lauren import Depends  # noqa: PLC0415
+    except ImportError:
+        return False
+    # String annotation fallback (from __future__ import annotations)
+    if isinstance(annotation, str):
+        stripped = annotation.replace(" ", "")
+        return stripped.startswith("Depends[")
+    # Annotated[callable, Depends]
+    if typing.get_origin(annotation) is typing.Annotated:
+        args = typing.get_args(annotation)
+        return len(args) >= 2 and args[1] is Depends
+    return False
+
+
+def _extract_depends_callable(annotation: Any) -> Any:
+    """Return the provider callable *X* from ``Annotated[X, Depends]``, or ``None``."""
+    try:
+        from lauren import Depends  # noqa: PLC0415
+    except ImportError:
+        return None
+    if typing.get_origin(annotation) is typing.Annotated:
+        args = typing.get_args(annotation)
+        if len(args) >= 2 and args[1] is Depends:
+            return args[0]
+    return None
+
+
+# ---------------------------------------------------------------------------
+# Header[T] helpers
+#
+# ``Header[T]`` expands to ``Annotated[T, Header]`` where the metadata marker
+# is the ``Header`` class itself (not an instance).  Pipe arguments become
+# additional metadata: ``Header[T, pipe1]`` → ``Annotated[T, Header, pipe1]``.
+# ``Optional[Header[T]]`` = ``Union[Annotated[T, Header], None]``.
+# ---------------------------------------------------------------------------
+
+
+def _get_annotated_header_marker(annotation: Any) -> Any | None:
+    """Return the ``Header`` class if *annotation* is ``Annotated[T, Header, ...]``,
+    else ``None``."""
+    try:
+        from lauren import Header  # noqa: PLC0415
+    except ImportError:
+        return None
+    if typing.get_origin(annotation) is typing.Annotated:
+        args = typing.get_args(annotation)
+        if len(args) >= 2 and args[1] is Header:
+            return Header
+    return None
+
+
+def _is_header_annotation(annotation: Any) -> bool:
+    """True when *annotation* is ``Header[T]`` or ``Optional[Header[T]]``."""
+    try:
+        from lauren import Header as _Header  # noqa: PLC0415,F401
+    except ImportError:
+        return False
+    if _get_annotated_header_marker(annotation) is not None:
+        return True
+    # Optional[Header[T]] — unwrap Union[Annotated[T, Header], None]
+    origin = typing.get_origin(annotation)
+    if origin is typing.Union or str(type(annotation)) == "<class 'types.UnionType'>":
+        args = [a for a in typing.get_args(annotation) if a is not type(None)]
+        return len(args) == 1 and _get_annotated_header_marker(args[0]) is not None
+    # String annotation fallback (from __future__ import annotations)
+    if isinstance(annotation, str):
+        stripped = annotation.replace(" ", "")
+        return stripped.startswith("Header[") or "Optional[Header[" in stripped
+    return False
+
+
+def _extract_header_type(annotation: Any) -> type:
+    """Return *T* from ``Annotated[T, Header]`` or ``Optional[Annotated[T, Header]]``."""
+    # Unwrap Optional first
+    origin = typing.get_origin(annotation)
+    if origin is typing.Union or str(type(annotation)) == "<class 'types.UnionType'>":
+        non_none = [a for a in typing.get_args(annotation) if a is not type(None)]
+        if non_none:
+            annotation = non_none[0]
+    # Annotated[T, Header, ...] — T is args[0]
+    if typing.get_origin(annotation) is typing.Annotated:
+        args = typing.get_args(annotation)
+        return args[0] if args else str
+    return str
+
+
+def _extract_header_pipe_chain(annotation: Any) -> list[Any]:
+    """Return pipe objects from ``Annotated[T, Header, pipe1, pipe2, ...]``."""
+    # Unwrap Optional first
+    origin = typing.get_origin(annotation)
+    if origin is typing.Union or str(type(annotation)) == "<class 'types.UnionType'>":
+        non_none = [a for a in typing.get_args(annotation) if a is not type(None)]
+        if non_none:
+            annotation = non_none[0]
+    if typing.get_origin(annotation) is typing.Annotated:
+        args = typing.get_args(annotation)
+        # args[0] = T, args[1] = Header, args[2:] = pipes
+        return list(args[2:]) if len(args) > 2 else []
+    return []
+
+
+def _is_optional_header(annotation: Any) -> bool:
+    """True when *annotation* is ``Optional[Header[T]]``."""
+    try:
+        from lauren import Header as _Header  # noqa: PLC0415,F401
+    except ImportError:
+        return False
+    origin = typing.get_origin(annotation)
+    if origin is typing.Union or str(type(annotation)) == "<class 'types.UnionType'>":
+        args = [a for a in typing.get_args(annotation) if a is not type(None)]
+        return len(args) == 1 and _get_annotated_header_marker(args[0]) is not None
+    return False
+
+
+def _param_to_header_name(param_name: str) -> str:
+    """Convert a Python parameter name to an HTTP header name.
+
+    Underscores become hyphens: ``x_user_id`` → ``"x-user-id"``.
+    """
+    return param_name.replace("_", "-")
+
+
+# ---------------------------------------------------------------------------
+# State[T] helpers
+#
+# ``State[T]`` expands to ``Annotated[T, State]`` via ExtractionMarker.
+# ---------------------------------------------------------------------------
+
+
+def _is_state_annotation(annotation: Any) -> bool:
+    """True when *annotation* is ``State[T]`` (i.e. ``Annotated[T, State]``).
+
+    Accepts the ``State`` class from either ``lauren.extractors`` or the
+    ``StateExtractor`` alias exported from ``lauren``.
+    """
+    try:
+        from lauren.extractors import State  # noqa: PLC0415
+    except ImportError:
+        return False
+    if typing.get_origin(annotation) is typing.Annotated:
+        args = typing.get_args(annotation)
+        return len(args) >= 2 and args[1] is State
+    if isinstance(annotation, str):
+        stripped = annotation.replace(" ", "")
+        return stripped.startswith("State[") or stripped.startswith("StateExtractor[")
+    return False
+
+
+def _extract_state_type(annotation: Any) -> type:
+    """Return *T* from ``Annotated[T, State]``."""
+    if typing.get_origin(annotation) is typing.Annotated:
+        args = typing.get_args(annotation)
+        return args[0] if args else dict
+    return dict
+
+
 def _build_schema(
     fn: Callable[..., Any],
-) -> tuple[str, str, dict[str, Any], str | None, dict[str, str]]:
-    """Build ``(name, description, json_schema, context_param, param_descs)``.
+) -> tuple[
+    str,
+    str,
+    dict[str, Any],
+    str | None,
+    dict[str, str],
+    dict[str, list[Any]],
+    str | None,
+    dict[str, Any],
+    dict[str, HeaderParamSpec],
+    dict[str, type],
+]:
+    """Build ``(name, description, json_schema, context_param, param_descs,
+    pipe_chains, bg_tasks_param, depends_params, header_params, state_params)``.
 
     * Uses ``inspect.signature`` and ``typing.get_type_hints`` (with fallback).
-    * Skips ``self`` and any parameter annotated with ``McpToolContext``.
+    * Skips ``self`` and any parameter annotated with ``McpToolContext``,
+      ``Depends[X]``, ``Header[T]``, ``State[T]``, or ``BackgroundTasks``.
     * Parameters without a default are marked as required.
     * Per-parameter descriptions come from the docstring (Google / Sphinx /
       NumPy styles); an explicit ``Field(description=...)`` wins.
+    * Lauren FieldDescriptor constraints are mapped to JSON Schema keywords.
+    * Pipe chains per parameter are accumulated in pipe_chains.
     """
     name = fn.__name__
     description, param_descriptions = parse_docstring(fn)
@@ -129,25 +444,122 @@ def _build_schema(
     properties: dict[str, Any] = {}
     required: list[str] = []
     context_param_name: str | None = None
+    pipe_chains: dict[str, list[Any]] = {}
+    bg_tasks_param: str | None = None
+    _seen_bg_params: list[str] = []
+    depends_params: dict[str, Any] = {}
+    header_params: dict[str, HeaderParamSpec] = {}
+    state_params: dict[str, type] = {}
 
     for param_name, param in sig.parameters.items():
         if param_name == "self":
             continue
         annotation = hints.get(param_name, param.annotation)
+
         if _is_context_annotation(annotation):
             context_param_name = param_name
             continue
-        prop = builder.build(annotation)
+
+        if _is_background_tasks_annotation(annotation):
+            # Multiple BackgroundTasks params → same instance (first one wins for injection)
+            _seen_bg_params.append(param_name)
+            if bg_tasks_param is None:
+                bg_tasks_param = param_name
+            continue
+
+        if _is_depends_annotation(annotation):
+            provider = _extract_depends_callable(annotation)
+            if provider is not None:
+                depends_params[param_name] = provider
+            continue
+
+        if _is_header_annotation(annotation):
+            coerce_to = _extract_header_type(annotation)
+            is_optional = _is_optional_header(annotation)
+            default = param.default  # may be inspect.Parameter.empty
+            pipe_chain = _extract_header_pipe_chain(annotation)
+            header_params[param_name] = HeaderParamSpec(
+                header_name=_param_to_header_name(param_name),
+                coerce_to=coerce_to,
+                default=default,
+                is_optional=is_optional,
+                pipe_chain=pipe_chain,
+            )
+            continue
+
+        if _is_state_annotation(annotation):
+            state_type = _extract_state_type(annotation)
+            state_params[param_name] = state_type
+            continue
+
+        # Extract Lauren hint (pipe chains + FieldDescriptor)
+        base_type, fd, pipes = _extract_lauren_hint(annotation)
+        fd_validator: Any = None
+        if fd is not None:
+            _has_constraints = any(
+                getattr(fd, attr, None) is not None
+                for attr in ("ge", "gt", "le", "lt", "min_length", "max_length", "pattern")
+            )
+            if _has_constraints:
+                # Create a closure that calls fd.validate(param_name, value)
+                # This is prepended to the pipe chain so constraints run before custom pipes
+                def _make_fd_validator(field_descriptor: Any, field_name: str) -> Any:
+                    def _validate(v: Any) -> Any:
+                        field_descriptor.validate(field_name, v)
+                        return v
+
+                    return _validate
+
+                fd_validator = _make_fd_validator(fd, param_name)
+
+        # Build the pipe chain: FD validator first, then custom pipes
+        all_pipes: list[Any] = []
+        if fd_validator is not None:
+            all_pipes.append(fd_validator)
+        if pipes:
+            all_pipes.extend(pipes)
+        if all_pipes:
+            pipe_chains[param_name] = all_pipes
+
+        # Also check the "default syntax": param.default may be a _ParamSpec or FieldDescriptor
+        # produced by ``QueryField(...) | pipe(fn)``
+        if param.default is not inspect.Parameter.empty:
+            default_val = param.default
+            try:
+                from lauren.extractors import _ParamSpec  # noqa: PLC0415
+
+                if isinstance(default_val, _ParamSpec):
+                    if default_val.pipes:
+                        existing = pipe_chains.get(param_name, [])
+                        pipe_chains[param_name] = existing + list(default_val.pipes)
+                    if fd is None and default_val.field_descriptor is not None:
+                        fd = default_val.field_descriptor
+            except ImportError:
+                pass
+
+        prop = builder.build(base_type)
+
+        # Apply FieldDescriptor constraints to the schema fragment
+        if fd is not None:
+            _apply_field_descriptor(prop, fd)
+
         doc_desc = param_descriptions.get(param_name)
         if doc_desc and "description" not in prop:
             prop["description"] = doc_desc
         if param.default is not inspect.Parameter.empty and "default" not in prop:
             default = param.default
+            # Skip FieldDescriptor / _ParamSpec objects stored as defaults
             if default is None or isinstance(default, (str, int, float, bool, list, dict)):
                 prop["default"] = default
         properties[param_name] = prop
         if param.default is inspect.Parameter.empty:
             required.append(param_name)
+
+    # If multiple BackgroundTasks params, store all names so handler can share the instance.
+    if len(_seen_bg_params) > 1:
+        bg_tasks_param = ",".join(_seen_bg_params)
+    elif _seen_bg_params:
+        bg_tasks_param = _seen_bg_params[0]
 
     schema: dict[str, Any] = {
         "type": "object",
@@ -158,7 +570,18 @@ def _build_schema(
     if builder.defs:
         schema["$defs"] = builder.defs
 
-    return name, description, schema, context_param_name, param_descriptions
+    return (
+        name,
+        description,
+        schema,
+        context_param_name,
+        param_descriptions,
+        pipe_chains,
+        bg_tasks_param,
+        depends_params,
+        header_params,
+        state_params,
+    )
 
 
 def _resolve_output_schema(output_schema: Any) -> dict[str, Any] | None:
@@ -300,7 +723,18 @@ def mcp_tool(
     """
 
     def decorator(fn: Callable[..., Any]) -> Callable[..., Any]:
-        auto_name, auto_desc, schema, context_param, param_descs = _build_schema(fn)
+        (
+            auto_name,
+            auto_desc,
+            schema,
+            context_param,
+            param_descs,
+            pipe_chains,
+            bg_tasks_param,
+            depends_params,
+            header_params,
+            state_params,
+        ) = _build_schema(fn)
         resolved_name = name if name is not None else auto_name
         resolved_desc = description if description is not None else auto_desc
 
@@ -317,6 +751,22 @@ def mcp_tool(
             return_annotation = hints.get("return", inspect.Parameter.empty)
             resolved_output_schema = _auto_output_schema(return_annotation, structured_output)
 
+        # Backward-compat: also populate param_specs with raw FieldDescriptor /
+        # _ParamSpec objects for code that still accesses meta.param_specs.
+        _param_specs: dict[str, Any] = {}
+        try:
+            _hints_extra = typing.get_type_hints(fn, include_extras=True)
+        except Exception:
+            _hints_extra = {}
+        _sig = inspect.signature(fn)
+        for _pname, _param in _sig.parameters.items():
+            if _pname == "self":
+                continue
+            _ann = _hints_extra.get(_pname, _param.annotation)
+            _spec = _extract_lauren_annotation(_ann)
+            if _spec is not None:
+                _param_specs[_pname] = _spec
+
         tool_meta = McpToolMeta(
             name=resolved_name,
             description=resolved_desc,
@@ -332,6 +782,12 @@ def mcp_tool(
             param_descriptions=param_descs,
             structured_output=structured_output,
             title=title,
+            pipe_chains=pipe_chains,
+            bg_tasks_param=bg_tasks_param,
+            depends_params=depends_params,
+            header_params=header_params,
+            state_params=state_params,
+            param_specs=_param_specs,
         )
         setattr(fn, MCP_TOOL_META, tool_meta)
         return fn
@@ -371,10 +827,58 @@ def mcp_resource(
 
         compiled = compile_uri_template(uri_template)
         try:
-            hints = typing.get_type_hints(fn)
+            hints = typing.get_type_hints(fn, include_extras=True)
         except Exception:
             hints = {}
         hints.pop("return", None)
+
+        # Extract pipe chains, BackgroundTasks, Depends, Header, State from hints
+        pipe_chains: dict[str, list[Any]] = {}
+        bg_tasks_param: str | None = None
+        depends_params: dict[str, Any] = {}
+        header_params: dict[str, HeaderParamSpec] = {}
+        state_params: dict[str, type] = {}
+        clean_hints: dict[str, Any] = {}
+
+        sig = inspect.signature(fn)
+        for param_name, annotation in hints.items():
+            if param_name == "self":
+                continue
+            if _is_context_annotation(annotation):
+                continue
+            if _is_background_tasks_annotation(annotation):
+                if bg_tasks_param is None:
+                    bg_tasks_param = param_name
+                # Don't include in clean_hints — handler injects this
+                continue
+            if _is_depends_annotation(annotation):
+                provider = _extract_depends_callable(annotation)
+                if provider is not None:
+                    depends_params[param_name] = provider
+                continue
+            if _is_header_annotation(annotation):
+                coerce_to = _extract_header_type(annotation)
+                is_optional = _is_optional_header(annotation)
+                param = sig.parameters.get(param_name)
+                default = param.default if param is not None else inspect.Parameter.empty
+                pipe_chain = _extract_header_pipe_chain(annotation)
+                header_params[param_name] = HeaderParamSpec(
+                    header_name=_param_to_header_name(param_name),
+                    coerce_to=coerce_to,
+                    default=default,
+                    is_optional=is_optional,
+                    pipe_chain=pipe_chain,
+                )
+                continue
+            if _is_state_annotation(annotation):
+                state_type = _extract_state_type(annotation)
+                state_params[param_name] = state_type
+                continue
+            base_type, fd, pipes = _extract_lauren_hint(annotation)
+            if pipes:
+                pipe_chains[param_name] = list(pipes)
+            # Store the base type (stripped of Lauren markers) for coerce_params
+            clean_hints[param_name] = base_type
 
         resource_meta = McpResourceMeta(
             uri_template=uri_template,
@@ -383,9 +887,14 @@ def mcp_resource(
             mime_type=mime_type,
             method_name=fn.__name__,
             query_params=list(compiled.query_params),
-            param_type_hints=hints,
+            param_type_hints=clean_hints,
             annotations=annotations,
             title=title,
+            pipe_chains=pipe_chains,
+            bg_tasks_param=bg_tasks_param,
+            depends_params=depends_params,
+            header_params=header_params,
+            state_params=state_params,
         )
         setattr(fn, MCP_RESOURCE_META, resource_meta)
         return fn
@@ -511,3 +1020,34 @@ def mcp_completion(
         return fn
 
     return decorator
+
+
+# ---------------------------------------------------------------------------
+# Backward-compat aliases (for tests written against the original main API)
+# ---------------------------------------------------------------------------
+
+
+def _extract_lauren_annotation(annotation: Any) -> Any | None:
+    """Return the FieldDescriptor or _ParamSpec embedded in *annotation*.
+
+    Backward-compat alias for older test code.  The merged implementation uses
+    ``_extract_lauren_hint`` which returns ``(base_type, fd, pipes)`` instead.
+    """
+    if not _is_context_annotation(annotation) and typing.get_origin(annotation) is typing.Annotated:
+        try:
+            from lauren.extractors import FieldDescriptor, _ParamSpec  # noqa: PLC0415
+
+            args = typing.get_args(annotation)
+            # Check if any arg is a _ParamSpec (pipe chain) or FieldDescriptor
+            for extra in args[1:]:
+                if isinstance(extra, _ParamSpec):
+                    return extra
+                if isinstance(extra, FieldDescriptor):
+                    return extra
+        except ImportError:
+            pass
+    return None
+
+
+#: Backward-compat alias.
+_is_bg_tasks_annotation = _is_background_tasks_annotation

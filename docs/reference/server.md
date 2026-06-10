@@ -398,6 +398,150 @@ async def search(self, query: str) -> list: ...
 
 ---
 
+## `ToolStream`
+
+```python
+@dataclass
+class ToolStream(Generic[T]):
+    generator: AsyncGenerator[T, None]
+    total: int | None = None
+    accumulate: Callable[[list[T]], Any] | None = None
+```
+
+Return type for `@mcp_tool` methods that produce incremental results.  Each
+value yielded by `generator` is sent to the connected client as a
+`notifications/progress` event (when the client supplied a `progressToken`).
+When the generator is exhausted, the accumulated value becomes the
+`tools/call` response.
+
+**Parameters**
+
+| Name | Type | Default | Description |
+|---|---|---|---|
+| `generator` | `AsyncGenerator[T, None]` | required | Async generator that yields chunk values |
+| `total` | `int \| None` | `None` | Declared total count; forwarded as `total` in each progress notification |
+| `accumulate` | `Callable[[list[T]], Any] \| None` | `None` | Reduces all chunks to the final response value; default: join `str` chunks, or return the last chunk |
+
+**Accumulation defaults**
+
+- `str` chunks — `"".join(chunks)`
+- All other types — last chunk, or `None` for an empty generator
+- Custom — `accumulate=lambda chunks: sum(chunks)` (or any callable)
+
+**Example**
+
+```python
+from lauren_mcp import ToolStream, mcp_tool
+
+@mcp_tool()
+async def stream_tokens(self, prompt: str) -> ToolStream[str]:
+    """Stream LLM tokens for a prompt.
+
+    Args:
+        prompt: The prompt to complete.
+    """
+    async def gen():
+        async for token in llm.stream_complete(prompt):
+            yield token
+
+    return ToolStream(gen())
+```
+
+Progress notifications require the client to include `_meta.progressToken` in
+the `tools/call` request.  Without it the stream still runs and the accumulated
+result is returned, but no notifications are sent.
+
+---
+
+## Lauren parameter injection
+
+The following Lauren-framework types can be declared as method parameters on
+`@mcp_tool` and `@mcp_resource` methods.  They are **excluded from the tool's
+JSON Schema** — the AI client never sees or provides them.
+
+See the **[Lauren Parameter Injection guide](../guides/tool-lauren-params.md)**
+for full examples.
+
+### `QueryField` / `PathField`
+
+```python
+from lauren import QueryField, PathField
+```
+
+Declarative field descriptors that add JSON Schema constraints and enforce them
+at call time.  Keywords:
+
+| Keyword | JSON Schema keyword |
+|---|---|
+| `ge=N` | `"minimum": N` |
+| `gt=N` | `"exclusiveMinimum": N` |
+| `le=N` | `"maximum": N` |
+| `lt=N` | `"exclusiveMaximum": N` |
+| `min_length=N` | `"minLength": N` |
+| `max_length=N` | `"maxLength": N` |
+| `pattern=r"..."` | `"pattern": "..."` |
+| `description="..."` | property description |
+
+Constraint violations return `INVALID_PARAMS (-32602)` to the client.
+
+### `@pipe()`
+
+```python
+from lauren import pipe
+from lauren.extractors import PipeContext
+```
+
+Callable transform applied to a parameter value after type coercion.  Declare
+with `Annotated[T, my_pipe]` or as a subscript `Query[T, my_pipe]`.  Pipes are
+**not** reflected in the JSON Schema.  Raising `ExtractorFieldError` returns
+`INVALID_PARAMS (-32602)`.
+
+### `Depends[callable]`
+
+```python
+from lauren import Depends
+```
+
+Injects the return value of `callable` into the parameter.  The factory is
+called once per tool invocation and memoised for that call — two parameters
+with the same factory get the same instance.  Supports sync functions, async
+functions, async generators (with cleanup), and async context managers.
+Parameters are **excluded from the JSON Schema**.
+
+### `Header[T]`
+
+```python
+from lauren import Header
+```
+
+Extracts a typed value from the transport headers.  The parameter name maps to
+a header: `x_user_id` → `"x-user-id"` (underscores to hyphens).  The Python
+default is used when the header is absent.  Parameters are **excluded from the
+JSON Schema**.  On stdio the default is always used.
+
+### `State[T]`
+
+```python
+from lauren import State          # also exported as StateExtractor
+```
+
+Provides a fresh `T()` instance scoped to the current call.  Multiple
+parameters with the same `State[T]` within one call share the same instance.
+Parameters are **excluded from the JSON Schema**.
+
+### `BackgroundTasks`
+
+```python
+from lauren import BackgroundTasks
+```
+
+Provides a task queue.  Tasks added with `bg.add_task(fn, *args, **kwargs)`
+run after the response is sent.  Both sync and async callables are accepted.
+Task errors are logged but do not affect the tool result.  Parameters are
+**excluded from the JSON Schema**.
+
+---
+
 ## `McpServerModule`
 
 ```python
