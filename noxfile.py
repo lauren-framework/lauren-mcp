@@ -35,7 +35,7 @@ def _install_all(session: nox.Session) -> None:
 def tests(session: nox.Session) -> None:
     """Run full test suite (parametrised across supported Python versions)."""
     _install_dev(session)
-    session.run("pytest", *session.posargs)
+    session.run("pytest", "-W", "ignore", *session.posargs)
 
 
 @nox.session(python=PRIMARY_PYTHON, name="tests_unit")

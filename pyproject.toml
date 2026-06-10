@@ -64,8 +64,8 @@ local_scheme     = "dirty-tag"
 [tool.setuptools.packages.find]
 where = ["src"]
 
-# [tool.uv.sources]
-# lauren = { path = "../lauren-framework", editable = true }
+[tool.uv.sources]
+lauren = { path = "../lauren-framework", editable = true }
 
 [tool.ruff]
 line-length    = 100
@@ -102,3 +102,8 @@ omit   = ["tests/*"]
 [tool.coverage.report]
 fail_under   = 80
 show_missing = true
+
+[dependency-groups]
+dev = [
+    "nox>=2026.4.10",
+]

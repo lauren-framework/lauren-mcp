@@ -557,7 +557,7 @@ class TestGuardMetadataForwarding:
 
     async def test_no_guards_no_metadata_attribute(self):
         """McpWsController without guards has no __lauren_use_guards__."""
-        from lauren_mcp._server._ws import _USE_GUARDS, mcp_ws_controller
+        from lauren_mcp._server._ws import mcp_ws_controller
 
         ctrl = mcp_ws_controller("/plain-test")
-        assert not hasattr(ctrl, _USE_GUARDS)
+        assert not hasattr(ctrl, "__lauren_use_guards__")

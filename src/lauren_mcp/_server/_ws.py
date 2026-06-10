@@ -5,7 +5,15 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from lauren import WebSocket, on_connect, on_disconnect, ws_controller
+from lauren import (
+    WebSocket,
+    on_connect,
+    on_disconnect,
+    use_guards,
+    use_interceptors,
+    use_middlewares,
+    ws_controller,
+)
 
 from lauren_mcp._server._dispatcher import McpDispatcher
 from lauren_mcp._types import (
@@ -24,106 +32,6 @@ _logger = logging.getLogger(__name__)
 # MCP notification methods handled specially by the transport layer
 _METHOD_INITIALIZED = "notifications/initialized"
 _METHOD_CANCEL = "$/cancelRequest"
-
-# Lauren decorator attribute names — mirrors lauren/decorators.py constants.
-# Stored on McpWsController so Lauren's future WS guard support picks them up.
-_USE_GUARDS = "__lauren_use_guards__"
-_USE_INTERCEPTORS = "__lauren_use_interceptors__"
-_USE_MIDDLEWARES = "__lauren_use_middlewares__"
-
-
-# ---------------------------------------------------------------------------
-# WS execution context — presented to guards at connection time
-# ---------------------------------------------------------------------------
-
-
-class _McpWsRequest:
-    """Read-only view of the WebSocket upgrade data shaped like a Lauren Request.
-
-    Guards that check ``ctx.request.headers`` or ``ctx.request.path`` work
-    transparently because this class surfaces the same attributes.
-    """
-
-    def __init__(self, ws: Any) -> None:
-        self._ws = ws
-
-    @property
-    def headers(self) -> Any:  # lauren.types.Headers
-        return self._ws.headers
-
-    @property
-    def path(self) -> str:
-        return self._ws.path
-
-    @property
-    def path_params(self) -> dict[str, str]:
-        return self._ws.path_params
-
-    @property
-    def method(self) -> str:
-        return "GET"  # WS upgrades are always GET requests
-
-    def get_metadata(self, key: str, default: Any = None) -> Any:
-        return default
-
-
-class _McpWsExecutionContext:
-    """Minimal ExecutionContext given to guards during a WS connection.
-
-    Guards receive this as ``ctx`` and typically access ``ctx.request.headers``
-    to check auth tokens — that works here because ``_McpWsRequest`` proxies
-    the WebSocket's header collection.
-    """
-
-    def __init__(self, ws: Any, handler_class: type | None = None) -> None:
-        self.request = _McpWsRequest(ws)
-        self.handler_class = handler_class
-        self.handler_func: Any = None
-        self.route_template: str | None = ws.path if hasattr(ws, "path") else None
-        self.metadata: dict[str, Any] = {}
-
-    def get_metadata(self, key: str, default: Any = None) -> Any:
-        return self.metadata.get(key, default)
-
-
-# ---------------------------------------------------------------------------
-# Dynamic __init__ builder for DI-injected guards
-# ---------------------------------------------------------------------------
-
-
-def _build_init_with_guards(
-    guard_classes: tuple[type, ...],
-) -> Any:
-    """Return an ``__init__`` that accepts the dispatcher + one guard per class.
-
-    Lauren's DI resolves constructor parameters by their type annotation.  We
-    use ``exec()`` to create a function with both the correct parameter *names*
-    (required by Python) and correct type *annotations* (required by Lauren's
-    DI compiler).
-
-    Example for two guard classes [AuthGuard, RateGuard]:
-    ``def __init__(self, dispatcher, _mcpg0, _mcpg1): ...``
-    with annotations ``{dispatcher: McpDispatcher, _mcpg0: AuthGuard, _mcpg1: RateGuard}``.
-    """
-    guard_names = [f"_mcpg{i}" for i in range(len(guard_classes))]
-    params = ", ".join(["dispatcher"] + guard_names)
-    guards_list = ", ".join(guard_names)
-
-    code = (
-        f"def __init__(self, {params}):\n"
-        f"    self._dispatcher = dispatcher\n"
-        f"    self._initialized = False\n"
-        f"    self._mcp_guards = [{guards_list}]\n"
-    )
-    ns: dict[str, Any] = {}
-    exec(code, ns)  # noqa: S102
-    fn = ns["__init__"]
-
-    fn.__annotations__ = {"dispatcher": McpDispatcher, "return": None}
-    for i, cls in enumerate(guard_classes):
-        fn.__annotations__[f"_mcpg{i}"] = cls
-
-    return fn
 
 
 # ---------------------------------------------------------------------------
@@ -144,9 +52,10 @@ def mcp_ws_controller(
     The returned class is a fully-decorated Lauren WebSocket gateway that:
 
     1. Accepts the WebSocket upgrade and starts a message loop.
-    2. Optionally runs *guard_classes* at connection time — if any guard
-       returns ``False``, the connection is closed with code 1008
-       (policy violation) before the MCP handshake begins.
+    2. Optionally enforces *guard_classes* at connection time — Lauren's WS
+       runtime calls each guard's ``can_activate(ctx)`` before the ``@on_connect``
+       hook runs; if any guard returns ``False`` the connection is closed with
+       code 1008 (policy violation) before the MCP handshake begins.
     3. Enforces MCP's ``initialize`` / ``initialized`` handshake — any
        non-``initialize`` request received before the handshake completes
        is rejected with ``INVALID_REQUEST``.
@@ -164,23 +73,17 @@ def mcp_ws_controller(
         DI token to inject as the dispatcher; defaults to
         :class:`McpDispatcher` (the concrete singleton).
     guard_classes:
-        Lauren guard classes (decorated with ``@injectable``) whose
-        ``can_activate(ctx)`` is called before the MCP handshake.  Guards
-        are resolved from Lauren's DI container (REQUEST scope — one
-        instance per connection).  Rejected connections receive close
-        code ``1008`` (policy violation).
+        Lauren guard classes whose ``can_activate(ctx)`` is called by the
+        framework before ``@on_connect``.  Guards are resolved from Lauren's
+        DI container.  Rejected connections receive close code ``1008``.
     interceptor_classes:
-        Lauren interceptor classes stored as metadata for future framework
-        compatibility.  Not yet executed per-frame; use guards for auth.
+        Lauren interceptor classes that wrap the ``@on_connect`` lifecycle
+        hook.  Applied by the framework's native interceptor chain.
     middleware_classes:
-        Lauren middleware classes stored as metadata for future framework
-        compatibility.  For per-request middleware use
-        ``LaurenFactory.create(…, global_middlewares=[…])``.
+        Lauren middleware classes stored as metadata.  For per-request
+        middleware use ``LaurenFactory.create(…, global_middlewares=[…])``.
     """
     ws_path = path.rstrip("/") + "/ws"
-    _guard_classes = tuple(guard_classes)
-    _interceptor_classes = tuple(interceptor_classes)
-    _middleware_classes = tuple(middleware_classes)
 
     @ws_controller(ws_path)
     class McpWsController:
@@ -191,40 +94,18 @@ def mcp_ws_controller(
             # Per-connection state: True once the client has sent
             # ``notifications/initialized`` after the handshake.
             self._initialized: bool = False
-            # Guards populated only when guard_classes are provided
-            # (overridden by _build_init_with_guards below).
-            self._mcp_guards: list[Any] = []
 
         @on_connect
         async def handle_connect(self, ws: WebSocket) -> None:
-            """Run guards, accept the connection, then enter the MCP message loop.
+            """Accept the connection and enter the MCP message loop.
 
-            Guard check happens before ``ws.accept()`` so rejected clients
-            receive close code 1008 rather than being accepted and then dropped.
+            Guard checks and interceptors are handled by Lauren's WS runtime
+            before this hook is called — no manual guard loop needed here.
 
-            Awaiting ``_message_loop`` here keeps Lauren's built-in
-            event-routing loop from starting — MCP uses raw JSON-RPC frames,
-            not Lauren's ``event``-keyed dispatch format.
+            Awaiting ``_message_loop`` keeps Lauren's built-in event-routing
+            loop from starting — MCP uses raw JSON-RPC frames, not Lauren's
+            ``event``-keyed dispatch format.
             """
-            # --- Guard check (before accepting the connection) ---
-            if self._mcp_guards:
-                ctx = _McpWsExecutionContext(ws, handler_class=type(self))
-                for guard in self._mcp_guards:
-                    try:
-                        allowed = await guard.can_activate(ctx)
-                    except Exception:
-                        _logger.exception("MCP WS: guard %r raised during check", guard)
-                        allowed = False
-                    if not allowed:
-                        _logger.debug(
-                            "MCP WS: connection rejected by guard %r at %s",
-                            type(guard).__name__,
-                            ws.path if hasattr(ws, "path") else "?",
-                        )
-                        await ws.close(1008)  # 1008 = Policy Violation
-                        return
-
-            # --- Accept and enter message loop ---
             await ws.accept()
             await self._message_loop(ws)
 
@@ -321,19 +202,13 @@ def mcp_ws_controller(
     McpWsController.__name__ = "McpWsController"
     McpWsController.__qualname__ = f"mcp_ws_controller.<locals>.McpWsController[{ws_path}]"
 
-    # If guard classes were supplied, replace __init__ with a version that
-    # accepts guard instances via Lauren's DI (resolved per connection).
-    if _guard_classes:
-        McpWsController.__init__ = _build_init_with_guards(_guard_classes)  # type: ignore[method-assign]
-
-    # Store metadata using Lauren's decorator attribute names so that if
-    # Lauren's WS runtime gains guard/interceptor/middleware support in a
-    # future release, the controller is already annotated correctly.
-    if _guard_classes:
-        setattr(McpWsController, _USE_GUARDS, list(_guard_classes))
-    if _interceptor_classes:
-        setattr(McpWsController, _USE_INTERCEPTORS, list(_interceptor_classes))
-    if _middleware_classes:
-        setattr(McpWsController, _USE_MIDDLEWARES, list(_middleware_classes))
+    # Apply Lauren cross-cutting decorators so the framework's native WS
+    # runtime handles guards, interceptors, and middlewares automatically.
+    if guard_classes:
+        use_guards(*guard_classes)(McpWsController)
+    if interceptor_classes:
+        use_interceptors(*interceptor_classes)(McpWsController)
+    if middleware_classes:
+        use_middlewares(*middleware_classes)(McpWsController)
 
     return McpWsController
