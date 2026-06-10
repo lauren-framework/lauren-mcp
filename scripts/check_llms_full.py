@@ -13,6 +13,11 @@ from __future__ import annotations
 import pathlib
 import sys
 
+# Ensure the package is importable from source even when not installed.
+_src = pathlib.Path(__file__).resolve().parent.parent / "src"
+if str(_src) not in sys.path:
+    sys.path.insert(0, str(_src))
+
 
 def main() -> int:
     # -------------------------------------------------------------------------

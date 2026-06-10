@@ -16,6 +16,7 @@ from lauren import (
 )
 
 from lauren_mcp._server._dispatcher import McpDispatcher
+from lauren_mcp._server._propagate import _apply_server_metadata
 from lauren_mcp._types import (
     JsonRpcErrorResponse,
     JsonRpcNotification,
@@ -43,6 +44,7 @@ def mcp_ws_controller(
     path: str,
     dispatcher_cls: type = McpDispatcher,
     *,
+    source: Any | None = None,
     guard_classes: tuple[type, ...] = (),
     interceptor_classes: tuple[type, ...] = (),
     middleware_classes: tuple[type, ...] = (),
@@ -52,10 +54,11 @@ def mcp_ws_controller(
     The returned class is a fully-decorated Lauren WebSocket gateway that:
 
     1. Accepts the WebSocket upgrade and starts a message loop.
-    2. Optionally enforces *guard_classes* at connection time — Lauren's WS
-       runtime calls each guard's ``can_activate(ctx)`` before the ``@on_connect``
-       hook runs; if any guard returns ``False`` the connection is closed with
-       code 1008 (policy violation) before the MCP handshake begins.
+    2. Enforces ``@use_guards``, ``@use_interceptors``, ``@use_middlewares``,
+       ``@use_encoder``, ``@use_exception_handlers``, and ``@set_metadata``
+       from *source* (typically the ``@mcp_server`` class) via
+       :func:`~lauren.propagate_metadata`.  Lauren's WS runtime then runs
+       guards before ``@on_connect`` and interceptors wrap the connect hook.
     3. Enforces MCP's ``initialize`` / ``initialized`` handshake — any
        non-``initialize`` request received before the handshake completes
        is rejected with ``INVALID_REQUEST``.
@@ -72,16 +75,21 @@ def mcp_ws_controller(
     dispatcher_cls:
         DI token to inject as the dispatcher; defaults to
         :class:`McpDispatcher` (the concrete singleton).
+    source:
+        Source class (typically the ``@mcp_server``-decorated class) whose
+        Lauren ``@use_*`` metadata is propagated onto the generated
+        controller via :func:`~lauren.propagate_metadata`.  All metadata
+        categories are propagated: guards, interceptors, middlewares,
+        exception handlers, encoder, and user metadata.  When *source* is
+        provided, *guard_classes*, *interceptor_classes*, and
+        *middleware_classes* are ignored.
     guard_classes:
-        Lauren guard classes whose ``can_activate(ctx)`` is called by the
-        framework before ``@on_connect``.  Guards are resolved from Lauren's
-        DI container.  Rejected connections receive close code ``1008``.
+        Explicit guard classes — used only when *source* is ``None``.
+        Prefer *source* for new code.
     interceptor_classes:
-        Lauren interceptor classes that wrap the ``@on_connect`` lifecycle
-        hook.  Applied by the framework's native interceptor chain.
+        Explicit interceptor classes — used only when *source* is ``None``.
     middleware_classes:
-        Lauren middleware classes stored as metadata.  For per-request
-        middleware use ``LaurenFactory.create(…, global_middlewares=[…])``.
+        Explicit middleware classes — used only when *source* is ``None``.
     """
     ws_path = path.rstrip("/") + "/ws"
 
@@ -202,13 +210,18 @@ def mcp_ws_controller(
     McpWsController.__name__ = "McpWsController"
     McpWsController.__qualname__ = f"mcp_ws_controller.<locals>.McpWsController[{ws_path}]"
 
-    # Apply Lauren cross-cutting decorators so the framework's native WS
-    # runtime handles guards, interceptors, and middlewares automatically.
-    if guard_classes:
-        use_guards(*guard_classes)(McpWsController)
-    if interceptor_classes:
-        use_interceptors(*interceptor_classes)(McpWsController)
-    if middleware_classes:
-        use_middlewares(*middleware_classes)(McpWsController)
+    # Apply Lauren cross-cutting metadata so the framework's native WS runtime
+    # enforces guards/interceptors before @on_connect and propagates all other
+    # @use_* annotations (encoder, exception_handlers, user_metadata).
+    if source is not None:
+        _apply_server_metadata(source, McpWsController)
+    else:
+        # Legacy explicit params — kept for backward compatibility.
+        if guard_classes:
+            use_guards(*guard_classes)(McpWsController)
+        if interceptor_classes:
+            use_interceptors(*interceptor_classes)(McpWsController)
+        if middleware_classes:
+            use_middlewares(*middleware_classes)(McpWsController)
 
     return McpWsController

@@ -772,6 +772,91 @@ if __name__ == "__main__":
 
 ---
 
+## 12. Inspecting MCP server metadata with `lauren.reflect`
+
+`lauren>=1.6.0` ships a full metadata introspection API.  You can read the
+guard, interceptor, and metadata annotations from any `@mcp_server` class
+without touching internal `__dict__` attributes:
+
+```python
+from lauren.reflect import (
+    reflect_guards,
+    reflect_interceptors,
+    reflect_user_metadata,
+    reflect_all,
+    get_all_routes,
+    get_all_ws_gateways,
+)
+
+@use_guards(ApiKeyGuard, RateLimitGuard)
+@set_metadata("rate_limit", 100)
+@mcp_server("/mcp")
+class MyServer: ...
+
+reflect_guards(MyServer)             # (ApiKeyGuard, RateLimitGuard)
+reflect_user_metadata(MyServer)      # {"rate_limit": 100}
+meta = reflect_all(MyServer)         # ReflectedMeta(guards=…, interceptors=…, middlewares=…)
+```
+
+After the app has started, query the compiled dispatch table:
+
+```python
+app = LaurenFactory.create(AppModule)
+TestClient(app)  # triggers startup
+
+for gw in get_all_ws_gateways(app):
+    print(gw.path_template, gw.guards)   # "/mcp/ws"  (ApiKeyGuard, RateLimitGuard)
+
+for route in get_all_routes(app):
+    print(route.method, route.full_path)  # GET /mcp/sse, POST /mcp/message, …
+```
+
+### Sharing a guard across HTTP controllers and MCP servers
+
+Because `WsConnectionContext` duck-types with `ExecutionContext` on the fields
+guards most commonly read (`headers`, `path`, `method`), the same guard class
+works for both:
+
+```python
+@injectable(scope=Scope.SINGLETON)
+class ApiKeyGuard:
+    async def can_activate(self, ctx) -> bool:
+        # ctx is ExecutionContext for HTTP, WsConnectionContext for MCP/WS
+        return ctx.request.headers.get("x-api-key") == "secret"
+
+@use_guards(ApiKeyGuard)
+@controller("/api")          # HTTP controller — guard runs on every request
+class HttpController: ...
+
+@use_guards(ApiKeyGuard)
+@mcp_server("/mcp")          # MCP server — guard runs before the WS handshake
+class McpController: ...
+```
+
+### Propagating guards with `@propagate_metadata`
+
+When multiple MCP servers (or HTTP controllers) share the same auth policy, use
+`@propagate_metadata` to avoid repeating `@use_guards` on every class:
+
+```python
+from lauren import propagate_metadata
+
+@use_guards(ApiKeyGuard)
+@set_metadata("require_auth", True)
+class _AuthPolicy:
+    pass
+
+@propagate_metadata(_AuthPolicy)
+@mcp_server("/catalogue")
+class CatalogueServer: ...
+
+@propagate_metadata(_AuthPolicy)
+@mcp_server("/inventory")
+class InventoryServer: ...
+```
+
+---
+
 ## Next steps
 
 - **[Decorators in depth](decorators.md)** — full `@mcp_tool`/`@mcp_resource`/`@mcp_prompt` reference

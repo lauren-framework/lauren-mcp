@@ -102,6 +102,7 @@ nav:
     - Server: generated-reference/server.md
     - Client: generated-reference/client.md
     - Types: generated-reference/types.md
+  - Comparisons: comparisons.md
   - Development:
     - development/index.md
     - Release Process: development/release.md

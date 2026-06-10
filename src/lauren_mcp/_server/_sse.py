@@ -6,12 +6,21 @@ import json
 import logging
 import secrets
 from collections.abc import AsyncGenerator
+from typing import Any
 
-from lauren import controller, get, post
+from lauren import (
+    controller,
+    get,
+    post,
+    use_guards,
+    use_interceptors,
+    use_middlewares,
+)
 from lauren.sse import EventStream, ServerSentEvent
 from lauren.types import Headers, Request, Response
 
 from lauren_mcp._server._dispatcher import McpDispatcher
+from lauren_mcp._server._propagate import _apply_server_metadata
 from lauren_mcp._server._session import SseSessionStore
 from lauren_mcp._types import (
     JsonRpcErrorResponse,
@@ -33,6 +42,7 @@ _SESSION_HEADER = "mcp-session-id"
 def mcp_http_sse_controller(
     base_path: str,
     *,
+    source: Any | None = None,
     guard_classes: tuple[type, ...] = (),
     interceptor_classes: tuple[type, ...] = (),
     middleware_classes: tuple[type, ...] = (),
@@ -59,6 +69,19 @@ def mcp_http_sse_controller(
     ----------
     base_path:
         URL prefix for both endpoints (e.g. ``"/mcp"``).
+    source:
+        Source class (typically the ``@mcp_server``-decorated class) whose
+        Lauren ``@use_*`` metadata is propagated onto the generated
+        controller via :func:`~lauren.propagate_metadata`.  Covers guards,
+        interceptors, middlewares, exception handlers, encoder, and user
+        metadata.  When *source* is provided, *guard_classes*,
+        *interceptor_classes*, and *middleware_classes* are ignored.
+    guard_classes:
+        Explicit guard classes — used only when *source* is ``None``.
+    interceptor_classes:
+        Explicit interceptor classes — used only when *source* is ``None``.
+    middleware_classes:
+        Explicit middleware classes — used only when *source* is ``None``.
     """
 
     @controller(base_path)
@@ -179,22 +202,19 @@ def mcp_http_sse_controller(
         f"mcp_http_sse_controller.<locals>.McpSseController[{base_path}]"
     )
 
-    # Apply Lauren's cross-cutting-concern decorators to the HTTP controller.
-    # Because McpSseController is a real Lauren @controller, these are
-    # processed by Lauren's HTTP pipeline — no manual checking needed.
-    if middleware_classes:
-        from lauren import use_middlewares  # noqa: PLC0415
-
-        McpSseController = use_middlewares(*middleware_classes)(McpSseController)
-
-    if guard_classes:
-        from lauren import use_guards  # noqa: PLC0415
-
-        McpSseController = use_guards(*guard_classes)(McpSseController)
-
-    if interceptor_classes:
-        from lauren import use_interceptors  # noqa: PLC0415
-
-        McpSseController = use_interceptors(*interceptor_classes)(McpSseController)
+    # Apply Lauren cross-cutting metadata.  Because McpSseController is a
+    # real Lauren @controller, the HTTP pipeline processes these natively —
+    # guards run per-request, interceptors wrap handlers, encoder overrides
+    # the app-level encoder for all SSE/POST routes, etc.
+    if source is not None:
+        _apply_server_metadata(source, McpSseController)
+    else:
+        # Legacy explicit params — kept for backward compatibility.
+        if middleware_classes:
+            McpSseController = use_middlewares(*middleware_classes)(McpSseController)
+        if guard_classes:
+            McpSseController = use_guards(*guard_classes)(McpSseController)
+        if interceptor_classes:
+            McpSseController = use_interceptors(*interceptor_classes)(McpSseController)
 
     return McpSseController

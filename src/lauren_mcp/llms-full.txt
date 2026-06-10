@@ -269,6 +269,92 @@ app.include(McpServerModule.for_root(transports=["sse"]))       # SSE only
 
 ---
 
+## Guards, interceptors, and middlewares on MCP servers
+
+`lauren-mcp` requires `lauren>=1.6.0`, which natively enforces `@use_guards`
+and `@use_interceptors` on `@ws_controller` classes (and therefore on any
+class produced by `McpServerModule.for_root()`).
+
+### Applying guards
+
+Stack Lauren's `@use_guards` directly on your `@mcp_server` class.  The guard
+runs before the MCP `initialize` handshake — rejected connections receive
+WebSocket close code 1008:
+
+```python
+from lauren import injectable, Scope, use_guards, WsConnectionContext
+from lauren_mcp import mcp_server, mcp_tool
+
+@injectable(scope=Scope.SINGLETON)
+class ApiKeyGuard:
+    async def can_activate(self, ctx: WsConnectionContext) -> bool:
+        return ctx.request.headers.get("x-api-key") == "secret"
+
+@use_guards(ApiKeyGuard)
+@mcp_server("/mcp")
+class MyMcpServer:
+    @mcp_tool()
+    async def greet(self, name: str) -> str:
+        "Say hello."
+        return f"Hello, {name}!"
+```
+
+Multiple guards:
+```python
+@use_guards(ApiKeyGuard, RateLimitGuard)
+@mcp_server("/mcp")
+class MyMcpServer: ...
+```
+
+Guards can inject DI dependencies via `__init__` exactly like any other
+Lauren `@injectable`:
+
+```python
+@injectable(scope=Scope.SINGLETON)
+class TokenAuthGuard:
+    def __init__(self, tokens: TokenStore) -> None:
+        self._tokens = tokens
+
+    async def can_activate(self, ctx: WsConnectionContext) -> bool:
+        token = ctx.request.headers.get("authorization", "")
+        return self._tokens.is_valid(token)
+```
+
+### Global WebSocket guards
+
+Pass `global_ws_guards` to `LaurenFactory.create()` to protect every MCP
+server in the application:
+
+```python
+app = LaurenFactory.create(AppModule, global_ws_guards=[ApiKeyGuard])
+```
+
+### `WsConnectionContext` fields
+
+The guard receives a `WsConnectionContext` (duck-typed with HTTP `ExecutionContext`):
+
+| Field | Value |
+|---|---|
+| `ctx.request.headers` | HTTP upgrade request headers |
+| `ctx.request.path` | Matched path (e.g. `"/mcp/ws"`) |
+| `ctx.request.path_params` | Path template parameters |
+| `ctx.request.method` | Always `"GET"` |
+| `ctx.connection` | The live `WebSocket` object |
+| `ctx.handler_class` | The `McpWsController` class |
+| `ctx.route_template` | Path template string |
+
+### Reading guard metadata with `lauren.reflect`
+
+```python
+from lauren.reflect import reflect_guards, reflect_interceptors, reflect_all
+
+reflect_guards(MyMcpServer)       # tuple[type, ...] from @use_guards
+reflect_interceptors(MyMcpServer) # tuple[type, ...] from @use_interceptors
+reflect_all(MyMcpServer)          # ReflectedMeta(guards, interceptors, middlewares)
+```
+
+---
+
 ## Client
 
 ### McpServer

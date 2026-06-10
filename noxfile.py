@@ -19,11 +19,16 @@ nox.options.reuse_venv = "yes"
 
 
 def _install_dev(session: nox.Session) -> None:
-    session.run("uv", "sync", "--extra", "dev", "--active", external=True)
+    # All nox session venvs in this repo may be root-owned, preventing uv from
+    # installing into them.  Sync into the project .venv (no --active) so all
+    # tools (ruff, prek, twine, mypy, …) are available in .venv/bin/.
+    # Sessions use external=True to find tools there via PATH, and pytest
+    # sessions use pythonpath=["src"] in pyproject.toml to import lauren_mcp.
+    session.run("uv", "sync", "--extra", "dev", external=True)
 
 
 def _install_all(session: nox.Session) -> None:
-    session.run("uv", "sync", "--extra", "all", "--extra", "dev", "--active", external=True)
+    session.run("uv", "sync", "--extra", "all", "--extra", "dev", external=True)
 
 
 # ---------------------------------------------------------------------------
@@ -125,21 +130,33 @@ def lint(session: nox.Session) -> None:
     """Run ruff linter."""
     _install_dev(session)
     # Redirect cache to /tmp so root-owned .ruff_cache doesn't block ci-slave runs.
-    session.run("ruff", "check", "--fix", "src", "tests", "noxfile.py", "scripts", *session.posargs)
+    session.run(
+        "ruff",
+        "check",
+        "--fix",
+        "src",
+        "tests",
+        "noxfile.py",
+        "scripts",
+        *session.posargs,
+        external=True,
+    )
 
 
 @nox.session(python=PRIMARY_PYTHON, name="format")
 def format_(session: nox.Session) -> None:
     """Run ruff formatter and auto-fix lint issues."""
     _install_dev(session)
-    session.run("ruff", "format", "src", "tests", "noxfile.py", "scripts", *session.posargs)
+    session.run(
+        "ruff", "format", "src", "tests", "noxfile.py", "scripts", *session.posargs, external=True
+    )
 
 
 @nox.session(python=PRIMARY_PYTHON, name="typecheck")
 def typecheck(session: nox.Session) -> None:
     """Run mypy type-checker."""
     _install_dev(session)
-    session.run("mypy", "src/lauren_mcp", *session.posargs)
+    session.run("mypy", "src/lauren_mcp", *session.posargs, external=True)
 
 
 # ---------------------------------------------------------------------------
@@ -151,7 +168,14 @@ def typecheck(session: nox.Session) -> None:
 def llms_check(session: nox.Session) -> None:
     """Verify that llms-full.txt covers all public symbols."""
     _install_dev(session)
-    session.run("python", "scripts/check_llms_full.py", *session.posargs)
+    # Add src/ to PYTHONPATH so lauren_mcp is importable directly from source
+    # without requiring an editable install in the session venv.
+    session.run(
+        "python",
+        "scripts/check_llms_full.py",
+        *session.posargs,
+        env={"PYTHONPATH": "src"},
+    )
 
 
 @nox.session(python=PRIMARY_PYTHON, name="prek")
@@ -161,7 +185,7 @@ def prek(session: nox.Session) -> None:
     # --all-files avoids the git stash step (which requires writing git objects
     # that may be owned by root in this environment).
     args = session.posargs or ("--all-files",)
-    session.run("prek", "run", *args)
+    session.run("prek", "run", *args, external=True)
 
 
 # ---------------------------------------------------------------------------
@@ -173,14 +197,14 @@ def prek(session: nox.Session) -> None:
 def docs(session: nox.Session) -> None:
     """Build the MkDocs documentation (strict mode)."""
     _install_dev(session)
-    session.run("mkdocs", "build", "--strict", *session.posargs)
+    session.run("mkdocs", "build", "--strict", *session.posargs, external=True)
 
 
 @nox.session(python=PRIMARY_PYTHON, name="docs_serve")
 def docs_serve(session: nox.Session) -> None:
     """Serve the MkDocs documentation locally."""
     _install_dev(session)
-    session.run("mkdocs", "serve", *session.posargs)
+    session.run("mkdocs", "serve", *session.posargs, external=True)
 
 
 # ---------------------------------------------------------------------------
@@ -195,14 +219,17 @@ def build(session: nox.Session) -> None:
     if dist.exists():
         shutil.rmtree(dist)
     _install_dev(session)
-    session.run("python", "-m", "build", "--wheel", "--sdist", *session.posargs)
+    # pyproject-build is the CLI entry-point for the build package, installed
+    # in .venv/bin/ — use it directly rather than python -m build so the
+    # package doesn't need to be installed in the (root-owned) session venv.
+    session.run("pyproject-build", "--wheel", "--sdist", *session.posargs, external=True)
 
 
 @nox.session(python=PRIMARY_PYTHON, name="build_check")
 def build_check(session: nox.Session) -> None:
     """Check the built distributions with twine."""
     _install_dev(session)
-    session.run("twine", "check", "dist/*", *session.posargs)
+    session.run("twine", "check", "dist/*", *session.posargs, external=True)
 
 
 # ---------------------------------------------------------------------------

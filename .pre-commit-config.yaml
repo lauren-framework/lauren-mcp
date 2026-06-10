@@ -128,7 +128,7 @@ repos:
       # the package or the reference file changes (cheap on every commit).
       - id: llms-full-txt-sync
         name: llms-full.txt is in sync with lauren_mcp.__all__
-        entry: uv run python scripts/check_llms_full.py
+        entry: python scripts/check_llms_full.py
         language: python
         pass_filenames: false
         files: ^(lauren/.*\.py|llms-full\.txt)$

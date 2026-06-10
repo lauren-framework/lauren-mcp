@@ -168,44 +168,27 @@ class McpServerModule:
         # ------------------------------------------------------------------
         # 5. Build transport controller(s)
         #
-        # Guard/interceptor/middleware classes declared on *server_cls* via
-        # ``@use_guards``, ``@use_interceptors``, ``@use_middlewares`` are
-        # forwarded to the WS controller so they are enforced at connection
-        # time and stored as Lauren metadata for future WS runtime support.
+        # All Lauren ``@use_*`` metadata declared on *server_cls* — guards,
+        # interceptors, middlewares, encoder, exception_handlers, and user
+        # metadata (@set_metadata) — is propagated onto the generated
+        # transport controllers via ``propagate_metadata(server_cls)``.
+        # This means every annotation on the @mcp_server class is enforced
+        # at runtime:
+        #   - ``@use_guards``       → WS: before @on_connect; SSE: per-request
+        #   - ``@use_interceptors`` → WS: wraps @on_connect; SSE: per-handler
+        #   - ``@use_middlewares``  → SSE: per-request middleware chain
+        #   - ``@use_encoder``      → SSE: encoder for all routes on this ctrl
+        #   - ``@use_exception_handlers`` → SSE: per-controller exc handling
+        #   - ``@set_metadata``     → readable by guards via ctx.get_metadata()
         # ------------------------------------------------------------------
         path: str = server_meta.path
         effective_transport = transport or server_meta.transport
 
-        # Read Lauren decorator metadata from server_cls (own __dict__ only
-        # — no inheritance, matching Lauren's own "metadata is never
-        # inherited" rule).
-        _srv_guards: tuple[type, ...] = tuple(server_cls.__dict__.get("__lauren_use_guards__", ()))
-        _srv_interceptors: tuple[type, ...] = tuple(
-            server_cls.__dict__.get("__lauren_use_interceptors__", ())
-        )
-        _srv_middlewares: tuple[type, ...] = tuple(
-            server_cls.__dict__.get("__lauren_use_middlewares__", ())
-        )
-
         controllers: list[type] = []
         if effective_transport in ("ws", "both"):
-            controllers.append(
-                mcp_ws_controller(
-                    path,
-                    guard_classes=_srv_guards,
-                    interceptor_classes=_srv_interceptors,
-                    middleware_classes=_srv_middlewares,
-                )
-            )
+            controllers.append(mcp_ws_controller(path, source=server_cls))
         if effective_transport in ("sse", "both"):
-            controllers.append(
-                mcp_http_sse_controller(
-                    path,
-                    guard_classes=_srv_guards,
-                    interceptor_classes=_srv_interceptors,
-                    middleware_classes=_srv_middlewares,
-                )
-            )
+            controllers.append(mcp_http_sse_controller(path, source=server_cls))
 
         # ------------------------------------------------------------------
         # 6. Capture all resolved values in closure-friendly locals
@@ -368,12 +351,25 @@ class McpServerModule:
         #    logic lives in _McpHandlerRegistrar above.
         # ------------------------------------------------------------------
         # Combine built-in providers with any user-supplied extra providers.
-        # Guard/interceptor classes from @use_guards etc. on server_cls are
-        # added automatically so Lauren's DI can inject them per-connection.
+        # Guard/interceptor/middleware classes declared on server_cls are
+        # added automatically so Lauren's DI can resolve them per-connection.
+        # We read them back from server_cls (own __dict__) because
+        # propagate_metadata already stored them on the transport controllers,
+        # and the DI container still needs explicit type registrations here.
+        from lauren.reflect import (  # noqa: PLC0415
+            reflect_guards,
+            reflect_interceptors,
+            reflect_middlewares,
+        )
+
         _existing_extra = set(providers or [])
         _auto_guard_providers: list[type] = [
             cls
-            for cls in (*_srv_guards, *_srv_interceptors, *_srv_middlewares)
+            for cls in (
+                *reflect_guards(server_cls),
+                *reflect_interceptors(server_cls),
+                *reflect_middlewares(server_cls),
+            )
             if cls not in _existing_extra
         ]
         _all_providers = [

@@ -71,4 +71,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `scripts/check_llms_full.py` — CI check that `llms-full.txt` covers `__all__`
 - `scripts/generate_api_docs.py` — generate `docs/generated-reference/` pages
 
+### Phase 7 — Native WS guard/interceptor support + reflect API
+
+- **`lauren>=1.6.0` minimum** — `@use_guards` and `@use_interceptors` now work
+  natively on `@ws_controller` (and therefore on `@mcp_server`) classes; the
+  framework's WS runtime reads and enforces them before `@on_connect` fires.
+  No workarounds needed in extension packages.
+- **`McpServerModule.for_root()` simplified** — the manual
+  `server_cls.__dict__.get("__lauren_use_guards__", ())` reads in
+  `server/_module.py` replaced with the stable public API:
+  `reflect_guards(server_cls)`, `reflect_interceptors(server_cls)`,
+  `reflect_middlewares(server_cls)` from `lauren.reflect`.
+- **`docs/comparisons.md`** — new page comparing `lauren-mcp` with FastMCP and
+  the official Anthropic `mcp` SDK.
+
 [Unreleased]: https://github.com/lauren-framework/lauren-mcp/compare/HEAD...HEAD

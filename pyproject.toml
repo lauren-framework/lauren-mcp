@@ -25,7 +25,7 @@ classifiers = [
     "Typing :: Typed",
 ]
 dependencies = [
-    "lauren>=1.5.0",
+    "lauren>=1.6.0",
     "anyio>=4.0",
 ]
 
@@ -63,9 +63,6 @@ local_scheme     = "dirty-tag"
 
 [tool.setuptools.packages.find]
 where = ["src"]
-
-[tool.uv.sources]
-lauren = { path = "../lauren-framework", editable = true }
 
 [tool.ruff]
 line-length    = 100
