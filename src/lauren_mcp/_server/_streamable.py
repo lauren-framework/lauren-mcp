@@ -165,7 +165,9 @@ def mcp_streamable_http_controller(
         # --------------------------------------------------------------
 
         @post("/")
-        async def handle_post(self, request: Request) -> Response | EventStream:
+        async def handle_post(
+            self, request: Request, execution_context: ExecutionContext
+        ) -> Response | EventStream:
             try:
                 raw_body = await request.body()
                 msg = parse_message(raw_body)
@@ -179,7 +181,9 @@ def mcp_streamable_http_controller(
                 return _json_response(err.to_json(), status=400)
 
             if stateless:
-                return await self._handle_stateless(request, msg)
+                return await self._handle_stateless(
+                    request, msg, execution_context=execution_context
+                )
 
             # --- Client responses to server-initiated RPCs ---
             if isinstance(msg, (JsonRpcResponse, JsonRpcErrorResponse)):
@@ -218,12 +222,16 @@ def mcp_streamable_http_controller(
                 session = self._require_session(request)
                 if isinstance(session, Response):
                     return session
-                return await self._dispatch_request(request, msg, session)
+                return await self._dispatch_request(
+                    request, msg, session, execution_context=execution_context
+                )
 
             err = build_error_response(None, McpErrorCode.INVALID_REQUEST, "Unsupported message")
             return _json_response(err.to_json(), status=400)
 
-        async def _handle_stateless(self, request: Request, msg: Any) -> Response | EventStream:
+        async def _handle_stateless(
+            self, request: Request, msg: Any, *, execution_context: ExecutionContext | None = None
+        ) -> Response | EventStream:
             """Process a single JSON-RPC message with no session state."""
 
             # Notifications in stateless mode: accept and discard.
@@ -254,7 +262,7 @@ def mcp_streamable_http_controller(
 
             binding = TransportBinding(
                 headers=request.headers,
-                execution_context=ExecutionContext(request=request),
+                execution_context=execution_context or ExecutionContext(request=request),
                 session_id=None,
                 send_notification=_send_notification,
                 client_rpc=_client_rpc_unavailable,
@@ -342,6 +350,8 @@ def mcp_streamable_http_controller(
             request: Request,
             session: StreamableSession,
             notification_queue: asyncio.Queue[str] | None,
+            *,
+            execution_context: ExecutionContext | None = None,
         ) -> TransportBinding:
             async def _send_notification(payload: dict[str, Any]) -> None:
                 raw = json.dumps(payload)
@@ -369,7 +379,7 @@ def mcp_streamable_http_controller(
 
             return TransportBinding(
                 headers=request.headers,
-                execution_context=ExecutionContext(request=request),
+                execution_context=execution_context or ExecutionContext(request=request),
                 session_id=session.session_id,
                 send_notification=_send_notification,
                 client_rpc=_client_rpc,
@@ -377,12 +387,19 @@ def mcp_streamable_http_controller(
             )
 
         async def _dispatch_request(
-            self, request: Request, msg: JsonRpcRequest, session: StreamableSession
+            self,
+            request: Request,
+            msg: JsonRpcRequest,
+            session: StreamableSession,
+            *,
+            execution_context: ExecutionContext | None = None,
         ) -> Response | EventStream:
             if not _accepts_sse(request):
                 # Plain JSON mode: in-flight notifications go to the GET
                 # push channel (if open); the response is returned directly.
-                binding = self._make_binding(request, session, None)
+                binding = self._make_binding(
+                    request, session, None, execution_context=execution_context
+                )
                 token = CURRENT_BINDING.set(binding)
                 try:
                     response = await self._dispatcher.dispatch(msg)
@@ -396,7 +413,9 @@ def mcp_streamable_http_controller(
             # SSE mode: notifications generated during the call stream onto
             # the response body, followed by the final response.
             stream_queue: asyncio.Queue[str] = asyncio.Queue()
-            binding = self._make_binding(request, session, stream_queue)
+            binding = self._make_binding(
+                request, session, stream_queue, execution_context=execution_context
+            )
 
             async def _run() -> str:
                 token = CURRENT_BINDING.set(binding)

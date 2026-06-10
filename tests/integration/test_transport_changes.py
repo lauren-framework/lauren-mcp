@@ -231,7 +231,12 @@ async def test_stateless_post_initialize_no_session_id() -> None:
     mock_request.headers = {}
     mock_request.body = AsyncMock(return_value=init_body)
 
-    result = await inner_ctrl.handle_post(mock_request)
+    # Tests bypass Lauren's injection — pass mock ExecutionContext directly.
+    mock_ec = MagicMock()
+    mock_ec.request = mock_request
+    mock_ec.metadata = {}
+
+    result = await inner_ctrl.handle_post(mock_request, mock_ec)
     # Result should be a Response (not EventStream)
     assert hasattr(result, "status") and result.status == 200
     # Must NOT contain mcp-session-id header
@@ -261,7 +266,11 @@ async def test_stateless_notification_returns_202() -> None:
     mock_request.headers = {}
     mock_request.body = AsyncMock(return_value=notif_body)
 
-    result = await inner_ctrl.handle_post(mock_request)
+    mock_ec = MagicMock()
+    mock_ec.request = mock_request
+    mock_ec.metadata = {}
+
+    result = await inner_ctrl.handle_post(mock_request, mock_ec)
     assert hasattr(result, "status") and result.status == 202
 
 

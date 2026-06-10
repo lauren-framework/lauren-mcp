@@ -137,7 +137,9 @@ def mcp_http_sse_controller(
             return EventStream(_generator())
 
         @post("/")
-        async def handle_rpc(self, request: Request) -> Response:
+        async def handle_rpc(
+            self, request: Request, execution_context: ExecutionContext
+        ) -> Response:
             """Handle an inbound JSON-RPC message from the MCP client.
 
             Reads the ``mcp-session-id`` header to locate the correct SSE
@@ -205,7 +207,7 @@ def mcp_http_sse_controller(
 
                 binding = TransportBinding(
                     headers=request.headers,
-                    execution_context=ExecutionContext(request=request),
+                    execution_context=execution_context,
                     session_id=session_id,
                     send_notification=_send_notification,
                     # Legacy SSE cannot carry server-to-client requests, so

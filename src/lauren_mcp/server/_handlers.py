@@ -909,14 +909,43 @@ def make_tools_call_handler(
                 **(server_metadata or {}),
                 **getattr(meta, "tool_metadata", {}),
             }
+            # Merge metadata in priority order:
+            # 1. server @set_metadata (from _McpHandlerRegistrar._server_metadata)
+            # 2. ExecutionContext.metadata — same values but from the REAL Lauren
+            #    instance (correctly populated by Lauren's ASGI dispatcher from
+            #    the transport controller's @set_metadata); only differs from
+            #    server_metadata when EC carries extra route-level metadata.
+            # 3. per-tool @set_metadata (highest priority)
+            _ec = binding.execution_context if binding else None
+            _ec_meta: dict[str, Any] = {}
+            if _ec is not None:
+                try:  # noqa: SIM105
+                    _ec_meta = dict(_ec.metadata)
+                except Exception:  # noqa: BLE001
+                    pass
+            # Also merge WS connection-level metadata from extras (set by _ws.py
+            # from WsConnectionContext.metadata when @set_metadata is on the server).
+            _extras_meta: dict[str, Any] = dict(binding.extras) if binding else {}
+
+            _merged_metadata: dict[str, Any] = {
+                **_extras_meta,  # WS @set_metadata via extras
+                **(server_metadata or {}),  # server-level @set_metadata
+                **_ec_meta,  # real EC.metadata (HTTP transports)
+                **getattr(meta, "tool_metadata", {}),  # per-tool @set_metadata wins
+            }
+
             exec_ctx = McpExecutionContext(
                 tool_name=meta.name,
                 method_name=meta.method_name,
                 server_class=type(server_instance),
-                headers=binding.headers if binding else None,
-                execution_context=binding.execution_context if binding else None,
+                headers=(
+                    _ec.request.headers
+                    if _ec is not None
+                    else (binding.headers if binding else None)
+                ),
+                execution_context=_ec,
                 session_id=binding.session_id if binding else None,
-                metadata=_tool_metadata,
+                metadata=_merged_metadata,
                 tool_use_id=req.id,
             )
 
