@@ -6,6 +6,26 @@
 
 Factory class — use the static methods below.  Do not instantiate directly.
 
+All factory methods return an `McpClientProtocol` instance that is **not yet
+connected**.  Call `await client.connect()` before using it.
+
+### Common feature kwargs
+
+All four factories accept these optional keyword arguments in addition to their
+own parameters:
+
+| Kwarg | Type | Default | Description |
+|---|---|---|---|
+| `protocol_version` | `str` | `"2025-03-26"` | Protocol version to request during handshake |
+| `roots` | `list[Root] \| Callable[[], list[Root]] \| None` | `None` | Static list of roots or a callable returning the current roots; advertises the `roots` capability |
+| `progress_handler` | `Callable[[dict], None \| Awaitable[None]] \| None` | `None` | Called when the server pushes `notifications/progress` |
+| `log_handler` | `Callable[[dict], None \| Awaitable[None]] \| None` | `None` | Called when the server pushes `notifications/message` (server logs) |
+| `list_changed_handler` | `Callable[[str], None \| Awaitable[None]] \| None` | `None` | Called with `"tools"` / `"resources"` / `"prompts"` when the server's catalogue changes |
+| `sampling_handler` | `Callable[[dict], dict \| Awaitable[dict]] \| None` | `None` | Answers server-initiated `sampling/createMessage` requests; advertises `sampling` capability |
+| `elicitation_handler` | `Callable[[dict], dict \| Awaitable[dict]] \| None` | `None` | Answers server-initiated `elicitation/create` requests; advertises `elicitation` capability |
+
+---
+
 ### `McpServer.stdio`
 
 ```python
@@ -15,22 +35,20 @@ def stdio(
     *,
     max_retries: int = 3,
     startup_timeout: float = 10.0,
+    **feature_kwargs,
 ) -> McpClientProtocol:
 ```
 
 Create an MCP client that communicates with a subprocess over stdin/stdout.
-
-**No extra install required** — stdio is part of the core package.
+No extra install required.
 
 **Parameters**
 
 | Name | Type | Default | Description |
 |---|---|---|---|
-| `command` | `list[str] \| tuple[str, ...]` | required | Command + args to launch the subprocess |
+| `command` | `list[str] \| tuple[str, ...]` | required | Argv sequence to launch the subprocess |
 | `max_retries` | `int` | `3` | Subprocess restart attempts on unexpected EOF |
 | `startup_timeout` | `float` | `10.0` | Seconds to wait for the `initialize` handshake |
-
-**Returns**: `McpClientProtocol` (not yet connected).
 
 **Example**
 
@@ -38,7 +56,8 @@ Create an MCP client that communicates with a subprocess over stdin/stdout.
 from lauren_mcp import McpServer
 
 client = McpServer.stdio(
-    ["npx", "-y", "@modelcontextprotocol/server-filesystem", "/tmp"]
+    ["npx", "-y", "@modelcontextprotocol/server-filesystem", "/tmp"],
+    max_retries=0,   # disable retries in tests
 )
 await client.connect()
 tools = await client.list_tools()
@@ -57,12 +76,13 @@ def ws(
     headers: dict[str, str] | None = None,
     max_retries: int = 3,
     startup_timeout: float = 10.0,
+    **feature_kwargs,
 ) -> McpClientProtocol:
 ```
 
 Create an MCP client that connects over WebSocket.
 
-**Requires**: `pip install "lauren-mcp[ws]"`
+Requires: `pip install "lauren-mcp[ws]"`
 
 **Parameters**
 
@@ -97,109 +117,192 @@ def http(
     headers: dict[str, str] | None = None,
     max_retries: int = 3,
     startup_timeout: float = 10.0,
+    **feature_kwargs,
 ) -> McpClientProtocol:
 ```
 
-Create an MCP client using HTTP POST for client→server messages and SSE for
-server→client messages.
+Create an MCP client using the legacy HTTP+SSE transport (MCP 2024-11-05).
+HTTP POST for client→server messages; SSE stream for server→client messages.
 
-**Requires**: `pip install "lauren-mcp[http]"`
+Requires: `pip install "lauren-mcp[http]"`
+
+For servers speaking the 2025-03-26 Streamable HTTP transport use
+[`McpServer.streamable_http`](#mcpserverstreamable_http) instead.
 
 **Parameters**
 
 | Name | Type | Default | Description |
 |---|---|---|---|
-| `url` | `str` | required | Base URL (`http://` or `https://`) |
+| `url` | `str` | required | Base URL of the SSE endpoint (`http://` or `https://`) |
 | `headers` | `dict[str, str] \| None` | `None` | Extra HTTP headers for every request |
-| `max_retries` | `int` | `3` | Reconnect attempts after SSE stream closes |
+| `max_retries` | `int` | `3` | Reconnect attempts after SSE stream closes unexpectedly |
 | `startup_timeout` | `float` | `10.0` | Seconds to wait for the `initialize` handshake |
+
+---
+
+### `McpServer.streamable_http`
+
+```python
+@staticmethod
+def streamable_http(
+    url: str,
+    *,
+    headers: dict[str, str] | None = None,
+    max_retries: int = 3,
+    startup_timeout: float = 10.0,
+    **feature_kwargs,
+) -> McpClientProtocol:
+```
+
+Create an MCP client using the Streamable HTTP transport (MCP 2025-03-26).
+
+Requires: `pip install "lauren-mcp[http]"`
+
+**Parameters**
+
+| Name | Type | Default | Description |
+|---|---|---|---|
+| `url` | `str` | required | Base URL of the MCP endpoint (`http://` or `https://`) |
+| `headers` | `dict[str, str] \| None` | `None` | Extra HTTP headers for every request |
+| `max_retries` | `int` | `3` | Reconnect attempts after the connection drops |
+| `startup_timeout` | `float` | `10.0` | Seconds to wait for the `initialize` handshake |
+
+**Example**
+
+```python
+client = McpServer.streamable_http("http://localhost:8000/mcp")
+await client.connect()
+tools = await client.list_tools()
+```
 
 ---
 
 ## `McpClientProtocol`
 
-The interface implemented by all three transport clients.
+Abstract interface implemented by all transport clients.  All methods are
+`async`.
 
 ### Connection lifecycle
 
 ```python
-await client.connect()   # establish transport + MCP handshake
-await client.close()     # graceful shutdown
+async def connect() -> None
 ```
-
-### `list_tools() → list[ToolSchema]`
+Establish the transport connection and complete the MCP handshake.  Must be
+called before any protocol method.
 
 ```python
-tools = await client.list_tools()
-for tool in tools:
+async def close() -> None
+```
+Tear down the connection gracefully.  Cancels pending in-flight requests and
+closes the underlying socket / pipe.
+
+### Properties
+
+```python
+@property
+protocol_version: str
+```
+The protocol version negotiated during the handshake.  Raises `RuntimeError`
+before `connect()` completes.
+
+### Tools
+
+```python
+async def list_tools() -> list[ToolSchema]
+```
+Retrieve the server's tool catalogue (`tools/list`).
+
+```python
+async def call_tool(name: str, arguments: dict | None = None) -> Any
+```
+Invoke a tool (`tools/call`).  Returns the raw result value from the server.
+Raises `McpCallError` on a JSON-RPC error response.
+
+### Resources
+
+```python
+async def list_resources() -> list[ResourceSchema]
+```
+Retrieve the server's resource catalogue (`resources/list`).
+
+```python
+async def read_resource(uri: str) -> Any
+```
+Read a resource by exact URI (`resources/read`).
+
+### Prompts
+
+```python
+async def list_prompts() -> list[PromptSchema]
+```
+Retrieve the server's prompt catalogue (`prompts/list`).
+
+```python
+async def get_prompt(name: str, arguments: dict[str, str] | None = None) -> Any
+```
+Retrieve a rendered prompt (`prompts/get`).
+
+### Utilities
+
+```python
+async def ping() -> None
+```
+Send a `ping` request and await the empty response.  Raises `McpCallError` on
+failure.
+
+### Notification handlers
+
+```python
+def on_progress(handler: Callable[[dict], None | Awaitable[None]]) -> Callable[[], None]
+def on_log(handler: Callable[[dict], None | Awaitable[None]]) -> Callable[[], None]
+def on_list_changed(handler: Callable[[str], None | Awaitable[None]]) -> Callable[[], None]
+```
+
+Register handlers for server-pushed notifications.  Each method returns a
+zero-argument unsubscribe function.
+
+| Method | Notification | Handler argument |
+|---|---|---|
+| `on_progress` | `notifications/progress` | `dict` with `progressToken`, `progress`, and optional `total` |
+| `on_log` | `notifications/message` | `dict` with `level`, `logger`, `data` |
+| `on_list_changed` | `notifications/{tools,resources,prompts}/list_changed` | `"tools"` \| `"resources"` \| `"prompts"` |
+
+```python
+unsubscribe = client.on_progress(lambda p: print(p["progress"]))
+# later:
+unsubscribe()
+```
+
+### Roots change notification
+
+```python
+async def notify_roots_changed() -> None
+```
+Send `notifications/roots/list_changed` to the server.  Only meaningful when
+dynamic roots (a callable) were supplied at construction time.  Raises
+`RuntimeError` if `roots` was not configured.
+
+---
+
+### Full example
+
+```python
+from lauren_mcp import McpServer
+
+client = McpServer.ws(
+    "ws://localhost:8000/mcp/ws",
+    log_handler=lambda p: print("[server log]", p),
+    list_changed_handler=lambda kind: print(f"{kind} list changed"),
+)
+
+await client.connect()
+print("protocol:", client.protocol_version)
+
+for tool in await client.list_tools():
     print(tool.name, "—", tool.description)
-    print("  inputSchema:", tool.inputSchema)
-```
 
-### `call_tool(name, arguments) → dict`
-
-Returns a raw dict with `"content"` and `"isError"` keys.  The `"content"`
-list contains dicts with `{"type": "text", "text": "..."}` or image/resource
-blocks.
-
-```python
-result = await client.call_tool("search", {"query": "blue widgets"})
-
-if result.get("isError"):
-    print("Tool error")
-
-content = result.get("content", [])
-if content and content[0].get("type") == "text":
-    print(content[0]["text"])
-
-# dict/list return values are JSON-encoded in text
-import json
-items = json.loads(content[0]["text"])
-```
-
-**Raises**: `McpCallError` if the server returns a JSON-RPC error response.
-
-### `list_resources() → list[ResourceSchema]`
-
-```python
-resources = await client.list_resources()
-for r in resources:
-    print(r.name, "—", r.uri)
-```
-
-### `read_resource(uri) → dict`
-
-Returns a raw dict with a `"contents"` list.
-
-```python
-result = await client.read_resource("/items/42")
-contents = result.get("contents", [])
-if contents:
-    print(contents[0].get("text", ""))
-```
-
-### `list_prompts() → list[PromptSchema]`
-
-```python
-prompts = await client.list_prompts()
-print([p.name for p in prompts])
-```
-
-### `get_prompt(name, arguments) → dict`
-
-Returns a raw dict with a `"messages"` list.
-
-```python
-result = await client.get_prompt("summary_prompt", {"topic": "sales"})
-messages = result.get("messages", [])
-if messages:
-    print(messages[0].get("content", {}).get("text", ""))
-```
-
-### `ping() → None`
-
-```python
-await client.ping()   # raises McpCallError on failure
+result = await client.call_tool("search", {"query": "coffee"})
+await client.close()
 ```
 
 ---
@@ -211,21 +314,18 @@ from lauren_mcp import McpCallError
 
 class McpCallError(Exception):
     code: int
-    # message is the standard exception message
 ```
 
-Raised when the server returns a JSON-RPC error response.
+Raised when the server returns a JSON-RPC error response.  `code` is the
+integer JSON-RPC error code; `str(exc)` is the server's error message.
 
 ```python
 from lauren_mcp import McpCallError
-import asyncio
 
 try:
     result = await client.call_tool("divide", {"a": 1, "b": 0})
 except McpCallError as exc:
     print(f"Server error {exc.code}: {exc}")
-except asyncio.TimeoutError:
-    print("Request timed out")
 ```
 
 ---
@@ -238,7 +338,7 @@ from dataclasses import dataclass
 @dataclass
 class McpServerConfig:
     alias: str
-    client: Any   # McpClientProtocol
+    client: McpClientProtocol
 ```
 
 Pairs an alias string with an MCP client for use with `McpToolBridge` and
@@ -246,10 +346,10 @@ Pairs an alias string with an MCP client for use with `McpToolBridge` and
 
 **Fields**
 
-| Field | Type | Required | Description |
-|---|---|---|---|
-| `alias` | `str` | yes | Short identifier; tools are namespaced as `alias__tool_name` |
-| `client` | `McpClientProtocol` | yes | Client instance from `McpServer.stdio/ws/http` |
+| Field | Type | Description |
+|---|---|---|
+| `alias` | `str` | Short identifier; tools are namespaced as `alias__tool_name` |
+| `client` | `McpClientProtocol` | Client instance from any `McpServer.*` factory |
 
 **Example**
 
@@ -266,8 +366,8 @@ config = McpServerConfig(
 
 ## `McpToolBridge`
 
-Manages the lifecycle for a list of `McpServerConfig` entries.  Connects
-every server, populates a registry, and disconnects cleanly on teardown.
+Lifecycle manager for a list of `McpServerConfig` entries.  Connects every
+client, populates an optional registry, and disconnects cleanly on teardown.
 
 ```python
 from lauren_mcp import McpToolBridge, McpServerConfig, McpServer
@@ -277,24 +377,24 @@ bridge = McpToolBridge([
     McpServerConfig(alias="beta",  client=McpServer.stdio(["python", "server_b.py"])),
 ])
 
-# Optional: attach a registry that implements register_mcp_server()
-bridge.set_registry(my_registry)
+bridge.set_registry(my_registry)   # optional
 
-await bridge.connect_all()     # connect + list_tools + populate registry
-await bridge.disconnect_all()  # close all clients
+await bridge.connect_all()
+# ... use tools ...
+await bridge.disconnect_all()
 ```
 
-### `set_registry(registry) → None`
+### `set_registry(registry) -> None`
 
-Attach any object with a `register_mcp_server(alias, tools, client)` method.
-Called by `connect_all()` once per server.
+Attach an object with a `register_mcp_server(alias, tools, client)` method.
+Called by `connect_all()` once per server after successful connection.
 
-### `connect_all() → None`
+### `connect_all() -> None`
 
-Connect every configured server, fetch tool lists, and call
+Connect every configured server, fetch tool lists, and invoke
 `registry.register_mcp_server(alias, tools, client)` for each one.  Failures
-on individual servers are logged at ERROR level and do not abort the others.
+on individual servers are logged at `ERROR` level and do not abort the others.
 
-### `disconnect_all() → None`
+### `disconnect_all() -> None`
 
 Close every client.  Individual close failures are suppressed.

@@ -55,22 +55,19 @@ The library refuses `initialize` handshakes that propose a version not in this l
 def mcp_server(
     path: str,
     *,
-    name: str | None = None,
-    version: str = "1.0.0",
-    description: str | None = None,
+    transport: str = "ws",
 ) -> Callable[[type], type]:
 ```
 
-Class decorator that registers a class as an MCP server mounted at `path`.
+Class decorator that registers a class as an MCP server mounted at `path`. Also applies
+`@injectable(scope=Scope.SINGLETON)` so the class participates in Lauren's DI graph.
 
 **Parameters**
 
 - `path` (`str`, required): URL path prefix for this server (e.g. `"/mcp"`).
-- `name` (`str | None`, default `None`): Human-readable server name. Defaults to the
-  decorated class name.
-- `version` (`str`, default `"1.0.0"`): Version string reported in the MCP handshake.
-- `description` (`str | None`, default `None`): Server description reported in the
-  MCP handshake.
+- `transport` (`str`, default `"ws"`): Default transport when `McpServerModule.for_root()`
+  is called without an explicit `transport=` argument. One of `"ws"`, `"sse"`,
+  `"streamable"`, `"both"` (WS + SSE), or `"all"` (WS + Streamable HTTP).
 
 **Returns**: The decorated class, unmodified except for attached MCP metadata.
 
@@ -79,7 +76,7 @@ Class decorator that registers a class as an MCP server mounted at `path`.
 ```python
 from lauren_mcp import mcp_server, mcp_tool
 
-@mcp_server("/mcp", name="Shop API", version="2.0.0")
+@mcp_server("/mcp")
 class ShopServer:
     @mcp_tool()
     async def search(self, query: str) -> list[dict]:
@@ -96,54 +93,71 @@ def mcp_tool(
     *,
     name: str | None = None,
     description: str | None = None,
+    annotations: ToolAnnotations | None = None,
+    timeout: float | None = None,
+    tags: frozenset[str] | set[str] | None = None,
+    meta: dict[str, Any] | None = None,
+    output_schema: type | dict | None = None,
 ) -> Callable[[Callable], Callable]:
 ```
 
 Method decorator that marks an async method on an `@mcp_server` class as an MCP tool.
 
-The tool's JSON Schema is derived automatically from Python type annotations.
-Google-style docstrings (`Args:` section) populate per-parameter descriptions.
+The tool's JSON Schema is derived automatically from Python type annotations. Parameters
+annotated `McpToolContext` are **excluded** from the schema and injected at call time.
+Google/Sphinx/NumPy docstring `Args:` sections populate per-parameter descriptions.
 
 **Parameters**
 
-- `name` (`str | None`, default `None`): Override the tool name. Defaults to the
-  method name.
-- `description` (`str | None`, default `None`): Override the tool description.
-  Defaults to the method docstring.
+- `name`: Override tool name (defaults to method name).
+- `description`: Override tool description (defaults to docstring first paragraph).
+- `annotations`: `ToolAnnotations` hints for AI clients (`readOnlyHint`, etc.).
+- `timeout`: Per-call execution deadline in seconds; raises `INTERNAL_ERROR` if exceeded.
+- `tags`: Categorical tags included in `tools/list` under `"tags"`.
+- `meta`: Opaque metadata forwarded to clients under `"_meta"`.
+- `output_schema`: JSON Schema dict, Pydantic model, dataclass, or TypedDict describing
+  the structured output; advertised as `outputSchema` in `tools/list`.
 
-**Schema generation rules**
+**Schema generation — supported annotations**
 
 | Python annotation | JSON Schema |
 |---|---|
-| `str` | `{"type": "string"}` |
-| `int` | `{"type": "integer"}` |
-| `float` | `{"type": "number"}` |
-| `bool` | `{"type": "boolean"}` |
-| `list[X]` | `{"type": "array", "items": <X schema>}` |
-| `dict` / `dict[str, X]` | `{"type": "object"}` |
-| `X | None` | optional (omitted from `required`) |
-| parameter with default | optional |
-| parameter without default | required |
-
-DI parameters (annotated with `Depends(...)`) are excluded from the schema.
+| `str`, `int`, `float`, `bool` | primitive types |
+| `list[X]` | `{"type": "array", "items": <X>}` |
+| `dict[str, X]` | `{"type": "object", "additionalProperties": <X>}` |
+| `X \| None` / `Optional[X]` | optional (omitted from `required`) |
+| `Literal["a", "b"]` | `{"type": "string", "enum": ["a", "b"]}` |
+| `Annotated[int, Field(ge=0)]` | `{"type": "integer", "minimum": 0}` |
+| Pydantic `BaseModel` | object with `$defs` (requires `[pydantic]` extra) |
+| `msgspec.Struct` | object with `$defs` (requires `[msgspec]` extra) |
+| `@dataclass` class | object schema inlined |
+| `TypedDict` | object schema with `required` from `__required_keys__` |
+| `UUID`, `datetime`, `date`, `Path` | string with format |
+| `McpToolContext` | **excluded** from schema, injected by framework |
 
 **Example**
 
 ```python
-@mcp_tool(name="item_search")
+from lauren_mcp import mcp_tool, ToolAnnotations, McpToolContext
+
+@mcp_tool(
+    annotations=ToolAnnotations(readOnlyHint=True),
+    timeout=30.0,
+    tags={"search"},
+)
 async def search(
     self,
     query: str,
     limit: int = 10,
-    tags: list[str] | None = None,
+    ctx: McpToolContext,
 ) -> list[dict]:
     """Search the catalogue.
 
     Args:
         query: Full-text search query.
         limit: Max results (default 10).
-        tags: Optional tag filter.
     """
+    await ctx.report_progress(0, total=100)
     ...
 ```
 
@@ -153,36 +167,49 @@ async def search(
 
 ```python
 def mcp_resource(
-    uri: str,
+    uri_template: str,
     *,
     name: str | None = None,
     description: str | None = None,
-    mime_type: str = "text/plain",
+    mime_type: str | None = None,
 ) -> Callable[[Callable], Callable]:
 ```
 
 Method decorator that exposes a URI-addressable resource on an `@mcp_server` class.
 
-URI template variables (e.g. `{item_id}`) are extracted from the URI and passed as
-keyword arguments to the decorated async method.
+**URI template operators supported (RFC 6570 subset)**
 
-**Parameters**
+| Template | Matches | Example |
+|---|---|---|
+| `{param}` | Single path segment (no `/`) | `/items/{id}` |
+| `{+param}` or `{param*}` | Multi-segment (crosses `/`) | `/files/{+path}` |
+| `{?p1,p2}` | Optional query parameters | `/search/{q}{?page,size}` |
 
-- `uri` (`str`, required): URI template string (e.g. `"items://{item_id}"`).
-- `name` (`str | None`, default `None`): Override resource name. Defaults to the
-  method name.
-- `description` (`str | None`, default `None`): Override description. Defaults to
-  the docstring.
-- `mime_type` (`str`, default `"text/plain"`): MIME type of the returned content.
+Path and query variables are passed as keyword arguments; type hints on the method
+drive coercion (`int`, `float`, `bool`, `Optional[X]` supported).
+
+**Return types**
+
+| Return type | Wire format |
+|---|---|
+| `str` | `text` field |
+| `bytes` | base64-encoded `blob` field (MIME from `mime_type=`) |
+| `BlobResource(data, mime_type)` | blob with explicit MIME |
+| `ResourceResult(contents=[...])` | multi-item response |
+| `dict` | passed through as-is |
 
 **Example**
 
 ```python
-@mcp_resource("orders://{order_id}", mime_type="application/json")
-async def get_order(self, order_id: str) -> str:
-    """Return an order as JSON. Args: order_id: The order ID."""
-    import json
-    return json.dumps({"id": order_id, "status": "shipped"})
+@mcp_resource("/files/{+path}{?version}", mime_type="text/plain")
+async def read_file(self, path: str, version: int = 1) -> str:
+    """Read a versioned file."""
+    return load(path, version)
+
+@mcp_resource("/img/{name}", mime_type="image/png")
+async def image(self, name: str) -> bytes:
+    """Return raw PNG bytes."""
+    return open(f"{name}.png", "rb").read()
 ```
 
 ---
@@ -221,6 +248,50 @@ async def summarise_prompt(self, topic: str = "general") -> str:
 
 ---
 
+### mcp_lifespan
+
+```python
+# from lauren_mcp.server import mcp_lifespan
+
+@mcp_lifespan          # no parentheses
+async def lifespan(self) -> AsyncGenerator[dict, None]:
+    ...
+```
+
+Method decorator (no arguments) that marks an async generator method as the server's
+lifespan hook. The generator runs **once** at server startup; the `dict` it yields
+becomes `McpToolContext.lifespan_context` for every subsequent tool call. Code after
+the `yield` (typically in a `finally` block) runs at server shutdown.
+
+**Rules**
+
+- Must be an `async def` with a single `yield`.
+- Only one `@mcp_lifespan` method per `@mcp_server` class.
+- The yielded value must be a `dict` (or `None` for an empty context).
+
+**Example**
+
+```python
+from lauren_mcp import mcp_server, mcp_tool, McpToolContext
+from lauren_mcp.server import mcp_lifespan
+
+@mcp_server("/mcp")
+class MyServer:
+    @mcp_lifespan
+    async def lifespan(self):
+        db = await Database.connect(DATABASE_URL)
+        try:
+            yield {"db": db}
+        finally:
+            await db.close()
+
+    @mcp_tool()
+    async def query(self, sql: str, ctx: McpToolContext) -> list:
+        return await ctx.lifespan_context["db"].fetch(sql)
+```
+
+---
+
 ### McpServerModule
 
 ```python
@@ -232,6 +303,12 @@ class McpServerModule:
         transport: str = "ws",
         server_info: Implementation | None = None,
         capabilities: ServerCapabilities | None = None,
+        providers: list | None = None,
+        imports: list | None = None,
+        exports: list | None = None,
+        log_level: str = "debug",
+        mounts: list[tuple[type, str]] | None = None,
+        proxies: list[tuple[McpClientProtocol, str]] | None = None,
     ) -> type:  # returns a Lauren @module class
         ...
 ```
@@ -241,32 +318,140 @@ wires all MCP handler coroutines.
 
 **Parameters**
 
-- `server_cls` (required): Class decorated with `@mcp_server`.
-- `transport` (`str`, default `"ws"`): `"ws"`, `"sse"`, or `"both"`.
-- `server_info`: Override the name/version sent in the `initialize` response.
+- `server_cls`: Class decorated with `@mcp_server`.
+- `transport`: One of `"ws"`, `"sse"`, `"streamable"`, `"both"` (WS+SSE), `"all"` (WS+Streamable).
+- `server_info`: Override the name/version in the `initialize` response.
 - `capabilities`: Override auto-detected `ServerCapabilities`.
+- `providers`: Extra Lauren DI providers.
+- `imports`: Extra Lauren `@module` classes to import.
+- `exports`: Extra types to export from the generated module.
+- `log_level`: Minimum severity for `ctx.log()` notifications (`"debug"` / `"info"` / `"warning"` / `"error"`).
+- `mounts`: `[(OtherServerCls, "prefix_"), ...]` — expose another `@mcp_server` class's tools/resources/prompts with name prefix.
+- `proxies`: `[(client, "prefix_"), ...]` — connect a remote MCP client at startup and re-export its tools locally.
 
 **Raises** `TypeError` if *server_cls* is not decorated with `@mcp_server`.
 
 **Route mounting** for `@mcp_server("/mcp")`:
 
-| Path | Transport |
+| Transport value | Endpoints |
 |---|---|
-| `/mcp/ws` | WebSocket |
-| `/mcp` | HTTP+SSE (GET = SSE stream, POST = client messages) |
+| `"ws"` | `ws://host/mcp/ws` |
+| `"sse"` | `GET /mcp/sse` (stream) + `POST /mcp/` (messages) |
+| `"streamable"` | `POST /mcp/` + `GET /mcp/` (push) + `DELETE /mcp/` |
+| `"both"` | WS + SSE |
+| `"all"` | WS + Streamable HTTP |
 
 **Example**
 
 ```python
 from lauren import LaurenFactory, module
-from lauren_mcp import McpServerModule
+from lauren_mcp import McpServerModule, McpServer
 
-@module(imports=[McpServerModule.for_root(MyServer)])
+@module(imports=[McpServerModule.for_root(
+    MyServer,
+    transport="all",
+    log_level="info",
+    mounts=[(AnalyticsServer, "analytics_")],
+    proxies=[(McpServer.streamable_http("http://remote/mcp"), "remote_")],
+)])
 class AppModule:
     pass
 
 app = LaurenFactory.create(AppModule)
-# WebSocket at ws://host/mcp/ws, SSE at http://host/mcp
+```
+
+---
+
+### McpToolContext
+
+```python
+@dataclass(frozen=True)
+class McpToolContext:
+    tool_name: str
+    tool_use_id: str | int | None
+    headers: Headers | None          # lauren.types.Headers (case-insensitive)
+    execution_context: ExecutionContext | None  # lauren.types.ExecutionContext
+    session_id: str | None
+    metadata: dict[str, Any]         # from @set_metadata on the @mcp_server class
+    state: dict[str, Any]            # mutable per-call scratch space
+    extras: dict[str, Any]           # extension bag
+    lifespan_context: dict[str, Any] # dict yielded by @mcp_lifespan
+```
+
+Context injected into `@mcp_tool` methods when a parameter is annotated
+`McpToolContext`. The parameter may have any name; it is **excluded** from the JSON
+schema so AI clients never see or supply it.
+
+Declare it anywhere in the signature:
+
+```python
+@mcp_tool()
+async def my_tool(self, query: str, ctx: McpToolContext) -> str: ...
+
+@mcp_tool()
+async def other(self, data: str, tool_ctx: McpToolContext | None = None) -> str: ...
+```
+
+**Methods**
+
+```python
+ctx.get_metadata(key, default=None)   # shorthand for ctx.metadata.get(...)
+
+# Progress (sends notifications/progress — no-op when no progressToken)
+await ctx.report_progress(progress: float | int, total: float | int | None = None)
+
+# Structured log to client (sends notifications/message)
+await ctx.log(level: Literal["debug","info","warning","error"], message: str, data: dict | None = None)
+await ctx.debug(message, data=None)
+await ctx.info(message, data=None)
+await ctx.warning(message, data=None)
+await ctx.error(message, data=None)
+
+# Server-initiated LLM call (WS and Streamable HTTP only)
+result: CreateMessageResult = await ctx.sample(
+    messages: str | list[SamplingMessage],
+    *,
+    max_tokens: int = 1024,
+    system_prompt: str | None = None,
+    temperature: float | None = None,
+    result_type: type | None = None,   # parse + validate JSON reply
+)
+
+# Server asks client to prompt user (WS and Streamable HTTP only)
+answer: ElicitResult = await ctx.elicit(
+    message: str,
+    response_type = None,  # None | str | bool | int | Literal | dataclass | TypedDict | BaseModel
+)
+```
+
+**Raises**
+
+- `McpSamplingNotAvailable` — `ctx.sample()` called on legacy SSE transport, or client
+  did not advertise the `sampling` capability.
+- `McpElicitationNotAvailable` — same for `ctx.elicit()`.
+
+---
+
+### ToolAnnotations
+
+```python
+@dataclass(frozen=True)
+class ToolAnnotations:
+    readOnlyHint: bool = False    # tool does not modify state
+    destructiveHint: bool = True  # changes cannot be undone (conservative default)
+    idempotentHint: bool = False  # repeated calls produce same result
+    openWorldHint: bool = True    # tool may interact with external systems (conservative)
+```
+
+Behavioural hints transmitted to AI clients in `tools/list`. Clients use them to
+decide confirmation UX (e.g. ask before calling a destructive tool). The defaults
+follow the MCP specification's conservative assumptions.
+
+```python
+from lauren_mcp import mcp_tool, ToolAnnotations
+
+@mcp_tool(annotations=ToolAnnotations(readOnlyHint=True, destructiveHint=False))
+async def search(self, q: str) -> list: ...
 ```
 
 ---
@@ -301,39 +486,54 @@ class McpServer:
         headers: dict[str, str] | None = None,
         max_retries: int = 3,
         startup_timeout: float = 10.0,
+        **feature_kwargs,
+    ) -> McpClientProtocol: ...
+
+    @staticmethod
+    def streamable_http(
+        url: str,
+        *,
+        headers: dict[str, str] | None = None,
+        max_retries: int = 3,
+        startup_timeout: float = 10.0,
+        **feature_kwargs,
     ) -> McpClientProtocol: ...
 ```
 
 Factory class for creating MCP client connections. Never instantiate directly.
 
+All four factories accept these additional **feature kwargs**:
+
+| Kwarg | Type | Description |
+|---|---|---|
+| `protocol_version` | `str` | Protocol version to advertise (default `"2025-03-26"`) |
+| `roots` | `list[Root]` or `Callable` | Filesystem roots exposed to the server |
+| `progress_handler` | `Callable` | Invoked on `notifications/progress` |
+| `log_handler` | `Callable` | Invoked on `notifications/message` |
+| `list_changed_handler` | `Callable` | Invoked on tool/resource/prompt `list_changed` |
+| `sampling_handler` | `async Callable` | Responds to `sampling/createMessage` requests |
+| `elicitation_handler` | `async Callable` | Responds to `elicitation/create` requests |
+
 **`McpServer.stdio`** — subprocess stdin/stdout transport. No extra deps required.
 
-- `command`: Command + args to start the MCP server subprocess.
-- `max_retries`: How many times to restart the subprocess on unexpected exit.
-- `startup_timeout`: Seconds to wait for the MCP `initialize` handshake.
+**`McpServer.ws`** — WebSocket (MCP 2025-03-26). Requires `pip install "lauren-mcp[ws]"`.
 
-**`McpServer.ws`** — WebSocket transport. Requires `pip install "lauren-mcp[ws]"`.
+**`McpServer.http`** — Legacy HTTP+SSE (MCP 2024-11-05). Requires `pip install "lauren-mcp[http]"`.
 
-- `url`: WebSocket URL (`ws://` or `wss://`).
-- `headers`: Extra HTTP headers for the upgrade request (use for auth tokens).
-- `max_retries`: Reconnect attempts after unexpected disconnect.
-- `startup_timeout`: Seconds to wait for the `initialize` handshake.
-
-**`McpServer.http`** — HTTP+SSE transport. Requires `pip install "lauren-mcp[http]"`.
-
-- `url`: Base URL (`http://` or `https://`).
-- `headers`: Extra HTTP headers for every request.
-- `max_retries`: Reconnect attempts after SSE stream closes.
-- `startup_timeout`: Seconds to wait for the `initialize` handshake.
+**`McpServer.streamable_http`** — Streamable HTTP (MCP 2025-03-26, recommended).
+Requires `pip install "lauren-mcp[http]"`.
 
 **Example**
 
 ```python
-from lauren_mcp import McpServer
+from lauren_mcp import McpServer, Root
 
 stdio_client = McpServer.stdio(["python", "-m", "my_server"])
-ws_client    = McpServer.ws("wss://api.example.com/mcp/ws", headers={"Authorization": "Bearer token"})
-http_client  = McpServer.http("https://api.example.com/mcp")
+ws_client    = McpServer.ws("wss://api.example.com/mcp/ws",
+                             headers={"Authorization": "Bearer token"},
+                             progress_handler=lambda p: print(p["progress"]))
+http_client  = McpServer.streamable_http("https://api.example.com/mcp",
+                                          roots=[Root("file:///workspace")])
 ```
 
 ---
@@ -342,34 +542,65 @@ http_client  = McpServer.http("https://api.example.com/mcp")
 
 ```python
 class McpClientProtocol(Protocol):
+    # Lifecycle
     async def connect(self) -> None: ...
     async def close(self) -> None: ...
+    # Tools
     async def list_tools(self) -> list[ToolSchema]: ...
     async def call_tool(self, name: str, arguments: dict | None = None) -> Any: ...
+    # Resources
     async def list_resources(self) -> list[ResourceSchema]: ...
     async def read_resource(self, uri: str) -> Any: ...
+    # Prompts
     async def list_prompts(self) -> list[PromptSchema]: ...
     async def get_prompt(self, name: str, arguments: dict[str, str] | None = None) -> Any: ...
+    # Utility
     async def ping(self) -> None: ...
+    # Protocol version (available after connect())
+    @property
+    def protocol_version(self) -> str: ...
+    # Notification subscriptions
+    def on_progress(self, handler: Callable) -> Callable[[], None]: ...
+    def on_log(self, handler: Callable) -> Callable[[], None]: ...
+    def on_list_changed(self, handler: Callable) -> Callable[[], None]: ...
+    # Roots
+    async def notify_roots_changed(self) -> None: ...
 ```
 
-The interface implemented by all three transport clients. You receive instances of this
-from `McpServer.stdio/ws/http`.
+The interface implemented by all four transport clients. You receive instances of this
+from `McpServer.stdio/ws/http/streamable_http`.
 
-**Methods**
+**Lifecycle methods**
 
-- `connect()`: Establishes the transport connection and runs the MCP `initialize`
-  handshake.
-- `close()`: Sends a graceful close and tears down the transport.
-- `list_tools()`: Fetches the server's tool manifest. Returns `list[ToolSchema]`.
-- `call_tool(name, arguments)`: Calls a tool. Returns a raw dict
-  `{"content": [{"type": "text", "text": "..."}], "isError": False}`.
-  Raises `McpCallError` on server error.
-- `list_resources()`: Returns `list[ResourceSchema]`.
-- `read_resource(uri)`: Returns a raw dict `{"contents": [{"uri": ..., "text": ...}]}`.
-- `list_prompts()`: Returns `list[PromptSchema]`.
-- `get_prompt(name, arguments)`: Returns a raw dict `{"messages": [...], "description": ...}`.
-- `ping()`: Checks server liveness; raises `McpCallError` on failure.
+- `connect()`: Establishes the transport and runs the MCP `initialize` handshake.
+- `close()`: Graceful teardown.
+
+**Protocol version**
+
+- `protocol_version` (property): The version negotiated with the server. Only available
+  after `connect()`.
+
+**Notification subscriptions** — each returns an unsubscribe callable:
+
+- `on_progress(handler)`: Called with `{"progressToken": ..., "progress": ..., "total": ...}`.
+- `on_log(handler)`: Called with `{"level": "info", "logger": "...", "data": {...}}`.
+- `on_list_changed(handler)`: Called with `"tools"`, `"resources"`, or `"prompts"`.
+
+**Roots**
+
+- `notify_roots_changed()`: Send `notifications/roots/list_changed` to the server.
+  Only valid when `roots=` was supplied to the factory.
+
+**Data methods**
+
+- `list_tools()` → `list[ToolSchema]`
+- `call_tool(name, arguments)` → raw dict `{"content": [...], "isError": False}`;
+  raises `McpCallError` on server error
+- `list_resources()` → `list[ResourceSchema]`
+- `read_resource(uri)` → raw dict `{"contents": [...]}`
+- `list_prompts()` → `list[PromptSchema]`
+- `get_prompt(name, arguments)` → raw dict `{"messages": [...], "description": ...}`
+- `ping()` → `None`; raises `McpCallError` on failure
 
 **Example**
 
@@ -855,10 +1086,13 @@ after `connect()` as `client.server_info`.
 class ClientCapabilities:
     roots: dict | None = None
     sampling: dict | None = None
+    elicitation: dict | None = None
     experimental: dict | None = None
 ```
 
-Capability flags advertised by the client during the MCP handshake.
+Capability flags advertised by the client during the MCP handshake. Non-`None` values
+signal support: `roots` for filesystem roots, `sampling` for server-initiated LLM calls,
+`elicitation` for server-initiated user prompts.
 
 ---
 
@@ -914,10 +1148,12 @@ The `params` payload for a `tools/call` JSON-RPC request.
 class ToolResult:
     content: list[TextContent | ImageContent | EmbeddedResource]
     isError: bool = False
+    structuredContent: dict[str, Any] | None = None
 ```
 
-Full result envelope from a `tools/call` response. When `isError=True`, the `content`
-blocks describe the error rather than a successful result.
+Full result envelope from a `tools/call` response. `structuredContent` carries a typed
+JSON object alongside the human-readable `content` blocks (MCP 2025-06-18 structured
+output). When `isError=True`, the blocks describe the error.
 
 ---
 
@@ -982,6 +1218,260 @@ class McpParseError(ValueError):
 Raised by `parse_message()` when a raw JSON string cannot be decoded or does not
 conform to JSON-RPC 2.0 structure (missing `jsonrpc` field, unknown message shape, etc.).
 It is a subclass of `ValueError`.
+
+---
+
+### ToolOutput
+
+```python
+@dataclass
+class ToolOutput:
+    content: list[Any] | None = None
+    structured_content: dict[str, Any] | None = None
+    is_error: bool = False
+```
+
+Rich return type for `@mcp_tool` methods. Lets a tool control the human-readable
+`content` blocks and the machine-readable `structured_content` dict independently.
+When `content` is `None` and `structured_content` is set, a JSON text block is
+auto-generated.
+
+```python
+from lauren_mcp import mcp_tool, ToolOutput, TextContent
+
+@mcp_tool()
+async def analyse(self, text: str) -> ToolOutput:
+    return ToolOutput(
+        content=[TextContent(text="Sentiment: positive")],
+        structured_content={"sentiment": "positive", "score": 0.92},
+    )
+```
+
+---
+
+### BlobResource
+
+```python
+@dataclass
+class BlobResource:
+    data: bytes
+    mime_type: str = "application/octet-stream"
+```
+
+Explicit blob return type for `@mcp_resource` methods. The `data` bytes are
+base64-encoded into `ResourceContent.blob`. Using `BlobResource` lets you override the
+MIME type independently of the `mime_type=` parameter on `@mcp_resource`.
+
+```python
+from lauren_mcp import BlobResource
+
+@mcp_resource("/reports/{name}")
+async def report(self, name: str) -> BlobResource:
+    return BlobResource(data=generate_pdf(name), mime_type="application/pdf")
+```
+
+---
+
+### ResourceResult
+
+```python
+@dataclass
+class ResourceResult:
+    contents: list[Any]
+```
+
+Multi-item return type for `@mcp_resource` methods. Each item in `contents` may be
+a `str`, `bytes`, `BlobResource`, `ResourceContent`, or a dict.
+
+```python
+from lauren_mcp import ResourceResult
+
+@mcp_resource("/bundle/{id}")
+async def bundle(self, id: str) -> ResourceResult:
+    return ResourceResult(contents=["readme text", b"\x89PNG..."])
+```
+
+---
+
+### SamplingMessage
+
+```python
+@dataclass
+class SamplingMessage:
+    role: Literal["user", "assistant"]
+    content: TextContent | ImageContent
+```
+
+A single message in a `sampling/createMessage` request sent via `ctx.sample()`.
+
+---
+
+### CreateMessageParams
+
+```python
+@dataclass
+class CreateMessageParams:
+    messages: list[SamplingMessage]
+    maxTokens: int
+    systemPrompt: str | None = None
+    includeContext: Literal["none", "thisServer", "allServers"] = "none"
+    temperature: float | None = None
+    stopSequences: list[str] = field(default_factory=list)
+    modelPreferences: dict[str, Any] | None = None
+    metadata: dict[str, Any] | None = None
+```
+
+Parameters for a `sampling/createMessage` server-to-client request. Built automatically
+when you call `ctx.sample()`.
+
+---
+
+### CreateMessageResult
+
+```python
+@dataclass
+class CreateMessageResult:
+    role: Literal["assistant"]
+    content: TextContent | ImageContent
+    model: str
+    stopReason: str | None = None
+
+    @property
+    def text(self) -> str: ...   # shorthand for content.text
+```
+
+Result of a `sampling/createMessage` request. Returned by `ctx.sample()`.
+
+---
+
+### ElicitResult
+
+```python
+@dataclass
+class ElicitResult:
+    action: Literal["accept", "decline", "cancel"]
+    content: dict[str, Any] | None = None
+```
+
+Result of an `elicitation/create` server-to-client request. Returned by `ctx.elicit()`.
+`content` is populated when `action == "accept"`.
+
+```python
+answer = await ctx.elicit("Delete 500 records?")
+if answer.action == "accept":
+    ...
+```
+
+---
+
+### Root
+
+```python
+@dataclass
+class Root:
+    uri: str            # file:// URI
+    name: str | None = None
+```
+
+A filesystem root exposed by an MCP client to servers that request them via
+`roots/list`. Pass a list to `McpServer.*(..., roots=[Root("file:///workspace")])`.
+
+---
+
+### McpSamplingNotAvailable
+
+```python
+class McpSamplingNotAvailable(RuntimeError): ...
+```
+
+Raised by `ctx.sample()` when:
+- The transport is legacy HTTP+SSE (server-to-client requests not supported).
+- The connected client did not advertise the `sampling` capability.
+
+---
+
+### McpElicitationNotAvailable
+
+```python
+class McpElicitationNotAvailable(RuntimeError): ...
+```
+
+Raised by `ctx.elicit()` under the same conditions as `McpSamplingNotAvailable`.
+
+---
+
+### McpToolNameCollision
+
+```python
+class McpToolNameCollision(Exception): ...
+```
+
+Raised at server startup when two composition sources (from `mounts=` or `proxies=`)
+produce the same tool name after applying the prefix. Fix by choosing a different
+prefix or renaming the conflicting tool.
+
+---
+
+### RouteEntry
+
+```python
+@dataclass
+class RouteEntry:
+    pattern: str                                   # regex matched against the path
+    method: str | None = None                      # "GET", "POST", … or None for all
+    expose_as: Literal["tool", "exclude"] = "tool"
+    name_override: str | None = None
+    description_override: str | None = None
+```
+
+One rule controlling how an OpenAPI operation maps to an MCP tool.
+Pass a list of `RouteEntry` objects as `route_map=` to `build_openapi_server_class()`.
+The first matching rule wins; operations with no match default to `"tool"`.
+
+---
+
+### build_openapi_server_class
+
+```python
+# from lauren_mcp.server import build_openapi_server_class
+
+def build_openapi_server_class(
+    spec: dict | str | Path,
+    *,
+    http_client: Any,              # httpx.AsyncClient or compatible
+    base_url: str = "",
+    server_path: str = "/mcp",
+    route_map: list[RouteEntry] | None = None,
+    class_name: str = "OpenApiMcpServer",
+) -> type:
+```
+
+Generates an `@mcp_server` class whose tools call a REST API described by an OpenAPI
+3.x spec. Pass the result to `McpServerModule.for_root()`.
+
+**Parameters**
+
+- `spec`: Parsed dict, or path to a `.json` / `.yaml` file.
+- `http_client`: `httpx.AsyncClient` used to execute requests.
+- `base_url`: URL prefix (may be empty when the client has a `base_url`).
+- `server_path`: Mount path passed to `@mcp_server`.
+- `route_map`: Ordered `RouteEntry` rules; first match wins.
+- `class_name`: Name for the generated class (for tracebacks).
+
+> **Caveat**: Auto-generated tool descriptions are lower quality than hand-crafted
+> ones. Recommended for prototyping, not production.
+
+```python
+import httpx, json
+from lauren_mcp.server import build_openapi_server_class, RouteEntry
+
+spec = json.load(open("openapi.json"))
+ApiServer = build_openapi_server_class(
+    spec,
+    http_client=httpx.AsyncClient(base_url="https://api.example.com"),
+    route_map=[RouteEntry(r"/admin", expose_as="exclude")],
+)
+```
 
 ---
 

@@ -1,8 +1,9 @@
 # Your First MCP Server
 
 This guide walks you from nothing to a working, testable MCP server in under
-five minutes.  You will write a **BookServer** that exposes three tools, one
-resource, and one prompt, then connect a client and call them all.
+five minutes.  You will write a **BookServer** that exposes tools, a resource,
+a prompt, a context-aware tool, and a lifespan hook — then deploy it over
+WebSocket and Streamable HTTP.
 
 ---
 
@@ -86,7 +87,38 @@ class BookServer:
 
 ---
 
-## 3. Add a resource
+## 3. Inject tool context
+
+Declare a parameter annotated with `McpToolContext` to receive per-call
+metadata, report progress, and send log messages back to the client:
+
+```python
+from lauren_mcp import McpToolContext, mcp_tool
+
+@mcp_tool()
+async def search(self, query: str, ctx: McpToolContext) -> list[dict]:
+    """Search books by title or author.
+
+    Args:
+        query: Search terms matched against title and author.
+    """
+    await ctx.info("Starting search", {"query": query})
+    await ctx.report_progress(0, total=100)
+
+    q = query.lower()
+    results = [b for b in BOOKS if q in b["title"].lower() or q in b["author"].lower()]
+
+    await ctx.report_progress(100, total=100)
+    await ctx.info("Search complete", {"hits": len(results)})
+    return results
+```
+
+The `ctx` parameter is never included in the tool's JSON Schema — it is
+injected at call time and invisible to MCP clients.
+
+---
+
+## 4. Add a resource
 
 Resources expose read-only data at stable URIs.  Use `{param}` placeholders
 to capture parts of the URI path:
@@ -113,7 +145,7 @@ class BookServer:
 
 ---
 
-## 4. Add a prompt
+## 5. Add a prompt
 
 Prompts generate structured LLM messages from arguments:
 
@@ -140,7 +172,37 @@ class BookServer:
 
 ---
 
-## 5. Register and run
+## 6. Add a lifespan hook
+
+Use `@mcp_lifespan` to run setup and teardown logic around the server's
+lifetime.  The dict yielded by the generator is available to every tool as
+`ctx.lifespan_context`:
+
+```python
+from lauren_mcp import mcp_lifespan
+
+@mcp_server("/mcp")
+class BookServer:
+    @mcp_lifespan
+    async def lifespan(self):
+        # Runs once at server startup
+        db = await connect_database()
+        try:
+            yield {"db": db}   # accessible as ctx.lifespan_context["db"]
+        finally:
+            # Runs at server shutdown
+            await db.close()
+
+    @mcp_tool()
+    async def search(self, query: str, ctx: McpToolContext) -> list[dict]:
+        """Search books via the shared database connection."""
+        db = ctx.lifespan_context["db"]
+        return await db.search(query)
+```
+
+---
+
+## 7. Register and run
 
 Pass your server class to `McpServerModule.for_root()`:
 
@@ -152,12 +214,48 @@ app = Lauren()
 app.include_module(McpServerModule.for_root(BookServer))
 ```
 
-By default the module mounts a WebSocket endpoint at `/mcp/ws` and an
-HTTP+SSE endpoint at `/mcp`.  Clients can connect with either transport.
+By default the module mounts a WebSocket endpoint at `/mcp/ws`.  Use the
+`transport` argument to also serve Streamable HTTP or the legacy HTTP+SSE
+transport:
+
+=== "WebSocket only (default)"
+
+    ```python
+    @mcp_server("/mcp")                   # transport="ws"
+    class BookServer: ...
+    ```
+
+    | Transport | URL |
+    |---|---|
+    | WebSocket | `ws://localhost:8000/mcp/ws` |
+
+=== "Streamable HTTP"
+
+    ```python
+    @mcp_server("/mcp", transport="streamable")
+    class BookServer: ...
+    ```
+
+    | Transport | URL |
+    |---|---|
+    | Streamable HTTP | `http://localhost:8000/mcp` |
+
+=== "All transports"
+
+    ```python
+    @mcp_server("/mcp", transport="all")
+    class BookServer: ...
+    ```
+
+    | Transport | URL |
+    |---|---|
+    | WebSocket | `ws://localhost:8000/mcp/ws` |
+    | Streamable HTTP | `http://localhost:8000/mcp` |
+    | HTTP + SSE (legacy) | `http://localhost:8000/mcp` (SSE endpoint) |
 
 ---
 
-## 6. Connect a client and call your tools
+## 8. Connect a client and call your tools
 
 While the server is running, open a second terminal:
 
@@ -194,7 +292,7 @@ asyncio.run(main())
 
 ---
 
-## 7. Schema generation
+## 9. Schema generation
 
 `@mcp_tool` generates a JSON Schema from type annotations automatically.
 Every Python type maps to its JSON Schema equivalent:
@@ -207,19 +305,32 @@ Every Python type maps to its JSON Schema equivalent:
 | `bool` | `"boolean"` |
 | `list[X]` | `"array"` |
 | `dict` | `"object"` |
+| `Literal["a", "b"]` | `"string"` with `"enum"` |
 | `X \| None` | optional (not required) |
+| Pydantic `BaseModel` | `"object"` with `$defs` |
+| `@dataclass` | `"object"` with `$defs` |
 
 Parameters without a default value are **required** in the schema.
 Parameters with a default are **optional**.
 
 ```python
+from typing import Annotated, Literal
+from pydantic import BaseModel, Field
+
+class BookFilter(BaseModel):
+    min_year: int = 1900
+    max_year: int = 2100
+
 @mcp_tool()
 async def create_book(
     self,
     title: str,          # required — no default
     author: str,         # required — no default
     year: int = 2025,    # optional — has default
-    tags: list[str] | None = None,  # optional — has default
+    tags: list[str] | None = None,   # optional
+    mode: Literal["fast", "deep"] = "fast",
+    limit: Annotated[int, Field(ge=1, le=50)] = 10,
+    filter: BookFilter | None = None,
 ) -> dict:
     """Add a book to the catalogue."""
     ...
@@ -227,7 +338,7 @@ async def create_book(
 
 ---
 
-## 8. Deploying with Lauren
+## 10. Deploying with Lauren
 
 In production, mount your server inside a Lauren ASGI application and serve
 it with uvicorn:
@@ -249,13 +360,6 @@ app = LaurenFactory.create(AppModule)
 pip install "lauren-mcp[ws]" uvicorn
 uvicorn app:app --port 8000
 ```
-
-MCP clients connect at:
-
-| Transport | URL |
-|---|---|
-| WebSocket | `ws://localhost:8000/mcp/ws` |
-| HTTP + SSE | `http://localhost:8000/mcp` |
 
 For in-process testing (no subprocess, no network), use Lauren's
 `WsTestClient`:
@@ -286,11 +390,17 @@ async def test_via_ws():
         print([t["name"] for t in resp["result"]["tools"]])
 ```
 
+!!! warning "Always call `TestClient(app)` first"
+    `@post_construct` hooks — which register tool handlers — only fire when
+    the Lauren DI container starts.  Call `TestClient(app)` after
+    `LaurenFactory.create()` to trigger them before connecting via
+    `WsTestClient`.
+
 ---
 
 ## Next steps
 
 - **[Your First MCP Client](first-client.md)** — connect to any server
-- **[Decorators in depth](decorators.md)** — all options for `@mcp_tool`, `@mcp_resource`, `@mcp_prompt`
+- **[Decorators in depth](decorators.md)** — all options for `@mcp_tool`, `@mcp_resource`, `@mcp_prompt`, and `@mcp_lifespan`
 - **[Testing your server](testing.md)** — unit and integration test patterns
 - **[MCP Server guide](mcp-server.md)** — full API reference for the server decorators

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import Any
 
@@ -15,9 +16,12 @@ from lauren import (
     ws_controller,
 )
 
+from lauren_mcp._server._binding import CURRENT_BINDING, TransportBinding
 from lauren_mcp._server._dispatcher import McpDispatcher
 from lauren_mcp._server._propagate import _apply_server_metadata
+from lauren_mcp._server._registry import McpConnectionRegistry
 from lauren_mcp._types import (
+    ClientCapabilities,
     JsonRpcErrorResponse,
     JsonRpcNotification,
     JsonRpcRequest,
@@ -33,6 +37,9 @@ _logger = logging.getLogger(__name__)
 # MCP notification methods handled specially by the transport layer
 _METHOD_INITIALIZED = "notifications/initialized"
 _METHOD_CANCEL = "$/cancelRequest"
+
+# Default timeout for server-initiated client RPCs (sampling / elicitation).
+_CLIENT_RPC_TIMEOUT = 120.0
 
 
 # ---------------------------------------------------------------------------
@@ -66,7 +73,12 @@ def mcp_ws_controller(
        :class:`McpDispatcher` and sends the result back over the socket.
     5. Handles ``$/cancelRequest`` notifications by calling
        :meth:`McpDispatcher.cancel`.
-    6. Cleans up on disconnect.
+    6. Supports server-initiated requests to the client (sampling /
+       elicitation) by tracking ``srv-`` prefixed request ids and routing the
+       client's response frames back to the awaiting coroutine.
+    7. Registers with :class:`McpConnectionRegistry` so server-push
+       notifications (``list_changed`` etc.) reach this connection.
+    8. Cleans up on disconnect.
 
     Parameters
     ----------
@@ -97,11 +109,21 @@ def mcp_ws_controller(
     class McpWsController:
         """MCP WebSocket gateway — one instance per connection (REQUEST scope)."""
 
-        def __init__(self, dispatcher: McpDispatcher) -> None:
+        def __init__(
+            self,
+            dispatcher: McpDispatcher,
+            registry: McpConnectionRegistry,
+        ) -> None:
             self._dispatcher = dispatcher
+            self._registry = registry
             # Per-connection state: True once the client has sent
             # ``notifications/initialized`` after the handshake.
             self._initialized: bool = False
+            self._client_capabilities: ClientCapabilities | None = None
+            self._registry_key: str | None = None
+            # Server-initiated RPCs awaiting a client response.
+            self._pending_client_rpcs: dict[str, asyncio.Future[Any]] = {}
+            self._next_srv_id = 0
 
         @on_connect
         async def handle_connect(self, ws: WebSocket) -> None:
@@ -115,7 +137,58 @@ def mcp_ws_controller(
             ``event``-keyed dispatch format.
             """
             await ws.accept()
-            await self._message_loop(ws)
+
+            async def _send(raw: str) -> None:
+                await ws.send_text(raw)
+
+            self._registry_key = self._registry.register(_send)
+
+            async def _send_notification(payload: dict[str, Any]) -> None:
+                import json
+
+                await ws.send_text(json.dumps(payload))
+
+            binding = TransportBinding(
+                headers=getattr(ws, "headers", None),
+                execution_context=None,  # WS is per-connection, not per-frame
+                session_id=None,
+                send_notification=_send_notification,
+                client_rpc=self._make_client_rpc(ws),
+                client_capabilities=None,  # filled in at initialize
+            )
+            self._binding = binding
+            token = CURRENT_BINDING.set(binding)
+            try:
+                await self._message_loop(ws)
+            finally:
+                CURRENT_BINDING.reset(token)
+
+        def _make_client_rpc(self, ws: Any) -> Any:
+            """Build the server-to-client request callable for this connection."""
+
+            async def client_rpc(method: str, params: dict[str, Any]) -> Any:
+                import json
+
+                req_id = f"srv-{self._next_srv_id}"
+                self._next_srv_id += 1
+                fut: asyncio.Future[Any] = asyncio.get_running_loop().create_future()
+                self._pending_client_rpcs[req_id] = fut
+                try:
+                    await ws.send_text(
+                        json.dumps(
+                            {
+                                "jsonrpc": "2.0",
+                                "id": req_id,
+                                "method": method,
+                                "params": params,
+                            }
+                        )
+                    )
+                    return await asyncio.wait_for(fut, timeout=_CLIENT_RPC_TIMEOUT)
+                finally:
+                    self._pending_client_rpcs.pop(req_id, None)
+
+            return client_rpc
 
         async def _message_loop(self, ws: Any) -> None:
             """Continuously receive frames and dispatch them until the socket closes."""
@@ -164,15 +237,44 @@ def mcp_ws_controller(
                     await ws.send_text(err.to_json())
                     return
 
+                if msg.method == "initialize":
+                    self._capture_client_capabilities(msg)
+
                 response: JsonRpcResponse | JsonRpcErrorResponse = await self._dispatcher.dispatch(
                     msg
                 )
                 await ws.send_text(response.to_json())
                 return
 
-            # JsonRpcResponse / JsonRpcErrorResponse arriving on the server
-            # side are unexpected — log and ignore.
-            _logger.warning("MCP WS server received a response frame (unexpected): %s", raw[:200])
+            # JsonRpcResponse / JsonRpcErrorResponse — the client replying to
+            # a server-initiated request (sampling / elicitation).
+            if isinstance(msg, (JsonRpcResponse, JsonRpcErrorResponse)):
+                fut = self._pending_client_rpcs.get(str(msg.id))
+                if fut is not None and not fut.done():
+                    if isinstance(msg, JsonRpcResponse):
+                        fut.set_result(msg.result)
+                    else:
+                        fut.set_exception(
+                            RuntimeError(
+                                f"Client RPC failed ({msg.error.code}): {msg.error.message}"
+                            )
+                        )
+                    return
+                _logger.warning("MCP WS server received an unmatched response frame: %s", raw[:200])
+
+        def _capture_client_capabilities(self, msg: JsonRpcRequest) -> None:
+            params = msg.params if isinstance(msg.params, dict) else {}
+            raw_caps = params.get("capabilities") or {}
+            caps = ClientCapabilities(
+                roots=raw_caps.get("roots"),
+                sampling=raw_caps.get("sampling"),
+                elicitation=raw_caps.get("elicitation"),
+                experimental=raw_caps.get("experimental"),
+            )
+            self._client_capabilities = caps
+            binding = getattr(self, "_binding", None)
+            if binding is not None:
+                binding.client_capabilities = caps
 
         async def _handle_notification(self, notification: JsonRpcNotification) -> None:
             """Handle a JSON-RPC notification from the client."""
@@ -203,6 +305,13 @@ def mcp_ws_controller(
         @on_disconnect
         async def handle_disconnect(self, ws: WebSocket) -> None:
             """Perform cleanup when the WebSocket connection closes."""
+            if self._registry_key is not None:
+                self._registry.unregister(self._registry_key)
+                self._registry_key = None
+            for fut in self._pending_client_rpcs.values():
+                if not fut.done():
+                    fut.set_exception(RuntimeError("Connection closed"))
+            self._pending_client_rpcs.clear()
             _logger.debug("MCP WS: client disconnected")
 
     # Give the dynamically-created class a meaningful __name__ / __qualname__

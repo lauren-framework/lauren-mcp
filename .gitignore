@@ -67,3 +67,4 @@ _version.py
 
 # uv
 uv.lock
+prds/

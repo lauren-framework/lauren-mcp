@@ -64,6 +64,7 @@ class McpHttpSseClient(_McpBaseRemoteClient):
         max_retries: int = 3,
         startup_timeout: float = 10.0,
         client_info: Implementation | None = None,
+        **feature_kwargs: Any,
     ) -> None:
         if not _SSE_AVAILABLE:
             raise ImportError(
@@ -75,6 +76,7 @@ class McpHttpSseClient(_McpBaseRemoteClient):
             headers=headers,
             max_retries=max_retries,
             startup_timeout=startup_timeout,
+            **feature_kwargs,
         )
         self._url = url.rstrip("/")
         self._session_id: str | None = None

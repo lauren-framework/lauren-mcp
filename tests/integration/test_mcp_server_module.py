@@ -89,8 +89,13 @@ class PromptServer:
 # ---------------------------------------------------------------------------
 
 
-def build_wired_dispatcher(server_cls: type, **for_root_kwargs) -> tuple[McpDispatcher, object]:
+async def build_wired_dispatcher(
+    server_cls: type, **for_root_kwargs
+) -> tuple[McpDispatcher, object]:
     """Create a module, instantiate dispatcher + server directly, call _register_handlers."""
+    from lauren_mcp._server._catalog import McpCatalogManager
+    from lauren_mcp._server._registry import McpConnectionRegistry
+
     mod_cls = McpServerModule.for_root(server_cls, **for_root_kwargs)
     dispatcher = McpDispatcher()
     dispatcher._register_builtins()
@@ -98,10 +103,10 @@ def build_wired_dispatcher(server_cls: type, **for_root_kwargs) -> tuple[McpDisp
     # Bypass DI: instantiate the handler registrar directly and call its post_construct.
     # The registrar class is stored on the module by for_root() for exactly this use.
     registrar_cls = mod_cls._handler_registrar_cls  # type: ignore[attr-defined]
-    registrar = registrar_cls.__new__(registrar_cls)
-    registrar._dispatcher = dispatcher
-    registrar._server_instance = server_instance
-    registrar._register_handlers()
+    registrar = registrar_cls(
+        dispatcher, McpConnectionRegistry(), McpCatalogManager(), server_instance
+    )
+    await registrar._register_handlers()
     return dispatcher, server_instance
 
 
@@ -159,7 +164,7 @@ class TestForRootValidation:
 class TestServerCapabilities:
     async def test_capabilities_include_tools_when_tools_present(self):
         """A server with tools should have tools in auto-inferred capabilities."""
-        dispatcher, _ = build_wired_dispatcher(CalcServer)
+        dispatcher, _ = await build_wired_dispatcher(CalcServer)
         resp = await dispatcher.dispatch(
             make_req(
                 "initialize",
@@ -175,7 +180,7 @@ class TestServerCapabilities:
         assert "tools" in resp.result.get("capabilities", {})
 
     async def test_capabilities_include_resources_when_resources_present(self):
-        dispatcher, _ = build_wired_dispatcher(CalcServer)
+        dispatcher, _ = await build_wired_dispatcher(CalcServer)
         resp = await dispatcher.dispatch(
             make_req(
                 "initialize",
@@ -191,7 +196,7 @@ class TestServerCapabilities:
         assert "resources" in resp.result.get("capabilities", {})
 
     async def test_capabilities_include_prompts_when_prompts_present(self):
-        dispatcher, _ = build_wired_dispatcher(CalcServer)
+        dispatcher, _ = await build_wired_dispatcher(CalcServer)
         resp = await dispatcher.dispatch(
             make_req(
                 "initialize",
@@ -207,7 +212,7 @@ class TestServerCapabilities:
         assert "prompts" in resp.result.get("capabilities", {})
 
     async def test_capabilities_no_tools_when_no_tool_methods(self):
-        dispatcher, _ = build_wired_dispatcher(EmptyServer)
+        dispatcher, _ = await build_wired_dispatcher(EmptyServer)
         resp = await dispatcher.dispatch(
             make_req(
                 "initialize",
@@ -224,7 +229,7 @@ class TestServerCapabilities:
         assert "tools" not in caps
 
     async def test_capabilities_no_resources_when_no_resource_methods(self):
-        dispatcher, _ = build_wired_dispatcher(ToolsOnlyServer)
+        dispatcher, _ = await build_wired_dispatcher(ToolsOnlyServer)
         resp = await dispatcher.dispatch(
             make_req(
                 "initialize",
@@ -241,7 +246,7 @@ class TestServerCapabilities:
         assert "resources" not in caps
 
     async def test_capabilities_no_prompts_when_no_prompt_methods(self):
-        dispatcher, _ = build_wired_dispatcher(ToolsOnlyServer)
+        dispatcher, _ = await build_wired_dispatcher(ToolsOnlyServer)
         resp = await dispatcher.dispatch(
             make_req(
                 "initialize",
@@ -265,36 +270,45 @@ class TestServerCapabilities:
 
 class TestHandlerRegistration:
     async def test_initialize_handler_registered(self):
-        dispatcher, _ = build_wired_dispatcher(CalcServer)
+        dispatcher, _ = await build_wired_dispatcher(CalcServer)
         assert "initialize" in dispatcher._handlers
 
     async def test_tools_list_handler_registered_when_tools_present(self):
-        dispatcher, _ = build_wired_dispatcher(CalcServer)
+        dispatcher, _ = await build_wired_dispatcher(CalcServer)
         assert "tools/list" in dispatcher._handlers
 
     async def test_tools_call_handler_registered_when_tools_present(self):
-        dispatcher, _ = build_wired_dispatcher(CalcServer)
+        dispatcher, _ = await build_wired_dispatcher(CalcServer)
         assert "tools/call" in dispatcher._handlers
 
-    async def test_tools_list_not_registered_when_no_tools(self):
-        dispatcher, _ = build_wired_dispatcher(EmptyServer)
-        assert "tools/list" not in dispatcher._handlers
+    async def test_tools_list_registered_even_when_no_tools(self):
+        # Handlers are always registered so dynamically added catalog
+        # entries are reachable; an empty server returns an empty list.
+        dispatcher, _ = await build_wired_dispatcher(EmptyServer)
+        assert "tools/list" in dispatcher._handlers
+        resp = await dispatcher.dispatch(make_req("tools/list", id_=90))
+        assert isinstance(resp, JsonRpcResponse)
+        assert resp.result == {"tools": []}
 
     async def test_resources_list_handler_registered_when_resources_present(self):
-        dispatcher, _ = build_wired_dispatcher(CalcServer)
+        dispatcher, _ = await build_wired_dispatcher(CalcServer)
         assert "resources/list" in dispatcher._handlers
 
-    async def test_resources_list_not_registered_when_no_resources(self):
-        dispatcher, _ = build_wired_dispatcher(ToolsOnlyServer)
-        assert "resources/list" not in dispatcher._handlers
+    async def test_resources_list_empty_when_no_resources(self):
+        dispatcher, _ = await build_wired_dispatcher(ToolsOnlyServer)
+        resp = await dispatcher.dispatch(make_req("resources/list", id_=91))
+        assert isinstance(resp, JsonRpcResponse)
+        assert resp.result == {"resources": []}
 
     async def test_prompts_list_handler_registered_when_prompts_present(self):
-        dispatcher, _ = build_wired_dispatcher(CalcServer)
+        dispatcher, _ = await build_wired_dispatcher(CalcServer)
         assert "prompts/list" in dispatcher._handlers
 
-    async def test_prompts_list_not_registered_when_no_prompts(self):
-        dispatcher, _ = build_wired_dispatcher(ToolsOnlyServer)
-        assert "prompts/list" not in dispatcher._handlers
+    async def test_prompts_list_empty_when_no_prompts(self):
+        dispatcher, _ = await build_wired_dispatcher(ToolsOnlyServer)
+        resp = await dispatcher.dispatch(make_req("prompts/list", id_=92))
+        assert isinstance(resp, JsonRpcResponse)
+        assert resp.result == {"prompts": []}
 
 
 # ---------------------------------------------------------------------------
@@ -304,7 +318,7 @@ class TestHandlerRegistration:
 
 class TestDispatchRoundTrips:
     async def test_tools_list_dispatch_returns_tool_names(self):
-        dispatcher, _ = build_wired_dispatcher(CalcServer)
+        dispatcher, _ = await build_wired_dispatcher(CalcServer)
         resp = await dispatcher.dispatch(make_req("tools/list", id_=20))
         assert isinstance(resp, JsonRpcResponse)
         tools = resp.result.get("tools", [])
@@ -313,7 +327,7 @@ class TestDispatchRoundTrips:
         assert "multiply" in names
 
     async def test_tools_call_add_returns_correct_result(self):
-        dispatcher, _ = build_wired_dispatcher(CalcServer)
+        dispatcher, _ = await build_wired_dispatcher(CalcServer)
         resp = await dispatcher.dispatch(
             make_req(
                 "tools/call",
@@ -326,7 +340,7 @@ class TestDispatchRoundTrips:
         assert any("8" in item.get("text", "") for item in content if item.get("type") == "text")
 
     async def test_tools_call_unknown_tool_returns_internal_error(self):
-        dispatcher, _ = build_wired_dispatcher(CalcServer)
+        dispatcher, _ = await build_wired_dispatcher(CalcServer)
         resp = await dispatcher.dispatch(
             make_req(
                 "tools/call",
@@ -338,14 +352,14 @@ class TestDispatchRoundTrips:
         assert resp.error.code == McpErrorCode.INTERNAL_ERROR
 
     async def test_resources_list_dispatch_returns_resource_uris(self):
-        dispatcher, _ = build_wired_dispatcher(CalcServer)
+        dispatcher, _ = await build_wired_dispatcher(CalcServer)
         resp = await dispatcher.dispatch(make_req("resources/list", id_=30))
         assert isinstance(resp, JsonRpcResponse)
         resources = resp.result.get("resources", [])
         assert len(resources) >= 1
 
     async def test_prompts_list_dispatch_returns_prompt_names(self):
-        dispatcher, _ = build_wired_dispatcher(CalcServer)
+        dispatcher, _ = await build_wired_dispatcher(CalcServer)
         resp = await dispatcher.dispatch(make_req("prompts/list", id_=40))
         assert isinstance(resp, JsonRpcResponse)
         prompts = resp.result.get("prompts", [])

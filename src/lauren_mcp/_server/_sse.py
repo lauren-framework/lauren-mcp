@@ -17,10 +17,12 @@ from lauren import (
     use_middlewares,
 )
 from lauren.sse import EventStream, ServerSentEvent
-from lauren.types import Headers, Request, Response
+from lauren.types import ExecutionContext, Headers, Request, Response
 
+from lauren_mcp._server._binding import CURRENT_BINDING, TransportBinding
 from lauren_mcp._server._dispatcher import McpDispatcher
 from lauren_mcp._server._propagate import _apply_server_metadata
+from lauren_mcp._server._registry import McpConnectionRegistry
 from lauren_mcp._server._session import SseSessionStore
 from lauren_mcp._types import (
     JsonRpcErrorResponse,
@@ -92,15 +94,22 @@ def mcp_http_sse_controller(
             self,
             dispatcher: McpDispatcher,
             sessions: SseSessionStore,
+            registry: McpConnectionRegistry,
         ) -> None:
             self._dispatcher = dispatcher
             self._sessions = sessions
+            self._registry = registry
 
         @get("/sse")
         async def open_stream(self, request: Request) -> EventStream:
             """Open a new SSE stream and return the session endpoint event."""
             session_id = secrets.token_urlsafe(16)
             queue = self._sessions.create(session_id)
+
+            async def _push(raw: str) -> None:
+                await queue.put(raw)
+
+            registry_key = self._registry.register(_push)
 
             async def _generator() -> AsyncGenerator[ServerSentEvent, None]:
                 # First event: tell the client its session id so it can
@@ -117,6 +126,7 @@ def mcp_http_sse_controller(
                             break
                         yield ServerSentEvent(event="message", data=payload)
                 finally:
+                    self._registry.unregister(registry_key)
                     self._sessions.remove(session_id)
 
             return EventStream(_generator())
@@ -184,9 +194,27 @@ def mcp_http_sse_controller(
                 return Response(body=b"", status=202)
 
             if isinstance(msg, JsonRpcRequest):
-                response: JsonRpcResponse | JsonRpcErrorResponse = await self._dispatcher.dispatch(
-                    msg
+
+                async def _send_notification(payload: dict[str, Any]) -> None:
+                    await queue.put(json.dumps(payload))
+
+                binding = TransportBinding(
+                    headers=request.headers,
+                    execution_context=ExecutionContext(request=request),
+                    session_id=session_id,
+                    send_notification=_send_notification,
+                    # Legacy SSE cannot carry server-to-client requests, so
+                    # sampling / elicitation are unavailable on this transport.
+                    client_rpc=None,
+                    client_capabilities=None,
                 )
+                token = CURRENT_BINDING.set(binding)
+                try:
+                    response: (
+                        JsonRpcResponse | JsonRpcErrorResponse
+                    ) = await self._dispatcher.dispatch(msg)
+                finally:
+                    CURRENT_BINDING.reset(token)
                 await queue.put(response.to_json())
                 return Response(body=b"", status=202)
 
@@ -206,15 +234,16 @@ def mcp_http_sse_controller(
     # real Lauren @controller, the HTTP pipeline processes these natively —
     # guards run per-request, interceptors wrap handlers, encoder overrides
     # the app-level encoder for all SSE/POST routes, etc.
+    controller_cls: type = McpSseController
     if source is not None:
-        _apply_server_metadata(source, McpSseController)
+        _apply_server_metadata(source, controller_cls)
     else:
         # Legacy explicit params — kept for backward compatibility.
         if middleware_classes:
-            McpSseController = use_middlewares(*middleware_classes)(McpSseController)
+            controller_cls = use_middlewares(*middleware_classes)(controller_cls)
         if guard_classes:
-            McpSseController = use_guards(*guard_classes)(McpSseController)
+            controller_cls = use_guards(*guard_classes)(controller_cls)
         if interceptor_classes:
-            McpSseController = use_interceptors(*interceptor_classes)(McpSseController)
+            controller_cls = use_interceptors(*interceptor_classes)(controller_cls)
 
-    return McpSseController
+    return controller_cls

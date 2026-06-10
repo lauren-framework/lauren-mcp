@@ -29,13 +29,12 @@ def _apply_server_metadata(source: Any, target: Any) -> None:
     ``lauren>=1.7.0``), then falls back to per-category application for
     ``lauren 1.6.x``.
     """
-    try:
-        from lauren import propagate_metadata  # noqa: PLC0415
+    import lauren  # noqa: PLC0415
 
+    propagate_metadata = getattr(lauren, "propagate_metadata", None)
+    if propagate_metadata is not None:
         propagate_metadata(source)(target)
         return
-    except ImportError:
-        pass
 
     # --- Fallback for lauren 1.6.x ---
     # reflect_guards/interceptors/middlewares are available since 1.6.0.

@@ -19,11 +19,13 @@ from lauren import (
     LaurenFactory, module, injectable, Scope,
     controller, get, post,
     ws_controller, on_connect, on_disconnect,
-    post_construct, pre_destruct,
     AppState,
 )
 from lauren.testing import TestClient, WsTestClient
-from lauren_mcp import mcp_server, mcp_tool, mcp_resource, mcp_prompt, McpServerModule
+from lauren_mcp import (
+    mcp_server, mcp_tool, mcp_resource, mcp_prompt,
+    mcp_lifespan, McpServerModule, McpToolContext,
+)
 ```
 
 ---
@@ -83,7 +85,204 @@ Clients connect at `ws://localhost:8000/mcp/ws`.
 
 ---
 
-## 2. HTTP controllers + MCP server in the same app
+## 2. Choosing a transport
+
+```python
+# WebSocket only (default)
+McpServerModule.for_root(MyServer, transport="ws")
+
+# Streamable HTTP only (MCP 2025-03-26 — recommended for HTTP clients)
+McpServerModule.for_root(MyServer, transport="streamable")
+
+# Legacy HTTP + SSE only (MCP 2024-11-05)
+McpServerModule.for_root(MyServer, transport="sse")
+
+# WebSocket + legacy HTTP+SSE simultaneously
+McpServerModule.for_root(MyServer, transport="both")
+
+# WebSocket + Streamable HTTP simultaneously
+McpServerModule.for_root(MyServer, transport="all")
+```
+
+| Transport | Client connects at |
+|---|---|
+| `"ws"` | `ws://host/mcp/ws` |
+| `"streamable"` | `http://host/mcp/` (POST / GET / DELETE) |
+| `"sse"` | `http://host/mcp/` (POST) + `http://host/mcp/sse` (GET SSE) |
+
+> **Note**: Legacy SSE and Streamable HTTP both use `POST /` so they cannot be
+> mounted on the same path. Use `"all"` (WebSocket + Streamable) rather than
+> mixing SSE and Streamable.
+
+---
+
+## 3. Managing resources with @mcp_lifespan
+
+`@mcp_lifespan` is the preferred way to set up resources that need to exist
+for the lifetime of the server (database connections, HTTP client sessions,
+caches, etc.).  The async generator runs once at startup; the dict it yields
+becomes `McpToolContext.lifespan_context` for every tool call.  Cleanup code
+in the `finally` block runs at shutdown.
+
+```python
+from __future__ import annotations
+
+import asyncpg
+from lauren import LaurenFactory, module
+from lauren_mcp import mcp_server, mcp_tool, mcp_lifespan, McpServerModule, McpToolContext
+
+DATABASE_URL = "postgresql://user:pass@localhost/shop"
+
+
+@mcp_server("/mcp")
+class CatalogueServer:
+
+    @mcp_lifespan
+    async def lifespan(self):
+        # Connect once at startup; the pool is shared across all tool calls.
+        pool = await asyncpg.create_pool(DATABASE_URL)
+        try:
+            yield {"db": pool}
+        finally:
+            await pool.close()
+
+    @mcp_tool()
+    async def search(self, query: str, ctx: McpToolContext) -> list[dict]:
+        """Search items by name.
+
+        Args:
+            query: Search terms.
+        """
+        db = ctx.lifespan_context["db"]
+        rows = await db.fetch(
+            "SELECT id, name, price FROM items WHERE name ILIKE $1",
+            f"%{query}%",
+        )
+        return [dict(r) for r in rows]
+
+    @mcp_tool()
+    async def get_item(self, item_id: int, ctx: McpToolContext) -> dict | None:
+        """Fetch one item by ID.
+
+        Args:
+            item_id: Numeric item ID.
+        """
+        db = ctx.lifespan_context["db"]
+        row = await db.fetchrow("SELECT * FROM items WHERE id = $1", item_id)
+        return dict(row) if row else None
+
+
+@module(imports=[McpServerModule.for_root(CatalogueServer)])
+class AppModule:
+    pass
+
+app = LaurenFactory.create(AppModule)
+```
+
+> **Important**: `@mcp_lifespan` must be an async generator (a coroutine containing
+> exactly one `yield`).  The framework raises `TypeError` if the method is a plain
+> coroutine.  Each server class may have at most one `@mcp_lifespan` method.
+
+---
+
+## 4. McpToolContext injection
+
+Declare a parameter typed `McpToolContext` on any `@mcp_tool` method to receive
+the per-call context.  The framework detects the annotation and injects the
+object automatically — it is not included in the tool's input schema.
+
+```python
+from lauren_mcp import McpToolContext
+
+@mcp_tool()
+async def process(self, payload: str, ctx: McpToolContext) -> str:
+    """Process a payload.
+
+    Args:
+        payload: Data to process.
+    """
+    # Transport identity
+    session_id   = ctx.session_id        # str | None
+    headers      = ctx.headers           # lauren.types.Headers | None
+    exec_ctx     = ctx.execution_context # lauren.types.ExecutionContext | None
+
+    # Metadata set by guards / interceptors via @set_metadata
+    tenant_id = ctx.get_metadata("tenant_id")   # or ctx.metadata["tenant_id"]
+
+    # Shared resources from @mcp_lifespan
+    db = ctx.lifespan_context.get("db")
+
+    return payload.upper()
+```
+
+### Progress notifications
+
+Send incremental progress to the client while a long-running tool is working.
+The client must have supplied a `progressToken` in its `tools/call` request;
+`report_progress` is a no-op when no token is present.
+
+```python
+@mcp_tool()
+async def index_documents(self, paths: list[str], ctx: McpToolContext) -> dict:
+    """Index a list of documents.
+
+    Args:
+        paths: File paths to index.
+    """
+    total = len(paths)
+    for i, path in enumerate(paths, 1):
+        await _index_one(path)
+        await ctx.report_progress(i, total)
+    return {"indexed": total}
+```
+
+### Log notifications
+
+Send structured log entries to the client in real time.  Entries below the
+server's configured `log_level` are dropped silently.
+
+```python
+@mcp_tool()
+async def run_pipeline(self, job_id: str, ctx: McpToolContext) -> dict:
+    """Run a data pipeline job.
+
+    Args:
+        job_id: Job identifier.
+    """
+    await ctx.info("Pipeline started", {"job_id": job_id})
+    try:
+        result = await _execute(job_id)
+        await ctx.info("Pipeline complete", {"rows": result["rows"]})
+        return result
+    except Exception as exc:
+        await ctx.error("Pipeline failed", {"error": str(exc)})
+        raise
+```
+
+Convenience methods: `ctx.debug()`, `ctx.info()`, `ctx.warning()`, `ctx.error()`.
+All call `ctx.log(level, message, data)` internally.
+
+---
+
+## 5. Controlling log level
+
+The `log_level` parameter on `for_root()` sets the minimum severity for
+client-bound log notifications (default: `"debug"`).  Valid values are
+`"debug"`, `"info"`, `"warning"`, and `"error"`.
+
+```python
+McpServerModule.for_root(
+    MyServer,
+    transport="streamable",
+    log_level="info",   # suppress debug-level log notifications
+)
+```
+
+Clients may raise the threshold at runtime by sending `logging/setLevel`.
+
+---
+
+## 6. HTTP controllers + MCP server in the same app
 
 HTTP routes and MCP endpoints share the same DI container and app lifecycle:
 
@@ -124,7 +323,7 @@ app = LaurenFactory.create(AppModule)
 
 ---
 
-## 3. Dependency injection into @mcp_server
+## 7. Dependency injection into @mcp_server
 
 Pass your service classes via `providers=` so the DI container injects them
 into your `@mcp_server` class constructor:
@@ -159,7 +358,7 @@ class ShopServer:
     imports=[
         McpServerModule.for_root(
             ShopServer,
-            providers=[PricingService],   # ← make PricingService visible
+            providers=[PricingService],   # make PricingService visible
         )
     ]
 )
@@ -179,85 +378,67 @@ class PricingModule:
 @module(
     controllers=[PriceController],
     imports=[
-        PricingModule,                                             # HTTP side
-        McpServerModule.for_root(ShopServer, imports=[PricingModule]),  # MCP side
+        PricingModule,                                                  # HTTP side
+        McpServerModule.for_root(ShopServer, imports=[PricingModule]), # MCP side
     ],
 )
 class AppModule:
     pass
 ```
 
-Alternatively, export a service FROM `for_root()` so the parent module can see it:
-
-```python
-@module(
-    imports=[
-        McpServerModule.for_root(
-            ShopServer,
-            providers=[PricingService],
-            exports=[PricingService],   # PricingService is visible to AppModule
-        )
-    ]
-)
-class AppModule:
-    pass
-```
-
-> **Lauren module encapsulation rule**: a provider may only be declared in one module.
-> If both the outer `AppModule` and `for_root(providers=[...])` declare `PricingService`,
-> Lauren raises `ModuleExportViolation`.  Declare a shared service in exactly one
-> `@module(exports=[...])` module and import it everywhere else.
+> **Lauren module encapsulation rule**: a provider may only be declared in one
+> module.  If both the outer `AppModule` and `for_root(providers=[...])` declare
+> `PricingService`, Lauren raises `ModuleExportViolation`.  Declare a shared
+> service in exactly one `@module(exports=[...])` module and import it everywhere
+> else.
 
 ---
 
-## 4. Using AppState for shared read-only config
+## 8. The @set_metadata → ctx.get_metadata() flow
 
-`AppState` is set before startup and read-only after. Both HTTP controllers
-and MCP server methods can access it via a service:
+Guards and interceptors can attach metadata to a connection using
+`@set_metadata`.  Tools receive this metadata through `McpToolContext.metadata`
+(or the convenience method `ctx.get_metadata(key)`).
 
 ```python
-from lauren import AppState, injectable, Scope
+from lauren import injectable, Scope, use_guards, set_metadata
 
 @injectable(scope=Scope.SINGLETON)
-class AppConfig:
-    def __init__(self, state: AppState) -> None:
-        self._state = state
+class TenantGuard:
+    async def can_activate(self, ctx) -> bool:
+        tenant = ctx.request.headers.get("x-tenant-id")
+        if not tenant:
+            return False
+        # Store tenant for tools to read
+        ctx.state.set("tenant_id", tenant)
+        return True
 
-    @property
-    def currency(self) -> str:
-        return self._state.get("currency", "USD")
 
-
+@use_guards(TenantGuard)
+@set_metadata("require_tenant", True)
 @mcp_server("/mcp")
-class PricingServer:
-    def __init__(self, config: AppConfig) -> None:
-        self._config = config
-
+class TenantServer:
     @mcp_tool()
-    async def format_price(self, amount: float) -> str:
-        """Format a price with the app currency.
-
-        Args:
-            amount: Numeric amount.
-        """
-        return f"{amount:.2f} {self._config.currency}"
-
-
-app = LaurenFactory.create(
-    AppModule,
-    app_state=AppState({"currency": "GBP"}),
-)
+    async def get_data(self, ctx: McpToolContext) -> dict:
+        """Fetch tenant-scoped data."""
+        tenant_id = ctx.get_metadata("tenant_id")
+        return {"tenant": tenant_id, "data": [...]}
 ```
+
+The `@set_metadata` values set on the class are available as
+`ctx.metadata["require_tenant"]`; values set dynamically via `ctx.state` in a
+guard arrive via the `execution_context` on the binding.
 
 ---
 
-## 5. Guards
+## 9. Guards
 
-### `@use_guards` directly on `@mcp_server` ✅
+### @use_guards directly on @mcp_server
 
 Stack `@use_guards(...)` directly on your `@mcp_server` class — no middleware,
 no extra wiring.  Guards are checked **at connection time** (before the MCP
-handshake); rejected clients receive close code `1008` (Policy Violation).
+handshake); rejected clients receive close code `1008` (Policy Violation) for
+WebSocket, or `403` for HTTP transports.
 
 ```python
 from lauren import injectable, Scope, use_guards
@@ -266,11 +447,11 @@ from lauren_mcp import mcp_server, mcp_tool, McpServerModule
 @injectable(scope=Scope.SINGLETON)
 class ApiKeyGuard:
     async def can_activate(self, ctx) -> bool:
-        # ctx.request.headers holds the WS upgrade request headers
+        # ctx.request.headers holds the WS upgrade or HTTP request headers
         return ctx.request.headers.get("x-api-key") == "secret-key"
 
 
-@use_guards(ApiKeyGuard)          # ← stacked directly on @mcp_server
+@use_guards(ApiKeyGuard)          # stacked directly on @mcp_server
 @mcp_server("/mcp")
 class SecureServer:
     @mcp_tool()
@@ -289,15 +470,6 @@ TestClient(app)  # triggers @post_construct
 
 `ApiKeyGuard` is injected automatically — no need to add it to `providers=`.
 
-**Connection flow:**
-
-```
-Client → WS upgrade (X-Api-Key: secret-key)
-           ↓
-        ApiKeyGuard.can_activate(ctx)  →  True  →  ws.accept()  →  MCP handshake
-                                        →  False →  ws.close(1008)
-```
-
 **Multiple guards:**
 
 ```python
@@ -308,23 +480,10 @@ class SecureServer: ...
 
 All guards are checked in order; the first rejection closes the connection.
 
-**Guard context:** Inside `can_activate(ctx)`, access the WS upgrade headers:
+### Guards with DI dependencies
 
-```python
-@injectable(scope=Scope.SINGLETON)
-class BearerGuard:
-    async def can_activate(self, ctx) -> bool:
-        auth = ctx.request.headers.get("authorization", "")
-        if not auth.startswith("Bearer "):
-            return False
-        token = auth[len("Bearer "):]
-        return await self._verify(token)  # async verify OK
-```
-
-### `@use_guards` on `@mcp_server` with DI dependencies
-
-Guards are resolved from Lauren's DI container per-connection (REQUEST scope).
-If a guard needs a service, inject it via the constructor:
+Guards are resolved from Lauren's DI container.  If a guard needs a service,
+inject it via the constructor:
 
 ```python
 @injectable(scope=Scope.SINGLETON)
@@ -350,29 +509,16 @@ class AppModule: ...
 
 ### Global guard on HTTP routes only
 
-Global guards apply to HTTP routes only, not to WS connections.  Use
+Global guards apply to HTTP routes only, not to WebSocket connections.  Use
 `@use_guards` on the server class for MCP, and `global_guards=` for HTTP:
 
 ```python
 app = LaurenFactory.create(AppModule, global_guards=[SomeHttpGuard])
 ```
 
-### Class-level guard on an HTTP controller
-
-```python
-from lauren import controller, get, use_guards
-
-@use_guards(RoleGuard)
-@controller("/admin")
-class AdminController:
-    @get("/dashboard")
-    async def dashboard(self) -> dict:
-        return {"page": "dashboard"}
-```
-
 ---
 
-## 6. Middleware
+## 10. Middleware
 
 Middleware wraps every HTTP request/response in an onion model.
 
@@ -414,27 +560,9 @@ class CachedController:
         return ITEMS
 ```
 
-Only routes in `CachedController` pass through `CachingMiddleware`.
-
-### Request mutation via middleware
-
-```python
-@middleware()
-class AuthMiddleware:
-    async def dispatch(self, request: Request, call_next: CallNext) -> Response:
-        token = request.headers.get("authorization", "")
-        request.state.set("user_id", _decode_token(token))
-        return await call_next(request)
-
-# In your handler:
-@get("/me")
-async def me(self, request: Request) -> dict:
-    return {"user_id": request.state.get("user_id")}
-```
-
 ---
 
-## 6b. Interceptors
+## 11. Interceptors
 
 Interceptors wrap the handler call and can transform responses.  They run
 after guards but before the handler, and receive the handler's return value.
@@ -464,69 +592,50 @@ class TimingInterceptor:
 app = LaurenFactory.create(AppModule, global_interceptors=[TimingInterceptor])
 ```
 
-### Class-level interceptor
+---
+
+## 12. Using AppState for shared read-only config
+
+`AppState` is set before startup and read-only after.  Both HTTP controllers
+and MCP server methods can access it via a service:
 
 ```python
-from lauren import use_interceptors
+from lauren import AppState, injectable, Scope
 
-@use_interceptors(TimingInterceptor)
-@controller("/api")
-class TimedController:
-    @get("/data")
-    async def data(self) -> dict:
-        return {"items": []}
-```
+@injectable(scope=Scope.SINGLETON)
+class AppConfig:
+    def __init__(self, state: AppState) -> None:
+        self._state = state
 
-### Method-level interceptor
+    @property
+    def currency(self) -> str:
+        return self._state.get("currency", "USD")
 
-```python
-@controller("/api")
-class MixedController:
-    @use_interceptors(TimingInterceptor)   # only this route is timed
-    @get("/slow")
-    async def slow(self) -> dict:
-        return {"ok": True}
 
-    @get("/fast")
-    async def fast(self) -> dict:
-        return {"ok": True}
-```
+@mcp_server("/mcp")
+class PricingServer:
+    def __init__(self, config: AppConfig) -> None:
+        self._config = config
 
-### Multiple interceptors
+    @mcp_tool()
+    async def format_price(self, amount: float) -> str:
+        """Format a price with the app currency.
 
-Interceptors compose in order: `[A, B]` runs `A-before → B-before → handler
-→ B-after → A-after`.
+        Args:
+            amount: Numeric amount.
+        """
+        return f"{amount:.2f} {self._config.currency}"
 
-```python
+
 app = LaurenFactory.create(
     AppModule,
-    global_interceptors=[AuthInterceptor, TimingInterceptor],
+    app_state=AppState({"currency": "GBP"}),
 )
 ```
 
 ---
 
-## 7. Choosing a transport
-
-```python
-# WebSocket only (default)
-McpServerModule.for_root(MyServer, transport="ws")
-
-# HTTP + SSE only
-McpServerModule.for_root(MyServer, transport="sse")
-
-# Both simultaneously
-McpServerModule.for_root(MyServer, transport="both")
-```
-
-| Transport | Client connects at |
-|---|---|
-| `"ws"` | `ws://host/mcp/ws` |
-| `"sse"` | `http://host/mcp/` (POST) + `http://host/mcp/sse` (GET SSE) |
-
----
-
-## 8. Custom server metadata
+## 13. Custom server metadata
 
 ```python
 from lauren_mcp._types import Implementation, ServerCapabilities
@@ -543,47 +652,7 @@ McpServerModule.for_root(
 
 ---
 
-## 9. @post_construct and @pre_destruct hooks
-
-Both `@post_construct` and `@pre_destruct` work on any injectable in the module:
-
-```python
-from lauren import injectable, Scope, post_construct, pre_destruct
-
-@injectable(scope=Scope.SINGLETON)
-class DatabasePool:
-    @post_construct
-    async def open(self) -> None:
-        self._pool = await create_pool(...)
-
-    @pre_destruct
-    async def close(self) -> None:
-        await self._pool.close()
-
-
-@mcp_server("/mcp")
-class DataServer:
-    def __init__(self, db: DatabasePool) -> None:
-        self._db = db
-
-    @mcp_tool()
-    async def query(self, sql: str) -> list[dict]:
-        """Run a SQL query. Args: sql: SQL statement."""
-        return await self._db.execute(sql)
-
-
-@module(
-    imports=[McpServerModule.for_root(DataServer, providers=[DatabasePool])]
-)
-class AppModule:
-    pass
-```
-
-`DatabasePool.open()` runs at startup; `DatabasePool.close()` runs at shutdown.
-
----
-
-## 10. Testing
+## 14. Testing
 
 ### In-process WS testing (fastest)
 
@@ -623,64 +692,99 @@ async def test_echo(app):
         assert resp["result"]["content"][0]["text"] == "hello"
 ```
 
-### Testing HTTP routes alongside MCP
+> **Critical**: call `TestClient(app)` after `LaurenFactory.create(app)` to
+> trigger `@post_construct` hooks before connecting via `WsTestClient`.  Without
+> this step the `initialize` handler is not registered and every call returns
+> `Method not found`.
+
+---
+
+## 15. Inspecting MCP server metadata with lauren.reflect
+
+`lauren>=1.6.0` ships a full metadata introspection API.  You can read guard,
+interceptor, and metadata annotations from any `@mcp_server` class without
+touching internal `__dict__` attributes:
 
 ```python
-def test_rest_and_mcp(app):
-    client = TestClient(app)
-    # HTTP endpoint
-    resp = client.get("/api/items")
-    assert resp.status_code == 200
-    assert isinstance(resp.json(), list)
+from lauren.reflect import (
+    reflect_guards,
+    reflect_interceptors,
+    reflect_user_metadata,
+    reflect_all,
+    get_all_routes,
+    get_all_ws_gateways,
+)
 
-async def test_mcp_ws(app):
-    async with WsTestClient(app).connect("/mcp/ws") as ws:
-        # ... MCP protocol
+@use_guards(ApiKeyGuard, RateLimitGuard)
+@set_metadata("rate_limit", 100)
+@mcp_server("/mcp")
+class MyServer: ...
+
+reflect_guards(MyServer)             # (ApiKeyGuard, RateLimitGuard)
+reflect_user_metadata(MyServer)      # {"rate_limit": 100}
+meta = reflect_all(MyServer)         # ReflectedMeta(guards=…, interceptors=…, middlewares=…)
 ```
 
-### Subprocess E2E (tests the real Lauren app boot)
+After the app has started, query the compiled dispatch table:
 
 ```python
-import sys, os, tempfile, textwrap
-from lauren_mcp import McpServer
+app = LaurenFactory.create(AppModule)
+TestClient(app)  # triggers startup
 
-_APP_SCRIPT = textwrap.dedent("""
-    from lauren import LaurenFactory, module
-    from lauren_mcp import mcp_server, mcp_tool, McpServerModule
-    import sys, json, asyncio
+for gw in get_all_ws_gateways(app):
+    print(gw.path_template, gw.guards)   # "/mcp/ws"  (ApiKeyGuard, RateLimitGuard)
 
-    @mcp_server("/mcp")
-    class S:
-        @mcp_tool()
-        async def ping(self) -> str:
-            "Ping."
-            return "pong"
+for route in get_all_routes(app):
+    print(route.method, route.full_path)  # POST /mcp/  GET /mcp/  ...
+```
 
-    @module(imports=[McpServerModule.for_root(S, transport="ws")])
-    class App: pass
-    # ... stdio runner (see tests/end_to_end/)
-""")
+### Propagating guards with @propagate_metadata
+
+When multiple MCP servers share the same auth policy, use `@propagate_metadata`
+to avoid repeating `@use_guards` on every class:
+
+```python
+from lauren import propagate_metadata
+
+@use_guards(ApiKeyGuard)
+@set_metadata("require_auth", True)
+class _AuthPolicy:
+    pass
+
+@propagate_metadata(_AuthPolicy)
+@mcp_server("/catalogue")
+class CatalogueServer: ...
+
+@propagate_metadata(_AuthPolicy)
+@mcp_server("/inventory")
+class InventoryServer: ...
 ```
 
 ---
 
-## 11. Full production app example
+## 16. Full production app example
 
 ```python
-# main.py — production app combining HTTP, MCP, DI, middleware
+# main.py — production app combining HTTP, MCP, DI, lifespan, middleware
 from __future__ import annotations
 
+import asyncpg
 from lauren import (
     LaurenFactory, module, controller, get, post,
     injectable, Scope, middleware,
 )
 from lauren.types import Request, Response, CallNext
-from lauren_mcp import mcp_server, mcp_tool, mcp_resource, McpServerModule
+from lauren_mcp import (
+    mcp_server, mcp_tool, mcp_resource, mcp_lifespan,
+    McpServerModule, McpToolContext,
+)
+
+DATABASE_URL = "postgresql://user:pass@localhost/shop"
 
 
 @injectable(scope=Scope.SINGLETON)
 class ItemStore:
-    """Shared data store used by both HTTP and MCP."""
+    """Shared in-memory item store used by both HTTP and MCP."""
 
     def __init__(self) -> None:
         self._items: list[dict] = [
@@ -717,17 +821,34 @@ class ItemController:
         return self._store.add(name, price)
 
 
-@mcp_server("/mcp")
+@mcp_server("/mcp", transport="all")   # WebSocket + Streamable HTTP
 class ItemMcpServer:
-    """MCP server exposing the same item store to AI clients."""
+    """MCP server exposing the item store to AI clients."""
 
     def __init__(self, store: ItemStore) -> None:
         self._store = store
 
+    @mcp_lifespan
+    async def lifespan(self):
+        # Example: open a read-only analytics connection at startup.
+        pool = await asyncpg.create_pool(DATABASE_URL, min_size=1, max_size=3)
+        try:
+            yield {"analytics_db": pool}
+        finally:
+            await pool.close()
+
     @mcp_tool()
-    async def search_items(self, query: str) -> list[dict]:
+    async def search_items(self, query: str, ctx: McpToolContext) -> list[dict]:
         """Search items by name. Args: query: Search terms."""
+        await ctx.info("Searching", {"query": query})
         return self._store.search(query)
+
+    @mcp_tool()
+    async def analytics_summary(self, ctx: McpToolContext) -> dict:
+        """Return a summary from the analytics DB."""
+        db = ctx.lifespan_context["analytics_db"]
+        count = await db.fetchval("SELECT COUNT(*) FROM events")
+        return {"total_events": count}
 
     @mcp_resource("/items/{item_id}")
     async def item_card(self, item_id: str) -> str:
@@ -749,8 +870,8 @@ class RequestLogger:
     imports=[
         McpServerModule.for_root(
             ItemMcpServer,
-            imports=[],
-            providers=[ItemStore],  # shared from same pool via DI
+            providers=[ItemStore],
+            log_level="info",
         )
     ],
 )
@@ -772,94 +893,10 @@ if __name__ == "__main__":
 
 ---
 
-## 12. Inspecting MCP server metadata with `lauren.reflect`
-
-`lauren>=1.6.0` ships a full metadata introspection API.  You can read the
-guard, interceptor, and metadata annotations from any `@mcp_server` class
-without touching internal `__dict__` attributes:
-
-```python
-from lauren.reflect import (
-    reflect_guards,
-    reflect_interceptors,
-    reflect_user_metadata,
-    reflect_all,
-    get_all_routes,
-    get_all_ws_gateways,
-)
-
-@use_guards(ApiKeyGuard, RateLimitGuard)
-@set_metadata("rate_limit", 100)
-@mcp_server("/mcp")
-class MyServer: ...
-
-reflect_guards(MyServer)             # (ApiKeyGuard, RateLimitGuard)
-reflect_user_metadata(MyServer)      # {"rate_limit": 100}
-meta = reflect_all(MyServer)         # ReflectedMeta(guards=…, interceptors=…, middlewares=…)
-```
-
-After the app has started, query the compiled dispatch table:
-
-```python
-app = LaurenFactory.create(AppModule)
-TestClient(app)  # triggers startup
-
-for gw in get_all_ws_gateways(app):
-    print(gw.path_template, gw.guards)   # "/mcp/ws"  (ApiKeyGuard, RateLimitGuard)
-
-for route in get_all_routes(app):
-    print(route.method, route.full_path)  # GET /mcp/sse, POST /mcp/message, …
-```
-
-### Sharing a guard across HTTP controllers and MCP servers
-
-Because `WsConnectionContext` duck-types with `ExecutionContext` on the fields
-guards most commonly read (`headers`, `path`, `method`), the same guard class
-works for both:
-
-```python
-@injectable(scope=Scope.SINGLETON)
-class ApiKeyGuard:
-    async def can_activate(self, ctx) -> bool:
-        # ctx is ExecutionContext for HTTP, WsConnectionContext for MCP/WS
-        return ctx.request.headers.get("x-api-key") == "secret"
-
-@use_guards(ApiKeyGuard)
-@controller("/api")          # HTTP controller — guard runs on every request
-class HttpController: ...
-
-@use_guards(ApiKeyGuard)
-@mcp_server("/mcp")          # MCP server — guard runs before the WS handshake
-class McpController: ...
-```
-
-### Propagating guards with `@propagate_metadata`
-
-When multiple MCP servers (or HTTP controllers) share the same auth policy, use
-`@propagate_metadata` to avoid repeating `@use_guards` on every class:
-
-```python
-from lauren import propagate_metadata
-
-@use_guards(ApiKeyGuard)
-@set_metadata("require_auth", True)
-class _AuthPolicy:
-    pass
-
-@propagate_metadata(_AuthPolicy)
-@mcp_server("/catalogue")
-class CatalogueServer: ...
-
-@propagate_metadata(_AuthPolicy)
-@mcp_server("/inventory")
-class InventoryServer: ...
-```
-
----
-
 ## Next steps
 
 - **[Decorators in depth](decorators.md)** — full `@mcp_tool`/`@mcp_resource`/`@mcp_prompt` reference
+- **[Multiple servers](multiple-servers.md)** — composition, proxies, and OpenAPI import
 - **[Error handling](error-handling.md)** — `McpCallError`, retry patterns
 - **[Testing](testing.md)** — subprocess e2e, WsTestClient, mock clients
 - **[MCP Server API](mcp-server.md)** — complete reference

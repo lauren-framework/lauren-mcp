@@ -1,4 +1,4 @@
-"""Decorators: mcp_server, mcp_tool, mcp_resource, mcp_prompt."""
+"""Decorators: mcp_server, mcp_tool, mcp_resource, mcp_prompt, mcp_lifespan."""
 
 from __future__ import annotations
 
@@ -7,92 +7,89 @@ import typing
 from collections.abc import Callable
 from typing import Any
 
+from lauren_mcp._server._context import McpToolContext
+from lauren_mcp._types import ToolAnnotations
+
+from ._docstring import parse_docstring
 from ._meta import (
+    MCP_LIFESPAN_META,
     MCP_PROMPT_META,
     MCP_RESOURCE_META,
     MCP_SERVER_META,
     MCP_TOOL_META,
+    McpLifespanMeta,
     McpPromptMeta,
     McpResourceMeta,
     McpServerMeta,
     McpToolMeta,
 )
+from ._schema import SchemaBuilder
 
 _SENTINEL = object()
 
-# ---------------------------------------------------------------------------
-# Type-to-JSON-Schema mapping
-# ---------------------------------------------------------------------------
 
-_PY_TO_JSON: dict[Any, str] = {
-    str: "string",
-    int: "integer",
-    float: "number",
-    bool: "boolean",
-    list: "array",
-    dict: "object",
-    type(None): "string",
-}
-
-
-def _json_type(annotation: Any) -> str:
-    """Map a Python type annotation to a JSON Schema type string."""
-    if annotation is inspect.Parameter.empty:
-        return "string"
-    # Handle Optional[X] / Union[X, None] by extracting the non-None arg
-    origin = getattr(annotation, "__origin__", None)
-    if origin is typing.Union:
-        args = [a for a in annotation.__args__ if a is not type(None)]
-        if args:
-            return _json_type(args[0])
-        return "string"
-    return _PY_TO_JSON.get(annotation, "string")
+def _is_context_annotation(annotation: Any) -> bool:
+    """True when *annotation* is McpToolContext or Optional[McpToolContext]."""
+    if annotation is McpToolContext:
+        return True
+    if isinstance(annotation, str):
+        stripped = annotation.replace(" ", "")
+        return stripped in (
+            "McpToolContext",
+            "McpToolContext|None",
+            "None|McpToolContext",
+            "Optional[McpToolContext]",
+            "typing.Optional[McpToolContext]",
+        )
+    origin = typing.get_origin(annotation)
+    if origin is typing.Union or str(type(annotation)) == "<class 'types.UnionType'>":
+        args = typing.get_args(annotation)
+        non_none = [a for a in args if a is not type(None)]
+        return len(non_none) == 1 and non_none[0] is McpToolContext
+    return False
 
 
-def _extract_description(fn: Callable[..., Any]) -> str:
-    """Return first non-empty line of docstring, stopping before 'Args:' etc."""
-    doc = fn.__doc__
-    if not doc:
-        return ""
-    lines = doc.strip().splitlines()
-    parts: list[str] = []
-    for line in lines:
-        stripped = line.strip()
-        if stripped.lower().startswith(("args:", "returns:", "raises:", "example")):
-            break
-        if stripped:
-            parts.append(stripped)
-        elif parts:
-            # blank line after first paragraph — stop
-            break
-    return " ".join(parts)
-
-
-def _build_schema(fn: Callable[..., Any]) -> tuple[str, str, dict[str, Any]]:
-    """Build ``(name, description, json_schema)`` from a function's signature.
+def _build_schema(
+    fn: Callable[..., Any],
+) -> tuple[str, str, dict[str, Any], str | None, dict[str, str]]:
+    """Build ``(name, description, json_schema, context_param, param_descs)``.
 
     * Uses ``inspect.signature`` and ``typing.get_type_hints`` (with fallback).
-    * Skips ``self``.
+    * Skips ``self`` and any parameter annotated with ``McpToolContext``.
     * Parameters without a default are marked as required.
+    * Per-parameter descriptions come from the docstring (Google / Sphinx /
+      NumPy styles); an explicit ``Field(description=...)`` wins.
     """
     name = fn.__name__
-    description = _extract_description(fn)
+    description, param_descriptions = parse_docstring(fn)
 
     try:
-        hints = typing.get_type_hints(fn)
+        hints = typing.get_type_hints(fn, include_extras=True)
     except Exception:
         hints = {}
 
     sig = inspect.signature(fn)
+    builder = SchemaBuilder()
     properties: dict[str, Any] = {}
     required: list[str] = []
+    context_param_name: str | None = None
 
     for param_name, param in sig.parameters.items():
         if param_name == "self":
             continue
         annotation = hints.get(param_name, param.annotation)
-        json_t = _json_type(annotation)
-        properties[param_name] = {"type": json_t}
+        if _is_context_annotation(annotation):
+            context_param_name = param_name
+            continue
+        prop = builder.build(annotation)
+        doc_desc = param_descriptions.get(param_name)
+        if doc_desc and "description" not in prop:
+            prop["description"] = doc_desc
+        if param.default is not inspect.Parameter.empty and "default" not in prop:
+            default = param.default
+            if default is None or isinstance(default, (str, int, float, bool, list, dict)):
+                prop["default"] = default
+        properties[param_name] = prop
         if param.default is inspect.Parameter.empty:
             required.append(param_name)
 
@@ -102,8 +99,41 @@ def _build_schema(fn: Callable[..., Any]) -> tuple[str, str, dict[str, Any]]:
     }
     if required:
         schema["required"] = required
+    if builder.defs:
+        schema["$defs"] = builder.defs
 
-    return name, description, schema
+    return name, description, schema, context_param_name, param_descriptions
+
+
+def _resolve_output_schema(output_schema: Any) -> dict[str, Any] | None:
+    """Resolve an ``output_schema`` argument to a plain JSON Schema dict.
+
+    Accepts a raw JSON Schema dict, a Pydantic model class, a
+    ``msgspec.Struct`` subclass, a dataclass, or a ``TypedDict`` class.
+    """
+    if output_schema is None:
+        return None
+    if isinstance(output_schema, dict):
+        return output_schema
+    if hasattr(output_schema, "model_json_schema"):  # pydantic v2
+        return dict(output_schema.model_json_schema())
+
+    # msgspec.Struct / dataclass / TypedDict — build via the shared schema
+    # builder and inline the top-level definition into a standalone schema.
+    builder = SchemaBuilder()
+    fragment = builder.build(output_schema)
+    ref = fragment.get("$ref", "")
+    if ref.startswith("#/$defs/"):
+        name = ref.removeprefix("#/$defs/")
+        resolved = dict(builder.defs.pop(name, {}))
+        if builder.defs:
+            resolved["$defs"] = builder.defs
+        if resolved:
+            return resolved
+    raise TypeError(
+        "output_schema must be a JSON Schema dict, a Pydantic model, a "
+        f"msgspec.Struct, a dataclass, or a TypedDict — got {output_schema!r}"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -119,7 +149,8 @@ def mcp_server(path: str, *, transport: str = "ws") -> Callable[[type], type]:
 
     Args:
         path: The mount path for the MCP server endpoint (e.g. ``"/mcp"``).
-        transport: One of ``"ws"``, ``"sse"``, or ``"both"``.
+        transport: One of ``"ws"``, ``"sse"``, ``"streamable"``, ``"both"``,
+            or ``"all"``.
     """
 
     def decorator(cls: type) -> type:
@@ -133,26 +164,49 @@ def mcp_server(path: str, *, transport: str = "ws") -> Callable[[type], type]:
 
 
 def mcp_tool(
-    *, name: str | None = None, description: str | None = None
+    *,
+    name: str | None = None,
+    description: str | None = None,
+    annotations: ToolAnnotations | None = None,
+    timeout: float | None = None,
+    tags: frozenset[str] | set[str] | None = None,
+    meta: dict[str, Any] | None = None,
+    output_schema: Any = None,
 ) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
     """Method decorator that exposes a coroutine as an MCP tool.
 
     Args:
         name: Override the tool name (defaults to the method name).
         description: Override the tool description (defaults to docstring).
+        annotations: Behavioural hints (:class:`ToolAnnotations`) transmitted
+            to clients.
+        timeout: Per-call execution deadline in seconds; exceeding it fails
+            the call with an internal error.
+        tags: Categorical tags included in the tool's ``tools/list`` entry.
+        meta: Opaque metadata forwarded to clients under ``_meta``.
+        output_schema: JSON Schema dict or Pydantic model class describing the
+            tool's structured output; advertised as ``outputSchema``.
     """
 
     def decorator(fn: Callable[..., Any]) -> Callable[..., Any]:
-        auto_name, auto_desc, schema = _build_schema(fn)
+        auto_name, auto_desc, schema, context_param, param_descs = _build_schema(fn)
         resolved_name = name if name is not None else auto_name
         resolved_desc = description if description is not None else auto_desc
-        meta = McpToolMeta(
+        tool_meta = McpToolMeta(
             name=resolved_name,
             description=resolved_desc,
             input_schema=schema,
             method_name=fn.__name__,
+            context_param_name=context_param,
+            reads_context=context_param is not None,
+            annotations=annotations,
+            output_schema=_resolve_output_schema(output_schema),
+            timeout=timeout,
+            tags=frozenset(tags) if tags else frozenset(),
+            meta=dict(meta) if meta else {},
+            param_descriptions=param_descs,
         )
-        setattr(fn, MCP_TOOL_META, meta)
+        setattr(fn, MCP_TOOL_META, tool_meta)
         return fn
 
     return decorator
@@ -168,21 +222,36 @@ def mcp_resource(
     """Method decorator that exposes a coroutine as an MCP resource.
 
     Args:
-        uri_template: A URI template with optional ``{param}`` placeholders.
+        uri_template: A URI template with ``{param}`` placeholders.  Also
+            supports ``{+param}`` / ``{param*}`` multi-segment placeholders
+            and a ``{?p1,p2}`` optional query-parameter suffix.
         name: Resource name (defaults to the method name).
         description: Human-readable description (defaults to docstring).
         mime_type: Optional MIME type hint (e.g. ``"text/plain"``).
     """
 
     def decorator(fn: Callable[..., Any]) -> Callable[..., Any]:
+        from ._uri import compile_uri_template
+
         resolved_name = name if name is not None else fn.__name__
-        resolved_desc = description if description is not None else _extract_description(fn)
+        top_desc, _ = parse_docstring(fn)
+        resolved_desc = description if description is not None else top_desc
+
+        compiled = compile_uri_template(uri_template)
+        try:
+            hints = typing.get_type_hints(fn)
+        except Exception:
+            hints = {}
+        hints.pop("return", None)
+
         meta = McpResourceMeta(
             uri_template=uri_template,
             name=resolved_name,
             description=resolved_desc,
             mime_type=mime_type,
             method_name=fn.__name__,
+            query_params=list(compiled.query_params),
+            param_type_hints=hints,
         )
         setattr(fn, MCP_RESOURCE_META, meta)
         return fn
@@ -202,7 +271,8 @@ def mcp_prompt(
 
     def decorator(fn: Callable[..., Any]) -> Callable[..., Any]:
         resolved_name = name if name is not None else fn.__name__
-        resolved_desc = description if description is not None else _extract_description(fn)
+        top_desc, param_descs = parse_docstring(fn)
+        resolved_desc = description if description is not None else top_desc
 
         sig = inspect.signature(fn)
         arguments: list[dict[str, Any]] = []
@@ -211,7 +281,7 @@ def mcp_prompt(
                 continue
             arg_entry: dict[str, Any] = {
                 "name": param_name,
-                "description": None,
+                "description": param_descs.get(param_name),
                 "required": param.default is inspect.Parameter.empty,
             }
             arguments.append(arg_entry)
@@ -226,3 +296,28 @@ def mcp_prompt(
         return fn
 
     return decorator
+
+
+def mcp_lifespan(fn: Callable[..., Any]) -> Callable[..., Any]:
+    """Method decorator marking an async generator as the server's lifespan hook.
+
+    The generator runs once at server startup; the dict it yields becomes
+    ``McpToolContext.lifespan_context`` for every tool call.  Code after the
+    yield (typically in a ``finally`` block) runs at server shutdown::
+
+        @mcp_server("/api")
+        class MyServer:
+            @mcp_lifespan
+            async def lifespan(self):
+                session = make_session()
+                try:
+                    yield {"session": session}
+                finally:
+                    await session.close()
+    """
+    if not inspect.isasyncgenfunction(fn):
+        raise TypeError(
+            "@mcp_lifespan requires an async generator method (async def with a single yield)"
+        )
+    setattr(fn, MCP_LIFESPAN_META, McpLifespanMeta(method_name=fn.__name__))
+    return fn

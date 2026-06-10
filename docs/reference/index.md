@@ -4,58 +4,98 @@ Complete reference for all public symbols in `lauren_mcp`.
 
 ## Server decorators
 
-| Symbol | Description |
-|---|---|
-| [`mcp_server`](server.md#mcp_server) | Class decorator that registers an MCP server at a URL path |
-| [`mcp_tool`](server.md#mcp_tool) | Method decorator that exposes an async method as an MCP tool |
-| [`mcp_resource`](server.md#mcp_resource) | Method decorator that exposes a URI-addressable resource |
-| [`mcp_prompt`](server.md#mcp_prompt) | Method decorator that exposes a parameterised prompt template |
-| [`McpServerModule`](server.md#mcpservermodule) | Lauren module that wires all `@mcp_server` classes into the app |
+| Symbol | Import | Description |
+|---|---|---|
+| [`mcp_server`](server.md#mcp_server) | `from lauren_mcp import mcp_server` | Class decorator — registers an MCP server at a URL path |
+| [`mcp_tool`](server.md#mcp_tool) | `from lauren_mcp import mcp_tool` | Method decorator — exposes an async method as an MCP tool |
+| [`mcp_resource`](server.md#mcp_resource) | `from lauren_mcp import mcp_resource` | Method decorator — exposes a URI-addressable resource |
+| [`mcp_prompt`](server.md#mcp_prompt) | `from lauren_mcp import mcp_prompt` | Method decorator — exposes a parameterised prompt template |
+| [`mcp_lifespan`](server.md#mcp_lifespan) | `from lauren_mcp.server import mcp_lifespan` | Method decorator — async generator run at server startup/shutdown |
+| [`McpServerModule`](server.md#mcpservermodule) | `from lauren_mcp import McpServerModule` | Lauren module factory that wires an `@mcp_server` class into the app |
+
+## Server context and return types
+
+| Symbol | Import | Description |
+|---|---|---|
+| [`McpToolContext`](server.md#mcptoolcontext) | `from lauren_mcp import McpToolContext` | Per-call context injected into `@mcp_tool` methods |
+| [`ToolAnnotations`](server.md#toolannotations) | `from lauren_mcp import ToolAnnotations` | Behavioural hints for a tool (`readOnly`, `destructive`, etc.) |
+| [`ToolOutput`](types.md#tooloutput) | `from lauren_mcp import ToolOutput` | Rich tool return type — separates display content from structured data |
+| [`BlobResource`](types.md#blobresource) | `from lauren_mcp import BlobResource` | Binary resource return type |
+| [`ResourceResult`](types.md#resourceresult) | `from lauren_mcp import ResourceResult` | Multi-item resource return type |
+
+## Composition helpers
+
+| Symbol | Import | Description |
+|---|---|---|
+| [`make_mount_binder`](server.md#make_mount_binder) | `from lauren_mcp.server import make_mount_binder` | Expose another `@mcp_server` class's tools through this server |
+| [`make_proxy_binder`](server.md#make_proxy_binder) | `from lauren_mcp.server import make_proxy_binder` | Proxy a remote MCP server's tools through this server |
+| [`McpToolNameCollision`](server.md#mcptoolnamecollision) | `from lauren_mcp import McpToolNameCollision` | Exception raised when two sources share the same tool name |
+| [`build_openapi_server_class`](server.md#build_openapi_server_class) | `from lauren_mcp.server import build_openapi_server_class` | Generate an `@mcp_server` class from an OpenAPI 3.x spec |
+| [`RouteEntry`](server.md#routeentry) | `from lauren_mcp.server import RouteEntry` | Routing rule for `build_openapi_server_class` |
 
 ## Client
 
-| Symbol | Description |
-|---|---|
-| [`McpServer`](client.md#mcpserver) | Factory class with `stdio`, `ws`, and `http` class methods |
-| [`McpClientProtocol`](client.md#mcpclientprotocol) | Protocol/interface implemented by all transport clients |
-| [`McpServerConfig`](client.md#mcpserverconfig) | Dataclass pairing an alias with an `McpClientProtocol` instance |
-| [`McpToolBridge`](client.md#mcptoolbridge) | Adapts a remote MCP server's tools for use inside a Lauren agent |
+| Symbol | Import | Description |
+|---|---|---|
+| [`McpServer`](client.md#mcpserver) | `from lauren_mcp import McpServer` | Factory with `stdio`, `ws`, `http`, and `streamable_http` class methods |
+| [`McpClientProtocol`](client.md#mcpclientprotocol) | `from lauren_mcp import McpClientProtocol` | Abstract interface implemented by all transport clients |
+| [`McpCallError`](client.md#mcpcallerror) | `from lauren_mcp import McpCallError` | Raised when the server returns a JSON-RPC error response |
+| [`McpServerConfig`](client.md#mcpserverconfig) | `from lauren_mcp import McpServerConfig` | Pairs an alias with a client for use with `McpToolBridge` |
+| [`McpToolBridge`](client.md#mcptoolbridge) | `from lauren_mcp import McpToolBridge` | Lifecycle manager for multiple MCP client connections |
 
 ## Wire types
 
 | Symbol | Description |
 |---|---|
-| [`JsonRpcRequest`](types.md#jsonrpcrequest) | Outgoing JSON-RPC 2.0 request message |
-| [`JsonRpcNotification`](types.md#jsonrpcnotification) | Outgoing JSON-RPC 2.0 notification (no `id`) |
-| [`JsonRpcResponse`](types.md#jsonrpcresponse) | Successful JSON-RPC 2.0 response message |
-| [`JsonRpcErrorResponse`](types.md#jsonrpcerrorresponse) | Error JSON-RPC 2.0 response message |
-| [`McpErrorCode`](types.md#mcperrorcode) | Enum of standard MCP/JSON-RPC error codes |
-| [`parse_message`](types.md#parse_message) | Parse raw bytes/string into a JSON-RPC message object |
-| [`build_error_response`](types.md#build_error_response) | Construct a `JsonRpcErrorResponse` from an error code and message |
-| [`ToolSchema`](types.md#toolschema) | JSON Schema descriptor for a single MCP tool |
-| [`ResourceSchema`](types.md#resourceschema) | Descriptor for a single MCP resource |
-| [`PromptSchema`](types.md#promptschema) | Descriptor for a single MCP prompt |
-| [`TextContent`](types.md#textcontent) | Text content block returned by tool calls |
-| [`ImageContent`](types.md#imagecontent) | Base-64 encoded image content block returned by tool calls |
-| [`EmbeddedResource`](types.md#embeddedresource) | Embedded resource content block |
-| [`PromptArgument`](types.md#promptargument) | Single argument descriptor in a prompt schema |
-| [`PromptMessage`](types.md#promptmessage) | A rendered message within a `GetPromptResult` |
-| [`InitializeParams`](types.md#initializeparams) | Client capabilities sent during the MCP handshake |
-| [`InitializeResult`](types.md#initializeresult) | Server capabilities returned during the MCP handshake |
-| [`ClientCapabilities`](types.md#clientcapabilities) | Nested capabilities block from the client |
-| [`ServerCapabilities`](types.md#servercapabilities) | Nested capabilities block from the server |
-| [`Implementation`](types.md#implementation) | Name + version block identifying a client or server |
+| [`JsonRpcRequest`](types.md#jsonrpcrequest) | Outgoing/incoming JSON-RPC 2.0 request |
+| [`JsonRpcNotification`](types.md#jsonrpcnotification) | JSON-RPC 2.0 notification (no `id`) |
+| [`JsonRpcResponse`](types.md#jsonrpcresponse) | Successful JSON-RPC 2.0 response |
+| [`JsonRpcError`](types.md#jsonrpcerror) | Error object embedded in `JsonRpcErrorResponse` |
+| [`JsonRpcErrorResponse`](types.md#jsonrpcerrorresponse) | Error JSON-RPC 2.0 response |
+| [`McpErrorCode`](types.md#mcperrorcode) | Enum of standard JSON-RPC and MCP error codes |
+| [`parse_message`](types.md#parse_message) | Parse raw bytes/string into a typed JSON-RPC message |
+| [`build_error_response`](types.md#build_error_response) | Construct a `JsonRpcErrorResponse` from code and message |
+| [`ToolSchema`](types.md#toolschema) | JSON Schema descriptor for a tool (`tools/list`) |
 | [`ToolCallParams`](types.md#toolcallparams) | Arguments for a `tools/call` request |
 | [`ToolResult`](types.md#toolresult) | Full result envelope from a `tools/call` response |
+| [`ResourceSchema`](types.md#resourceschema) | Descriptor for a resource (`resources/list`) |
+| [`ResourceContent`](types.md#resourcecontent) | The contents of a read resource |
 | [`ReadResourceParams`](types.md#readresourceparams) | Arguments for a `resources/read` request |
 | [`ReadResourceResult`](types.md#readresourceresult) | Result envelope from a `resources/read` response |
+| [`PromptArgument`](types.md#promptargument) | Single argument descriptor in a prompt schema |
+| [`PromptSchema`](types.md#promptschema) | Descriptor for a prompt (`prompts/list`) |
+| [`PromptMessage`](types.md#promptmessage) | A rendered message within a `GetPromptResult` |
 | [`GetPromptParams`](types.md#getpromptparams) | Arguments for a `prompts/get` request |
 | [`GetPromptResult`](types.md#getpromptresult) | Result envelope from a `prompts/get` response |
+| [`TextContent`](types.md#textcontent) | Plain-text content block |
+| [`ImageContent`](types.md#imagecontent) | Base-64 encoded image content block |
+| [`EmbeddedResource`](types.md#embeddedresource) | Embedded resource content block |
+| [`AnyContent`](types.md#anycontent) | Union alias: `TextContent \| ImageContent \| EmbeddedResource` |
+| [`SamplingMessage`](types.md#samplingmessage) | A message in a `sampling/createMessage` request |
+| [`CreateMessageParams`](types.md#createmessageparams) | Parameters for a `sampling/createMessage` request |
+| [`CreateMessageResult`](types.md#createmessageresult) | Result of a `sampling/createMessage` request |
+| [`ElicitResult`](types.md#elicitresult) | Result of an `elicitation/create` request |
+| [`Root`](types.md#root) | A filesystem root advertised by the client |
+| [`ClientCapabilities`](types.md#clientcapabilities) | Capability flags from the client during handshake |
+| [`ServerCapabilities`](types.md#servercapabilities) | Capability flags from the server during handshake |
+| [`Implementation`](types.md#implementation) | Name + version pair identifying a client or server |
+| [`InitializeParams`](types.md#initializeparams) | Client capabilities sent during the MCP handshake |
+| [`InitializeResult`](types.md#initializeresult) | Server capabilities returned during the MCP handshake |
 
-## Version constants
+## Exceptions
 
 | Symbol | Description |
 |---|---|
-| `LATEST` | Latest MCP protocol version string supported by this library |
-| `STABLE` | Stable MCP protocol version string recommended for production |
-| `SUPPORTED` | List of all MCP protocol version strings this library can handle |
+| [`McpCallError`](client.md#mcpcallerror) | JSON-RPC error response from a remote server |
+| [`McpParseError`](types.md#mcpparseerror) | Invalid JSON or non-conforming JSON-RPC shape |
+| [`McpSamplingNotAvailable`](types.md#mcpsamplingnotavailable) | `ctx.sample()` called but client lacks `sampling` capability |
+| [`McpElicitationNotAvailable`](types.md#mcpelicitationnotavailable) | `ctx.elicit()` called but client lacks `elicitation` capability |
+| [`McpToolNameCollision`](server.md#mcptoolnamecollision) | Two composition sources expose the same tool name |
+
+## Version constants
+
+| Symbol | Value | Description |
+|---|---|---|
+| `LATEST` | `"2025-03-26"` | Latest MCP protocol version supported by this library |
+| `STABLE` | `"2024-11-05"` | Stable MCP protocol version recommended for production |
+| `SUPPORTED` | `frozenset({...})` | All protocol version strings this library can handle |

@@ -10,21 +10,62 @@
 Python MCP library. It ships its own minimal ASGI-like server and is designed to
 be picked up quickly without any existing framework.
 
-### At a glance
+### Feature comparison
 
-| Capability | `lauren-mcp` | FastMCP |
+| Feature | `lauren-mcp` | FastMCP |
 |---|---|---|
-| **Decorator API** | `@mcp_server`, `@mcp_tool`, `@mcp_resource`, `@mcp_prompt` | `@mcp.tool`, `@mcp.resource`, `@mcp.prompt` |
-| **Transport** | WebSocket + SSE (both built-in) | SSE + stdio (WebSocket via plugin) |
-| **DI container** | Lauren's full DI (SINGLETON / REQUEST / TRANSIENT, Protocol binding, lifecycle hooks) | None — plain function injection |
-| **Auth / Guards** | `@use_guards` on `@mcp_server`; same guard class works for HTTP + WS | Manual middleware / context variables |
-| **Interceptors** | `@use_interceptors` — wraps `@on_connect`, timing, caching | Not supported |
-| **Testing** | `WsTestClient` in-process, no subprocess needed | `fastmcp.testing.Client` (subprocess or in-process) |
-| **Type schema** | Inferred from type annotations; Pydantic, dataclass, TypedDict, `msgspec.Struct` all work | Pydantic-first; `BaseModel` recommended |
-| **Multi-server** | Multiple `@mcp_server` classes in one Lauren app, each at its own path | One `FastMCP` instance per process by default |
-| **HTTP routes alongside MCP** | First-class — Lauren controllers and MCP servers share one `LaurenFactory.create()` | Not supported (MCP only) |
-| **Client** | `McpStdioClient`, `McpSseClient` included | Built-in client |
-| **Existing framework required** | Yes — requires `lauren>=1.6.0` | No — standalone |
+| WebSocket transport | ✅ Native | ❌ Not supported |
+| Legacy HTTP+SSE (2024-11-05) | ✅ | ✅ |
+| Streamable HTTP (2025-03-26) | ✅ | ✅ Default |
+| stdio transport | ✅ | ✅ |
+| Protocol version negotiation | ✅ | ✅ |
+| DI-native server instantiation | ✅ Lauren DI | ❌ |
+| Guard / interceptor / middleware auth | ✅ Native Lauren pipeline | ❌ (custom `Depends`) |
+| Tool annotations | ✅ | ✅ |
+| Tool timeout | ✅ `timeout=` | ✅ |
+| Tool tags | ✅ | ✅ |
+| Tool structured output | ✅ `ToolOutput` | ✅ |
+| Progress notifications | ✅ `ctx.report_progress()` | ✅ `ctx.report_progress()` |
+| Structured logging to client | ✅ `ctx.log()` | ✅ `ctx.log()` |
+| Sampling | ✅ `ctx.sample()` | ✅ `ctx.sample()` |
+| Elicitation | ✅ `ctx.elicit()` | ✅ `ctx.elicit()` |
+| Pydantic model schemas | ✅ (optional dep) | ✅ |
+| `msgspec.Struct` schemas | ✅ (optional dep) | ❌ |
+| `@dataclass` schemas | ✅ | ❌ |
+| `TypedDict` schemas | ✅ | ❌ |
+| Docstring param descriptions | ✅ Google / Sphinx / NumPy | ✅ Google / NumPy / Sphinx |
+| Binary blob resources | ✅ `bytes` / `BlobResource` | ✅ |
+| URI template extensions | ✅ RFC 6570 subset | ✅ RFC 6570 |
+| Per-resource subscriptions | ❌ | ❌ (also missing) |
+| Server composition / mount | ✅ `mounts=` | ✅ `mount()` |
+| Remote server proxy | ✅ `proxies=` | ✅ `create_proxy()` |
+| OpenAPI import | ✅ `build_openapi_server_class()` | ✅ `from_openapi()` |
+| Lifespan hooks | ✅ `@mcp_lifespan` | ✅ `@lifespan` |
+| Dynamic catalog notifications | ✅ `listChanged: True` | ✅ |
+| Client notification handlers | ✅ `on_progress` / `on_log` / `on_list_changed` | ✅ |
+| Client roots support | ✅ `roots=[Root(...)]` | ✅ |
+| Sampling handler (client) | ✅ `sampling_handler=` | ✅ |
+| Elicitation handler (client) | ✅ `elicitation_handler=` | ✅ |
+| OAuth 2.1 auth | ❌ (use Lauren guards) | ✅ Built-in |
+| CLI tools | ❌ | ✅ `fastmcp run/install` |
+| OpenTelemetry | ❌ | ✅ |
+| Background tasks | ❌ | ✅ Docket integration |
+| Session state | ❌ | ✅ `ctx.get_state()` |
+| Argument autocompletion | ❌ | ❌ (also missing server-side) |
+
+### Remaining gaps
+
+The following features are present in FastMCP but not yet implemented in `lauren-mcp`:
+
+- **OAuth 2.1 built-in auth server** — Lauren guards cover the same use-case for
+  framework users, but there is no drop-in OAuth provider.
+- **CLI tooling** — no `lauren-mcp run` or `lauren-mcp install` equivalent.
+- **OpenTelemetry instrumentation** — no built-in span/trace/metric export.
+- **Background task workers** — no Docket-style async job queue integration.
+- **Per-resource content-change subscriptions** — `resources/subscribe` is
+  unimplemented on both sides.
+- **Argument autocompletion** — server-side `completion/complete` is not yet
+  implemented by either library.
 
 ### Code comparison
 
@@ -65,25 +106,25 @@ app = LaurenFactory.create(AppModule)
 # uvicorn app:app
 ```
 
+### When to choose `lauren-mcp`
+
+- Your app is already built on Lauren — shared DI container, guards, interceptors,
+  and HTTP routes all live in the same process without extra glue.
+- You need WebSocket transport.
+- You want `msgspec.Struct`, `@dataclass`, or `TypedDict` schemas without Pydantic.
+- You prefer Lauren's DI-native authentication patterns over a built-in OAuth server.
+- You need in-process testing with `WsTestClient` rather than subprocess stdio.
+- You need multi-server — multiple `@mcp_server` classes can coexist in one process
+  at different paths, each with its own tool set, guards, and lifecycle.
+
 ### When to choose FastMCP
 
-- You want the fastest possible path from zero to a working MCP server.
-- Your project has no existing HTTP API and you do not expect one.
-- You prefer a standalone package with no framework dependency.
-- Your tooling needs are simple (no DI, no auth pipeline, no interceptors).
-
-### When to choose lauren-mcp
-
-- You are building or already have a Lauren application and want MCP as another
-  transport alongside your REST / WebSocket / SSE routes.
-- You need production auth — `@use_guards` on `@mcp_server` lets the same
-  `ApiKeyGuard` or `JwtBearerGuard` protect both HTTP and MCP endpoints without
-  duplicating logic.
-- You need DI — tools and resources can declare `__init__` dependencies that
-  Lauren resolves from the container (databases, caches, config, loggers).
-- You need multi-server — multiple `@mcp_server` classes can coexist in one
-  process at different paths, each with its own tool set.
-- You want in-process testing with `WsTestClient` rather than subprocess stdio.
+- You want the fastest possible path from zero to a working MCP server with no
+  framework dependency.
+- You want OAuth 2.1 built-in without writing a custom guard.
+- You want CLI tooling (`fastmcp run`, `fastmcp install`).
+- You need OpenTelemetry instrumentation.
+- You are not using the Lauren framework.
 
 ---
 
@@ -97,7 +138,7 @@ The [official MCP Python SDK](https://github.com/modelcontextprotocol/python-sdk
 | Capability | `lauren-mcp` | `mcp` SDK |
 |---|---|---|
 | **API style** | Decorator-driven, class-based | Low-level `Server` object + handler registration |
-| **Transport** | WebSocket + SSE | stdio + SSE (WebSocket experimental) |
+| **Transport** | WebSocket + SSE + Streamable HTTP + stdio | stdio + SSE + Streamable HTTP |
 | **DI** | Full Lauren DI | None |
 | **Auth** | `@use_guards` integrated | Manual, transport-level |
 | **Protocol compliance** | Builds on top of the SDK wire types | Reference implementation |
@@ -150,7 +191,7 @@ class CatalogueServer:
   rather than MCP servers.
 - You want zero framework dependency.
 
-### When to choose lauren-mcp
+### When to choose `lauren-mcp`
 
 - You want ergonomic decorators and automatic schema inference instead of
   manually constructing `Tool` and `TextContent` objects.
@@ -163,12 +204,13 @@ class CatalogueServer:
 Several community wrappers exist (`mcpx`, `mcp-framework`, etc.). They vary in
 maturity and transport support. The comparison dimensions are the same as above:
 
-| Question | lauren-mcp answer |
+| Question | `lauren-mcp` answer |
 |---|---|
 | Does it integrate with my web framework? | Yes — it *is* a Lauren package |
 | Does it support DI? | Yes — full Lauren container |
 | Does it support WebSocket transport? | Yes — built-in |
-| Does it support SSE transport? | Yes — built-in |
+| Does it support SSE transport? | Yes — both legacy and Streamable HTTP built-in |
+| Does it support `msgspec` / `dataclass` / `TypedDict` schemas? | Yes — all three |
 | Can I share auth guards with my HTTP routes? | Yes — `@use_guards` works on `@mcp_server` |
 | Can I test without a subprocess? | Yes — `WsTestClient` in-process |
 
@@ -178,7 +220,9 @@ maturity and transport support. The comparison dimensions are the same as above:
 
 `lauren-mcp` is the right choice when MCP is one capability of a larger Lauren
 service — auth, DI, HTTP routes, and MCP all share the same app, the same
-container, and the same guard pipeline.
+container, and the same guard pipeline.  It now covers nearly the full FastMCP
+feature surface, adding WebSocket transport, non-Pydantic schema types, and
+first-class DI in return for the Lauren framework dependency.
 
 For greenfield, framework-free MCP servers, **FastMCP** is the fastest start.
 For raw protocol control or tooling work, use the **official `mcp` SDK** directly.

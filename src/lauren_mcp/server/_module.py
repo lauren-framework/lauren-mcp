@@ -4,12 +4,19 @@ from __future__ import annotations
 
 from typing import Any
 
-from lauren import Scope, injectable, module, post_construct
+from lauren import Scope, injectable, module, post_construct, pre_destruct
 
+from lauren_mcp._server._catalog import McpCatalogManager
+from lauren_mcp._server._context import LogLevelState
 from lauren_mcp._server._dispatcher import McpDispatcher
 from lauren_mcp._server._handshake import build_initialize_result
+from lauren_mcp._server._registry import McpConnectionRegistry
 from lauren_mcp._server._session import SseSessionStore
 from lauren_mcp._server._sse import mcp_http_sse_controller
+from lauren_mcp._server._streamable import (
+    StreamableSessionStore,
+    mcp_streamable_http_controller,
+)
 from lauren_mcp._server._ws import mcp_ws_controller
 from lauren_mcp._types import (
     ClientCapabilities,
@@ -19,6 +26,7 @@ from lauren_mcp._types import (
 )
 
 from ._handlers import (
+    make_context_factory,
     make_prompts_get_handler,
     make_prompts_list_handler,
     make_resources_list_handler,
@@ -27,15 +35,20 @@ from ._handlers import (
     make_tools_list_handler,
 )
 from ._meta import (
+    MCP_LIFESPAN_META,
     MCP_PROMPT_META,
     MCP_RESOURCE_META,
     MCP_SERVER_META,
     MCP_TOOL_META,
+    McpLifespanMeta,
     McpPromptMeta,
     McpResourceMeta,
     McpServerMeta,
     McpToolMeta,
 )
+
+#: Transport spellings accepted by :meth:`McpServerModule.for_root`.
+_TRANSPORTS = ("ws", "sse", "streamable", "both", "all")
 
 
 class McpServerModule:
@@ -51,6 +64,9 @@ class McpServerModule:
         providers: list[Any] | None = None,
         imports: list[Any] | None = None,
         exports: list[Any] | None = None,
+        log_level: str = "debug",
+        mounts: list[tuple[type, str]] | None = None,
+        proxies: list[tuple[Any, str]] | None = None,
     ) -> type:
         """Build a Lauren ``@module`` that wires *server_cls* into the MCP stack.
 
@@ -61,8 +77,12 @@ class McpServerModule:
             ``__mcp_server_meta__`` attribute attached by the decorator.
         transport:
             ``"ws"`` — WebSocket only (default).
-            ``"sse"`` — HTTP+SSE only.
-            ``"both"`` — register both transports.
+            ``"sse"`` — legacy HTTP+SSE only (MCP 2024-11-05).
+            ``"streamable"`` — Streamable HTTP only (MCP 2025-03-26).
+            ``"both"`` — WebSocket + legacy HTTP+SSE.
+            ``"all"`` — WebSocket + Streamable HTTP.  (Legacy SSE and
+            Streamable HTTP share the ``POST /`` route, so they cannot be
+            mounted together on one path.)
         server_info:
             Optional :class:`~lauren_mcp._types.Implementation` describing this
             server; defaults to ``Implementation(name=server_cls.__name__,
@@ -71,32 +91,29 @@ class McpServerModule:
             Optional :class:`~lauren_mcp._types.ServerCapabilities` override.
             When ``None`` the capabilities are inferred from which
             ``@mcp_tool`` / ``@mcp_resource`` / ``@mcp_prompt`` methods the
-            class exposes.
+            class exposes (with ``listChanged: True`` and logging enabled).
         providers:
             Extra Lauren providers to add to the generated module.  Use this
             to make services visible to *server_cls* via constructor injection.
-            Example::
-
-                @injectable(scope=Scope.SINGLETON)
-                class MyService: ...
-
-                McpServerModule.for_root(MyServer, providers=[MyService])
-
         imports:
             Extra Lauren ``@module`` classes to import into the generated module.
-            Use this to re-use modules that export services needed by *server_cls*::
-
-                @module(providers=[MyService], exports=[MyService])
-                class ServiceModule: ...
-
-                McpServerModule.for_root(MyServer, imports=[ServiceModule])
-
         exports:
-            Extra types to export from the generated module so that parent
-            modules that import it can see additional providers::
-
-                McpServerModule.for_root(MyServer, providers=[MyService],
-                                         exports=[MyService])
+            Extra types to export from the generated module.
+        log_level:
+            Minimum severity for client-bound log notifications emitted via
+            ``ctx.log()`` (``"debug"`` | ``"info"`` | ``"warning"`` |
+            ``"error"``).  Clients may raise it at runtime with
+            ``logging/setLevel``.
+        mounts:
+            ``[(OtherServerCls, "prefix_"), ...]`` — expose another
+            ``@mcp_server`` class's tools / resources / prompts through this
+            server, names prefixed to avoid collisions.  Colliding names
+            raise :class:`~lauren_mcp.McpToolNameCollision` at startup.
+        proxies:
+            ``[(client, "prefix_"), ...]`` — connect each
+            :class:`~lauren_mcp.McpClientProtocol` at startup and re-export
+            the remote server's tools under the prefix.  Calls are forwarded
+            over the client; connections close at shutdown.
 
         Returns
         -------
@@ -108,9 +125,11 @@ class McpServerModule:
         ------
         TypeError
             If *server_cls* was not decorated with ``@mcp_server``.
+        ValueError
+            If *transport* is not one of the accepted spellings.
         """
         # ------------------------------------------------------------------
-        # 1. Validate server_cls
+        # 1. Validate server_cls and transport
         # ------------------------------------------------------------------
         server_meta: McpServerMeta | None = getattr(server_cls, MCP_SERVER_META, None)
         if server_meta is None:
@@ -118,13 +137,19 @@ class McpServerModule:
                 f"{server_cls!r} is not an MCP server class. "
                 "Decorate it with @mcp_server before passing to McpServerModule.for_root()."
             )
+        effective_transport = transport or server_meta.transport
+        if effective_transport not in _TRANSPORTS:
+            raise ValueError(
+                f"Unknown transport {effective_transport!r}; expected one of {_TRANSPORTS}"
+            )
 
         # ------------------------------------------------------------------
-        # 2. Collect tool / resource / prompt metadata from class methods
+        # 2. Collect tool / resource / prompt / lifespan metadata
         # ------------------------------------------------------------------
         tools: list[McpToolMeta] = []
         resources: list[McpResourceMeta] = []
         prompts: list[McpPromptMeta] = []
+        lifespan_meta: McpLifespanMeta | None = None
 
         for attr_name in dir(server_cls):
             try:
@@ -144,16 +169,25 @@ class McpServerModule:
             if prompt_meta is not None:
                 prompts.append(prompt_meta)
 
+            ls_meta: McpLifespanMeta | None = getattr(attr, MCP_LIFESPAN_META, None)
+            if ls_meta is not None:
+                if lifespan_meta is not None:
+                    raise TypeError(
+                        f"{server_cls.__name__} declares more than one @mcp_lifespan "
+                        "method; merge them into a single generator."
+                    )
+                lifespan_meta = ls_meta
+
         # ------------------------------------------------------------------
         # 3. Build ServerCapabilities (auto or caller-supplied)
         # ------------------------------------------------------------------
         if capabilities is None:
-            auto_caps = ServerCapabilities(
-                tools={"listChanged": False} if tools else None,
-                resources={"listChanged": False} if resources else None,
-                prompts={"listChanged": False} if prompts else None,
+            resolved_caps = ServerCapabilities(
+                tools={"listChanged": True} if tools else None,
+                resources={"listChanged": True} if resources else None,
+                prompts={"listChanged": True} if prompts else None,
+                logging={},
             )
-            resolved_caps = auto_caps
         else:
             resolved_caps = capabilities
 
@@ -172,23 +206,16 @@ class McpServerModule:
         # interceptors, middlewares, encoder, exception_handlers, and user
         # metadata (@set_metadata) — is propagated onto the generated
         # transport controllers via ``propagate_metadata(server_cls)``.
-        # This means every annotation on the @mcp_server class is enforced
-        # at runtime:
-        #   - ``@use_guards``       → WS: before @on_connect; SSE: per-request
-        #   - ``@use_interceptors`` → WS: wraps @on_connect; SSE: per-handler
-        #   - ``@use_middlewares``  → SSE: per-request middleware chain
-        #   - ``@use_encoder``      → SSE: encoder for all routes on this ctrl
-        #   - ``@use_exception_handlers`` → SSE: per-controller exc handling
-        #   - ``@set_metadata``     → readable by guards via ctx.get_metadata()
         # ------------------------------------------------------------------
         path: str = server_meta.path
-        effective_transport = transport or server_meta.transport
 
         controllers: list[type] = []
-        if effective_transport in ("ws", "both"):
+        if effective_transport in ("ws", "both", "all"):
             controllers.append(mcp_ws_controller(path, source=server_cls))
         if effective_transport in ("sse", "both"):
             controllers.append(mcp_http_sse_controller(path, source=server_cls))
+        if effective_transport in ("streamable", "all"):
+            controllers.append(mcp_streamable_http_controller(path, source=server_cls))
 
         # ------------------------------------------------------------------
         # 6. Capture all resolved values in closure-friendly locals
@@ -196,19 +223,16 @@ class McpServerModule:
         _tools = tools
         _resources = resources
         _prompts = prompts
+        _lifespan_meta = lifespan_meta
         _resolved_caps = resolved_caps
         _resolved_server_info = resolved_server_info
-        _server_cls = server_cls
+        _log_level = log_level
+        _server_metadata: dict[str, Any] = dict(
+            getattr(server_cls, "__lauren_metadata__", None) or {}
+        )
 
         # ------------------------------------------------------------------
         # 7. Build the handler-registrar injectable.
-        #
-        # Lauren's @module class body is NOT instantiated by the DI
-        # container — lifecycle hooks must live on @injectable providers
-        # inside ``providers=[...]``.  We generate a unique singleton class
-        # per ``for_root()`` call and add it to the providers list so the
-        # DI container constructs it (injecting dispatcher + server) and
-        # then fires its @post_construct to register all MCP handlers.
         # ------------------------------------------------------------------
         @injectable(scope=Scope.SINGLETON)
         class _McpHandlerRegistrar:
@@ -217,32 +241,60 @@ class McpServerModule:
             def __init__(
                 self,
                 dispatcher: McpDispatcher,
+                registry: McpConnectionRegistry,
+                catalog: McpCatalogManager,
                 server_instance: server_cls,  # type: ignore[valid-type]
             ) -> None:
                 self._dispatcher = dispatcher
+                self._registry = registry
+                self._catalog = catalog
                 self._server_instance = server_instance
+                self._lifespan_gen: Any = None
+                self._lifespan_ctx: dict[str, Any] = {}
+                self._log_state = LogLevelState(_log_level)
 
             @post_construct
-            def _register_handlers(self) -> None:
-                """Wire all MCP method handlers onto the dispatcher."""
+            async def _register_handlers(self) -> None:
+                """Run the lifespan hook and wire all MCP handlers."""
                 dispatcher = self._dispatcher
                 srv = self._server_instance
+                catalog = self._catalog
+
+                # --- lifespan ---
+                if _lifespan_meta is not None:
+                    gen = getattr(srv, _lifespan_meta.method_name)()
+                    ctx = await gen.__anext__()
+                    if ctx is None:
+                        ctx = {}
+                    if not isinstance(ctx, dict):
+                        raise TypeError(
+                            "@mcp_lifespan generator must yield a dict (or None), "
+                            f"got {type(ctx).__name__}"
+                        )
+                    self._lifespan_gen = gen
+                    self._lifespan_ctx = ctx
+
+                # --- catalog seeding (silent: broadcast fn not yet attached) ---
+                for t in _tools:
+                    catalog.register_tool(t)
+                for r in _resources:
+                    catalog.register_resource(r)
+                for p in _prompts:
+                    catalog.register_prompt(p)
+                catalog.set_broadcast_fn(self._registry.broadcast_method)
 
                 # --- initialize ---
                 _si = _resolved_server_info
                 _sc = _resolved_caps
 
                 async def _initialize_handler(params: dict[str, Any] | None) -> dict[str, Any]:
-                    from lauren_mcp._types import (  # noqa: PLC0415
-                        Implementation,
-                    )
-
                     params = params or {}
                     client_caps_raw = params.get("capabilities") or {}
                     client_info_raw = params.get("clientInfo") or {}
                     client_caps = ClientCapabilities(
                         roots=client_caps_raw.get("roots"),
                         sampling=client_caps_raw.get("sampling"),
+                        elicitation=client_caps_raw.get("elicitation"),
                         experimental=client_caps_raw.get("experimental"),
                     )
                     client_info = Implementation(
@@ -281,59 +333,76 @@ class McpServerModule:
 
                 dispatcher.register("initialize", _initialize_handler)
 
-                # --- tools ---
-                if _tools:
-                    _tl_inner = make_tools_list_handler(_tools)
-                    _tc_inner = make_tools_call_handler(srv, _tools)
+                # --- logging/setLevel ---
+                log_state = self._log_state
 
-                    from lauren_mcp._types import JsonRpcRequest as _Req  # noqa: PLC0415
+                async def _set_level(params: dict[str, Any] | None) -> dict[str, Any]:
+                    level = (params or {}).get("level")
+                    if level not in ("debug", "info", "warning", "error"):
+                        raise ValueError(f"Invalid log level: {level!r}")
+                    log_state.level = level
+                    return {}
 
-                    async def _tools_list(params: dict[str, Any] | None) -> dict[str, Any]:
-                        req = _Req(method="tools/list", params=params)
-                        return await _tl_inner(req)
+                dispatcher.register("logging/setLevel", _set_level)
 
-                    async def _tools_call(params: dict[str, Any] | None) -> dict[str, Any]:
-                        req = _Req(method="tools/call", params=params)
-                        return await _tc_inner(req)
+                # --- shared context factory ---
+                context_factory = make_context_factory(
+                    _server_metadata,
+                    lifespan_getter=lambda: self._lifespan_ctx,
+                    log_level_state=log_state,
+                )
 
-                    dispatcher.register("tools/list", _tools_list)
-                    dispatcher.register("tools/call", _tools_call)
+                from lauren_mcp._types import JsonRpcRequest as _Req  # noqa: PLC0415
+
+                # --- tools (catalog-backed; registered even when empty so
+                #     dynamically added tools work) ---
+                _tl_inner = make_tools_list_handler(catalog.list_tools)
+                _tc_inner = make_tools_call_handler(
+                    srv, catalog.list_tools, context_factory=context_factory
+                )
+
+                async def _tools_list(params: dict[str, Any] | None) -> dict[str, Any]:
+                    return await _tl_inner(_Req(method="tools/list", params=params))
+
+                async def _tools_call(params: dict[str, Any] | None) -> dict[str, Any]:
+                    return await _tc_inner(_Req(method="tools/call", params=params))
+
+                dispatcher.register("tools/list", _tools_list)
+                dispatcher.register("tools/call", _tools_call)
 
                 # --- resources ---
-                if _resources:
-                    _rl_inner = make_resources_list_handler(_resources)
-                    _rr_inner = make_resources_read_handler(srv, _resources)
+                _rl_inner = make_resources_list_handler(catalog.list_resources)
+                _rr_inner = make_resources_read_handler(srv, catalog.list_resources)
 
-                    from lauren_mcp._types import JsonRpcRequest as _Req2  # noqa: PLC0415
+                async def _resources_list(params: dict[str, Any] | None) -> dict[str, Any]:
+                    return await _rl_inner(_Req(method="resources/list", params=params))
 
-                    async def _resources_list(params: dict[str, Any] | None) -> dict[str, Any]:
-                        req = _Req2(method="resources/list", params=params)
-                        return await _rl_inner(req)
+                async def _resources_read(params: dict[str, Any] | None) -> dict[str, Any]:
+                    return await _rr_inner(_Req(method="resources/read", params=params))
 
-                    async def _resources_read(params: dict[str, Any] | None) -> dict[str, Any]:
-                        req = _Req2(method="resources/read", params=params)
-                        return await _rr_inner(req)
-
-                    dispatcher.register("resources/list", _resources_list)
-                    dispatcher.register("resources/read", _resources_read)
+                dispatcher.register("resources/list", _resources_list)
+                dispatcher.register("resources/read", _resources_read)
 
                 # --- prompts ---
-                if _prompts:
-                    _pl_inner = make_prompts_list_handler(_prompts)
-                    _pg_inner = make_prompts_get_handler(srv, _prompts)
+                _pl_inner = make_prompts_list_handler(catalog.list_prompts)
+                _pg_inner = make_prompts_get_handler(srv, catalog.list_prompts)
 
-                    from lauren_mcp._types import JsonRpcRequest as _Req3  # noqa: PLC0415
+                async def _prompts_list(params: dict[str, Any] | None) -> dict[str, Any]:
+                    return await _pl_inner(_Req(method="prompts/list", params=params))
 
-                    async def _prompts_list(params: dict[str, Any] | None) -> dict[str, Any]:
-                        req = _Req3(method="prompts/list", params=params)
-                        return await _pl_inner(req)
+                async def _prompts_get(params: dict[str, Any] | None) -> dict[str, Any]:
+                    return await _pg_inner(_Req(method="prompts/get", params=params))
 
-                    async def _prompts_get(params: dict[str, Any] | None) -> dict[str, Any]:
-                        req = _Req3(method="prompts/get", params=params)
-                        return await _pg_inner(req)
+                dispatcher.register("prompts/list", _prompts_list)
+                dispatcher.register("prompts/get", _prompts_get)
 
-                    dispatcher.register("prompts/list", _prompts_list)
-                    dispatcher.register("prompts/get", _prompts_get)
+            @pre_destruct
+            async def _shutdown(self) -> None:
+                """Close the lifespan generator at server shutdown."""
+                gen = self._lifespan_gen
+                self._lifespan_gen = None
+                if gen is not None:
+                    await gen.aclose()
 
         # With ``from __future__ import annotations`` all annotations are
         # stored as strings.  Lauren's DI evaluates them via
@@ -350,17 +419,24 @@ class McpServerModule:
         # 8. Build the @module class — a thin container; all lifecycle
         #    logic lives in _McpHandlerRegistrar above.
         # ------------------------------------------------------------------
-        # Combine built-in providers with any user-supplied extra providers.
-        # Guard/interceptor/middleware classes declared on server_cls are
-        # added automatically so Lauren's DI can resolve them per-connection.
-        # We read them back from server_cls (own __dict__) because
-        # propagate_metadata already stored them on the transport controllers,
-        # and the DI container still needs explicit type registrations here.
         from lauren.reflect import (  # noqa: PLC0415
             reflect_guards,
             reflect_interceptors,
             reflect_middlewares,
         )
+
+        _composition_providers: list[type] = []
+        if mounts:
+            from ._composition import make_mount_binder  # noqa: PLC0415
+
+            for mounted_cls, prefix in mounts:
+                _composition_providers.append(mounted_cls)
+                _composition_providers.append(make_mount_binder(mounted_cls, prefix))
+        if proxies:
+            from ._composition import make_proxy_binder  # noqa: PLC0415
+
+            for proxy_client, prefix in proxies:
+                _composition_providers.append(make_proxy_binder(proxy_client, prefix))
 
         _existing_extra = set(providers or [])
         _auto_guard_providers: list[type] = [
@@ -376,7 +452,11 @@ class McpServerModule:
             server_cls,
             McpDispatcher,
             SseSessionStore,
+            StreamableSessionStore,
+            McpConnectionRegistry,
+            McpCatalogManager,
             _McpHandlerRegistrar,
+            *_composition_providers,
             *_auto_guard_providers,
             *(providers or []),
         ]

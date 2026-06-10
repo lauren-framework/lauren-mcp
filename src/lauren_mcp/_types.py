@@ -127,6 +127,7 @@ class ClientCapabilities:
 
     roots: dict[str, Any] | None = None
     sampling: dict[str, Any] | None = None
+    elicitation: dict[str, Any] | None = None
     experimental: dict[str, Any] | None = None
 
 
@@ -212,6 +213,28 @@ AnyContent = TextContent | ImageContent | EmbeddedResource
 # ---------------------------------------------------------------------------
 
 
+@dataclass(frozen=True)
+class ToolAnnotations:
+    """Behavioural hints for a tool, transmitted to clients in ``tools/list``.
+
+    Field defaults follow the MCP specification's conservative assumptions:
+    a tool is presumed destructive and open-world unless declared otherwise.
+    """
+
+    readOnlyHint: bool = False
+    destructiveHint: bool = True
+    idempotentHint: bool = False
+    openWorldHint: bool = True
+
+    def to_dict(self) -> dict[str, bool]:
+        return {
+            "readOnlyHint": self.readOnlyHint,
+            "destructiveHint": self.destructiveHint,
+            "idempotentHint": self.idempotentHint,
+            "openWorldHint": self.openWorldHint,
+        }
+
+
 @dataclass
 class ToolSchema:
     """Descriptor for a single MCP tool."""
@@ -219,6 +242,8 @@ class ToolSchema:
     name: str
     description: str
     inputSchema: dict[str, Any] = field(default_factory=dict)
+    outputSchema: dict[str, Any] | None = None
+    annotations: dict[str, Any] | None = None
 
 
 @dataclass
@@ -235,6 +260,20 @@ class ToolResult:
 
     content: list[TextContent | ImageContent | EmbeddedResource] = field(default_factory=list)
     isError: bool = False
+    structuredContent: dict[str, Any] | None = None
+
+
+@dataclass
+class ToolOutput:
+    """Rich return type for ``@mcp_tool`` methods.
+
+    Lets a tool control the content blocks (shown to the user) and the
+    structured JSON payload (parsed by the agent loop) independently.
+    """
+
+    content: list[Any] | None = None
+    structured_content: dict[str, Any] | None = None
+    is_error: bool = False
 
 
 # ---------------------------------------------------------------------------
@@ -274,6 +313,25 @@ class ReadResourceResult:
     """Result returned from a ``resources/read`` invocation."""
 
     contents: list[ResourceContent] = field(default_factory=list)
+
+
+@dataclass
+class BlobResource:
+    """Convenience return type for binary ``@mcp_resource`` methods.
+
+    Equivalent to returning ``bytes`` with an explicit MIME type — the
+    handler base64-encodes ``data`` into ``ResourceContent.blob``.
+    """
+
+    data: bytes
+    mime_type: str = "application/octet-stream"
+
+
+@dataclass
+class ResourceResult:
+    """Multi-item return type for ``@mcp_resource`` methods."""
+
+    contents: list[Any] = field(default_factory=list)
 
 
 # ---------------------------------------------------------------------------
@@ -364,6 +422,154 @@ class LoggingMessageNotification(JsonRpcNotification):
     method: str = "notifications/message"
     params: dict[str, Any] | list[Any] | None = None
     jsonrpc: str = "2.0"
+
+
+# ---------------------------------------------------------------------------
+# Progress
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class ProgressNotification(JsonRpcNotification):
+    """Notification reporting incremental progress for an in-flight request."""
+
+    method: str = "notifications/progress"
+    params: dict[str, Any] | list[Any] | None = None
+    jsonrpc: str = "2.0"
+
+
+# ---------------------------------------------------------------------------
+# Sampling (server-initiated LLM calls)
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class SamplingMessage:
+    """A single message in a ``sampling/createMessage`` request."""
+
+    role: Literal["user", "assistant"]
+    content: TextContent | ImageContent = field(default_factory=lambda: TextContent(text=""))
+
+    def to_dict(self) -> dict[str, Any]:
+        if isinstance(self.content, TextContent):
+            content: dict[str, Any] = {"type": "text", "text": self.content.text}
+        else:
+            content = {
+                "type": "image",
+                "data": self.content.data,
+                "mimeType": self.content.mimeType,
+            }
+        return {"role": self.role, "content": content}
+
+
+@dataclass
+class CreateMessageParams:
+    """Parameters for a ``sampling/createMessage`` request."""
+
+    messages: list[SamplingMessage]
+    maxTokens: int
+    systemPrompt: str | None = None
+    includeContext: Literal["none", "thisServer", "allServers"] = "none"
+    temperature: float | None = None
+    stopSequences: list[str] = field(default_factory=list)
+    modelPreferences: dict[str, Any] | None = None
+    metadata: dict[str, Any] | None = None
+
+    def to_dict(self) -> dict[str, Any]:
+        obj: dict[str, Any] = {
+            "messages": [m.to_dict() for m in self.messages],
+            "maxTokens": self.maxTokens,
+            "includeContext": self.includeContext,
+        }
+        if self.systemPrompt is not None:
+            obj["systemPrompt"] = self.systemPrompt
+        if self.temperature is not None:
+            obj["temperature"] = self.temperature
+        if self.stopSequences:
+            obj["stopSequences"] = self.stopSequences
+        if self.modelPreferences is not None:
+            obj["modelPreferences"] = self.modelPreferences
+        if self.metadata is not None:
+            obj["metadata"] = self.metadata
+        return obj
+
+
+@dataclass
+class CreateMessageResult:
+    """Result of a ``sampling/createMessage`` request."""
+
+    role: Literal["assistant"]
+    content: TextContent | ImageContent
+    model: str
+    stopReason: str | None = None
+
+    @property
+    def text(self) -> str:
+        """The text of the assistant's reply ('' for image content)."""
+        return self.content.text if isinstance(self.content, TextContent) else ""
+
+    @classmethod
+    def from_dict(cls, obj: dict[str, Any]) -> CreateMessageResult:
+        raw = obj.get("content") or {}
+        content: TextContent | ImageContent
+        if raw.get("type") == "image":
+            content = ImageContent(data=raw.get("data", ""), mimeType=raw.get("mimeType", ""))
+        else:
+            content = TextContent(text=raw.get("text", ""))
+        return cls(
+            role=obj.get("role", "assistant"),
+            content=content,
+            model=obj.get("model", ""),
+            stopReason=obj.get("stopReason"),
+        )
+
+
+class McpSamplingNotAvailable(RuntimeError):
+    """Raised when ``ctx.sample()`` is called but the connected client did not
+    advertise the ``sampling`` capability (or the transport cannot deliver
+    server-to-client requests)."""
+
+
+# ---------------------------------------------------------------------------
+# Elicitation (server asks client for user input)
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class ElicitResult:
+    """Result of an ``elicitation/create`` request."""
+
+    action: Literal["accept", "decline", "cancel"]
+    content: dict[str, Any] | None = None
+
+    @classmethod
+    def from_dict(cls, obj: dict[str, Any]) -> ElicitResult:
+        return cls(action=obj.get("action", "cancel"), content=obj.get("content"))
+
+
+class McpElicitationNotAvailable(RuntimeError):
+    """Raised when ``ctx.elicit()`` is called but the connected client did not
+    advertise the ``elicitation`` capability (or the transport cannot deliver
+    server-to-client requests)."""
+
+
+# ---------------------------------------------------------------------------
+# Roots (client-exposed filesystem roots)
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class Root:
+    """A filesystem root exposed by an MCP client to servers."""
+
+    uri: str
+    name: str | None = None
+
+    def to_dict(self) -> dict[str, Any]:
+        obj: dict[str, Any] = {"uri": self.uri}
+        if self.name is not None:
+            obj["name"] = self.name
+        return obj
 
 
 # ---------------------------------------------------------------------------
@@ -482,13 +688,17 @@ __all__ = [
     "TextContent",
     "ImageContent",
     "EmbeddedResource",
+    "ToolAnnotations",
     "ToolSchema",
     "ToolCallParams",
     "ToolResult",
+    "ToolOutput",
     "ResourceSchema",
     "ResourceContent",
     "ReadResourceParams",
     "ReadResourceResult",
+    "BlobResource",
+    "ResourceResult",
     "PromptArgument",
     "PromptSchema",
     "PromptMessage",
@@ -498,6 +708,14 @@ __all__ = [
     "ResourceListChangedNotification",
     "PromptListChangedNotification",
     "LoggingMessageNotification",
+    "ProgressNotification",
+    "SamplingMessage",
+    "CreateMessageParams",
+    "CreateMessageResult",
+    "McpSamplingNotAvailable",
+    "ElicitResult",
+    "McpElicitationNotAvailable",
+    "Root",
     "McpParseError",
     "parse_message",
     "build_error_response",

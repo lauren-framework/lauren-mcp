@@ -54,6 +54,7 @@ class McpWebSocketClient(_McpBaseRemoteClient):
         max_retries: int = 3,
         startup_timeout: float = 10.0,
         client_info: Implementation | None = None,
+        **feature_kwargs: Any,
     ) -> None:
         if not _WS_AVAILABLE:
             raise ImportError(
@@ -65,6 +66,7 @@ class McpWebSocketClient(_McpBaseRemoteClient):
             headers=headers,
             max_retries=max_retries,
             startup_timeout=startup_timeout,
+            **feature_kwargs,
         )
         self._url = url
         self._ws = None  # The live websockets connection object

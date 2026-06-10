@@ -12,20 +12,29 @@ from lauren_mcp._types import (
     Implementation,
     JsonRpcErrorResponse,
     JsonRpcNotification,
+    JsonRpcRequest,
     JsonRpcResponse,
     PromptSchema,
     ResourceSchema,
+    Root,
     ToolSchema,
     parse_message,
 )
 
+from ._features import (
+    ListChangedHandler,
+    NotificationHandler,
+    RootsProvider,
+    ServerRequestHandler,
+    _ClientFeaturesMixin,
+)
 from ._protocol import McpClientProtocol
 from ._stdio import McpCallError  # reuse the same error class
 
 _logger = logging.getLogger(__name__)
 
 
-class _McpBaseRemoteClient(McpClientProtocol):
+class _McpBaseRemoteClient(_ClientFeaturesMixin, McpClientProtocol):
     """Abstract mixin with shared state and logic for WebSocket and HTTP+SSE clients.
 
     Subclasses must implement:
@@ -46,6 +55,13 @@ class _McpBaseRemoteClient(McpClientProtocol):
         headers: dict[str, str] | None = None,
         max_retries: int = 3,
         startup_timeout: float = 10.0,
+        protocol_version: str | None = None,
+        roots: list[Root] | RootsProvider | None = None,
+        progress_handler: NotificationHandler | None = None,
+        log_handler: NotificationHandler | None = None,
+        list_changed_handler: ListChangedHandler | None = None,
+        sampling_handler: ServerRequestHandler | None = None,
+        elicitation_handler: ServerRequestHandler | None = None,
     ) -> None:
         self._client_info = client_info or Implementation(
             name="lauren-mcp-remote-client", version="1.0.0"
@@ -53,6 +69,15 @@ class _McpBaseRemoteClient(McpClientProtocol):
         self._headers = headers or {}
         self._max_retries = max_retries
         self._startup_timeout = startup_timeout
+        self._init_features(
+            protocol_version=protocol_version,
+            roots=roots,
+            progress_handler=progress_handler,
+            log_handler=log_handler,
+            list_changed_handler=list_changed_handler,
+            sampling_handler=sampling_handler,
+            elicitation_handler=elicitation_handler,
+        )
 
         # Shared state
         self._pending: dict[int, asyncio.Future[Any]] = {}
@@ -88,8 +113,8 @@ class _McpBaseRemoteClient(McpClientProtocol):
             self._request(
                 "initialize",
                 {
-                    "protocolVersion": "2024-11-05",
-                    "capabilities": {},
+                    "protocolVersion": self._requested_protocol_version,
+                    "capabilities": self._build_client_capabilities(),
                     "clientInfo": {
                         "name": self._client_info.name,
                         "version": self._client_info.version,
@@ -99,6 +124,10 @@ class _McpBaseRemoteClient(McpClientProtocol):
             timeout=self._startup_timeout,
         )
         _logger.debug("MCP remote handshake complete: %s", result)
+        if isinstance(result, dict):
+            self._negotiated_protocol_version = result.get(
+                "protocolVersion", self._requested_protocol_version
+            )
         self._initialized = True
         # Send the initialized notification (no response expected)
         await self._send_raw(
@@ -151,6 +180,7 @@ class _McpBaseRemoteClient(McpClientProtocol):
             return
 
         if isinstance(msg, JsonRpcNotification):
+            self._route_notification(msg)
             for listener in self._notification_listeners:
                 try:
                     listener(msg)
@@ -158,8 +188,9 @@ class _McpBaseRemoteClient(McpClientProtocol):
                     _logger.exception("MCP remote: notification listener error")
             return
 
-        # Server-initiated requests — not expected for clients
-        _logger.debug("MCP remote: received server-side request (ignored): %s", msg)
+        # Server-initiated requests (roots/list, sampling, elicitation, ping)
+        if isinstance(msg, JsonRpcRequest):
+            self._handle_server_request(msg)
 
     def _fail_all_pending(self, reason: str = "Connection lost") -> None:
         """Fail all pending futures with a McpCallError."""

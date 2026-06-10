@@ -21,6 +21,7 @@ from lauren_mcp._types import (
     parse_message,
 )
 
+from ._features import _ClientFeaturesMixin
 from ._protocol import McpClientProtocol
 
 _logger = logging.getLogger(__name__)
@@ -34,7 +35,7 @@ class McpCallError(Exception):
         self.code = code
 
 
-class McpStdioClient(McpClientProtocol):
+class McpStdioClient(_ClientFeaturesMixin, McpClientProtocol):
     """MCP client that communicates with a subprocess over stdin/stdout.
 
     Each JSON-RPC message is a single newline-terminated JSON line.
@@ -65,6 +66,13 @@ class McpStdioClient(McpClientProtocol):
         client_info: Implementation | None = None,
         max_retries: int = 3,
         startup_timeout: float = 10.0,
+        protocol_version: str | None = None,
+        roots: Any = None,
+        progress_handler: Any = None,
+        log_handler: Any = None,
+        list_changed_handler: Any = None,
+        sampling_handler: Any = None,
+        elicitation_handler: Any = None,
     ) -> None:
         self._command = command
         self._client_info = client_info or Implementation(
@@ -72,6 +80,15 @@ class McpStdioClient(McpClientProtocol):
         )
         self._max_retries = max_retries
         self._startup_timeout = startup_timeout
+        self._init_features(
+            protocol_version=protocol_version,
+            roots=roots,
+            progress_handler=progress_handler,
+            log_handler=log_handler,
+            list_changed_handler=list_changed_handler,
+            sampling_handler=sampling_handler,
+            elicitation_handler=elicitation_handler,
+        )
 
         # Internal state (reset by _start_process)
         self._proc: asyncio.subprocess.Process | None = None
@@ -148,8 +165,8 @@ class McpStdioClient(McpClientProtocol):
             self._request(
                 "initialize",
                 {
-                    "protocolVersion": "2024-11-05",
-                    "capabilities": {},
+                    "protocolVersion": self._requested_protocol_version,
+                    "capabilities": self._build_client_capabilities(),
                     "clientInfo": {
                         "name": self._client_info.name,
                         "version": self._client_info.version,
@@ -159,6 +176,10 @@ class McpStdioClient(McpClientProtocol):
             timeout=self._startup_timeout,
         )
         _logger.debug("MCP stdio handshake complete: %s", result)
+        if isinstance(result, dict):
+            self._negotiated_protocol_version = result.get(
+                "protocolVersion", self._requested_protocol_version
+            )
         self._initialized = True
         # Send the initialized notification (no response expected)
         await self._send_raw(
@@ -268,6 +289,7 @@ class McpStdioClient(McpClientProtocol):
             return
 
         if isinstance(msg, JsonRpcNotification):
+            self._route_notification(msg)
             for listener in self._notification_listeners:
                 try:
                     listener(msg)
@@ -275,8 +297,9 @@ class McpStdioClient(McpClientProtocol):
                     _logger.exception("MCP stdio: notification listener error")
             return
 
-        # JsonRpcRequest from the server — not expected in normal usage
-        _logger.debug("MCP stdio: received server-side request (ignored): %s", msg)
+        # Server-initiated requests (roots/list, sampling, elicitation, ping)
+        if isinstance(msg, JsonRpcRequest):
+            self._handle_server_request(msg)
 
     # ------------------------------------------------------------------
     # McpClientProtocol implementation
