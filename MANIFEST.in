@@ -1,0 +1,28 @@
+# Include top-level docs and metadata
+include README.md
+include LICENSE
+include CHANGELOG.md
+include llms-full.txt
+include llms.txt
+include CONTRIBUTING.md
+
+# Exclude internal planning, AI tooling, and dev-only directories
+recursive-exclude prds *
+recursive-exclude skills *
+recursive-exclude examples *
+recursive-exclude docs *
+recursive-exclude .github *
+
+# Exclude AI tooling and contributor-only docs from the sdist
+exclude AGENTS.md
+exclude CLAUDE.md
+
+# Exclude build/test/cache artifacts
+recursive-exclude .benchmarks *
+prune dist
+prune build
+prune htmlcov
+prune .mypy_cache
+prune .ruff_cache
+prune .pytest_cache
+prune .nox

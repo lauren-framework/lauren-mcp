@@ -48,9 +48,18 @@ try:
     from pydantic import BaseModel
 
     _PYDANTIC_AVAILABLE = True
+
+    # Module-level pydantic model so get_type_hints() can resolve it in
+    # test_pydantic_return_auto_detected (locally-defined classes are not
+    # in the function's __globals__ and cannot be resolved by get_type_hints).
+    class _PydanticOutputModel(BaseModel):  # type: ignore[misc]
+        name: str
+        value: int
+
 except ImportError:
     BaseModel = None  # type: ignore[assignment,misc]
     _PYDANTIC_AVAILABLE = False
+    _PydanticOutputModel = None  # type: ignore[assignment]
 
 
 # ---------------------------------------------------------------------------
@@ -379,12 +388,10 @@ def test_explicit_output_schema_overrides_auto() -> None:
 
 @pytest.mark.skipif(not _PYDANTIC_AVAILABLE, reason="pydantic not installed")
 def test_pydantic_return_auto_detected() -> None:
-    class MyModel(BaseModel):  # type: ignore[misc]
-        name: str
-        value: int
-
+    # Uses _PydanticOutputModel defined at module scope so get_type_hints()
+    # can resolve the return annotation via the function's __globals__.
     @mcp_tool()
-    async def get_model(self) -> MyModel: ...
+    async def get_model(self) -> _PydanticOutputModel: ...  # type: ignore[name-defined]
 
     meta = getattr(get_model, MCP_TOOL_META)
     assert meta.output_schema is not None

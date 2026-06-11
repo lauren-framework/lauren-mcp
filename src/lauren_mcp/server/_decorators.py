@@ -602,7 +602,11 @@ def _build_schema(
             except ImportError:
                 pass
 
-        prop = builder.build(base_type)
+        # Build from the full annotation so pydantic Field constraints (ge, le,
+        # description, etc.) are preserved by SchemaBuilder._apply_metadata.
+        # Lauren extractor markers have no schema attributes so they are safely
+        # ignored by _apply_metadata's constraint loop.
+        prop = builder.build(annotation if annotation is not base_type else base_type)
 
         # Apply FieldDescriptor constraints to the schema fragment
         if fd is not None:
