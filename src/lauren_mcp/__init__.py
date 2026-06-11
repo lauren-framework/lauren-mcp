@@ -67,6 +67,7 @@ from ._types import (
     validate_sampling_messages,
 )
 from .server import (
+    LaurenMcpMemoryServer,
     McpServerModule,
     McpToolNameCollision,
     RouteEntry,
@@ -154,6 +155,8 @@ __all__ = [
     "McpUrlElicitationNotAvailable",
     "CompletionResult",
     "validate_sampling_messages",
+    # Memory server
+    "LaurenMcpMemoryServer",
 ]
 
 try:

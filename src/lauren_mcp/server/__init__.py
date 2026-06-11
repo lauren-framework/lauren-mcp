@@ -19,6 +19,7 @@ from ._decorators import (
     mcp_server,
     mcp_tool,
 )
+from ._memory_server import LaurenMcpMemoryServer
 from ._module import McpServerModule
 from ._openapi import RouteEntry, build_openapi_server_class
 
@@ -41,4 +42,5 @@ __all__ = [
     "register_file_resource",
     "register_http_resource",
     "register_directory_resource",
+    "LaurenMcpMemoryServer",
 ]

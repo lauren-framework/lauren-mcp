@@ -1999,6 +1999,20 @@ return ToolStream(
 
 ---
 
+### LaurenMcpMemoryServer
+
+Deployable ``@mcp_server`` backed by in-memory storage (subclassable for SQLite).
+Exposes tools ``save_conversation``, ``delete_conversation``, ``save_user_fact``,
+``get_user_facts``, ``delete_user_fact`` and resource ``memory://conversations/{id}``.
+Use with :class:`~lauren_ai.mcp.McpConversationStore` / ``McpUserMemoryStore`` in ``lauren-ai``.
+
+```python
+from lauren_mcp import LaurenMcpMemoryServer, McpServerModule
+module = McpServerModule.for_root(LaurenMcpMemoryServer)
+```
+
+---
+
 ### McpExecutionContext
 
 ```python
