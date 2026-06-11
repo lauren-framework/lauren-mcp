@@ -31,8 +31,8 @@ try:
 
     _PYDANTIC_AVAILABLE = True
 except ImportError:  # pragma: no cover - exercised via the non-pydantic path
-    BaseModel = None
-    FieldInfo = None
+    BaseModel = None  # type: ignore[assignment,misc]
+    FieldInfo = None  # type: ignore[assignment,misc]
     _PYDANTIC_AVAILABLE = False
 
 try:

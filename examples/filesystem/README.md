@@ -1,13 +1,77 @@
-# Filesystem MCP Server
+# Filesystem MCP Example
 
-A production-quality example MCP server that exposes a sandboxed filesystem as
-a set of CRUD tools, a file resource, and an edit prompt.
+A production-quality MCP server that exposes a sandboxed filesystem as CRUD
+tools, a file resource, and an edit prompt — plus an interactive OpenAI CLI
+client powered by [Rich](https://github.com/Textualize/rich).
+
+```
+┌─ Filesystem MCP Client ─ model: gpt-4o-mini ─────────────────────────────┐
+│  Server:   http://127.0.0.1:8765/filesystem                               │
+│  Sandbox:  /tmp/sandbox                                                   │
+└───────────────────────────────────────────────────────────────────────────┘
+
+┌─ Available tools ─────────────────────────────────────────────────────────┐
+│  📂  list_files          List files and directories at a path             │
+│  📖  read_file           Read a file as UTF-8 text (max 1 MB)            │
+│  ✏️   write_file          Create or overwrite a file                       │
+│  …                                                                        │
+└───────────────────────────────────────────────────────────────────────────┘
+
+You  > list all files then read README.md
+
+╭─ 📂  list_files ─────────────────────────────────────────────────────────╮
+│  {}                                                                       │
+╰───────────────────────────────────────────────────────────────────────────╯
+╭─ list_files result ──────────────────────────────────────────────────────╮
+│  ["README.md", "notes.txt"]                                               │
+╰───────────────────────────────────────────────────────────────────────────╯
+```
 
 ## Installation
 
 ```bash
-pip install "lauren-mcp[all]"
+pip install "lauren-mcp[all]" openai rich
+# Optional: load .env automatically
+pip install python-dotenv
 ```
+
+## Quick start
+
+```bash
+# 1. Copy and fill in environment variables
+cp examples/filesystem/.env.example .env
+$EDITOR .env   # set OPENAI_API_KEY at minimum
+
+# 2. Start the MCP server
+MCP_FS_ROOT=/tmp/sandbox python examples/filesystem/server.py
+
+# 3. In a second terminal, start the client
+python examples/filesystem/client.py
+```
+
+## Environment variables
+
+Copy `.env.example` to `.env` (or export the variables directly):
+
+| Variable | Default | Description |
+|---|---|---|
+| `OPENAI_API_KEY` | *(required)* | Your OpenAI API key |
+| `OPENAI_MODEL` | `gpt-4o-mini` | Model for the agentic loop |
+| `MCP_SERVER_URL` | `http://127.0.0.1:8765/filesystem` | Streamable-HTTP URL of the server |
+| `MCP_FS_ROOT` | `./sandbox` | Displayed in the header; must match the server's `MCP_FS_ROOT` |
+| `SYSTEM_PROMPT` | *(built-in)* | Override the system prompt |
+
+## Client commands
+
+Inside the REPL:
+
+| Input | Action |
+|---|---|
+| Any text | Send message to the model |
+| `/tools` | Show the available tool table |
+| `/clear` | Reset conversation history |
+| `/history` | Print the message history |
+| `exit` / `quit` | Close the client |
 
 ## Running
 
@@ -97,6 +161,27 @@ The server supports all three MCP transports (`transport="all"`):
 | WebSocket        | `ws://host/filesystem/ws`  | Any                |
 | HTTP+SSE         | `http://host/filesystem/`  | 2024-11-05         |
 | Streamable HTTP  | `http://host/filesystem/`  | 2025-03-26         |
+
+## How the client works
+
+```
+client.py
+  │
+  ├─ AsyncOpenAI           Chat Completions API (streaming)
+  │    └─ tool_calls  ──►  McpServer.streamable_http()
+  │                             └─ call_tool(name, args)  ──►  server.py
+  └─ Rich Console          Live spinners · panels · Markdown
+```
+
+1. On startup, `McpServer.streamable_http(MCP_SERVER_URL).connect()` performs
+   the MCP `initialize` handshake and fetches the tool list via `tools/list`.
+2. Each tool is converted to an OpenAI function-tool schema and passed in the
+   `tools=` parameter of every Chat Completions request.
+3. When the model emits a `tool_calls` chunk, the client prints a yellow panel
+   with the call arguments, executes it against the MCP server, prints the
+   result, and appends both messages to the history.
+4. The loop continues until the model produces a plain text response with no
+   tool calls.
 
 ## Running Tests
 

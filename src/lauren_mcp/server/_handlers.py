@@ -1251,10 +1251,13 @@ def make_resources_read_handler(
                         async def _make_next(
                             _ic: Any = _ic, _inner: Any = _inner, _ctx: Any = exec_ctx
                         ) -> dict[str, Any]:
-                            return await _ic.intercept(_ctx, McpCallHandler(_inner))
+                            result: dict[str, Any] = await _ic.intercept(
+                                _ctx, McpCallHandler(_inner)
+                            )
+                            return result
 
                         current_fn = _make_next
-                    return await current_fn()
+                    return await current_fn()  # type: ignore[no-any-return]
 
                 result = await method(**kwargs)
                 return {"contents": _coerce_resource_result(result, uri, meta)}

@@ -197,7 +197,7 @@ class McpHttpSseClient(_McpBaseRemoteClient):
                             # Fallback: treat raw data as session_id string
                             self._session_id = event.data.strip()
                         if not session_ready.done():
-                            session_ready.set_result(self._session_id)
+                            session_ready.set_result(self._session_id or "")
                         continue
 
                     if event.event == "message":

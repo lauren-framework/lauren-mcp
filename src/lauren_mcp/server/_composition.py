@@ -74,7 +74,7 @@ def make_mount_binder(mounted_cls: type, prefix: str) -> type:
             self._catalog = catalog
             self._instance = instance
 
-        @post_construct
+        @post_construct  # type: ignore[misc]
         def _bind(self) -> None:
             tools, resources, prompts = _prefixed_metas(mounted_cls, prefix)
             for meta in tools:
@@ -128,7 +128,7 @@ def make_proxy_binder(client: Any, prefix: str) -> type:
             self._client = client
             self._registered: list[str] = []
 
-        @post_construct
+        @post_construct  # type: ignore[misc]
         async def _bind(self) -> None:
             await self._client.connect()
             for schema in await self._client.list_tools():

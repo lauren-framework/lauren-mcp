@@ -31,7 +31,6 @@ from lauren import (
     set_metadata,
     use_guards,
 )
-
 from lauren_mcp import (
     McpServerModule,
     McpToolContext,
@@ -749,6 +748,13 @@ class FilesystemModule:
 app = LaurenFactory.create(FilesystemModule)
 
 if __name__ == "__main__":
+    import argparse
+
     import uvicorn
 
-    uvicorn.run(app, host="127.0.0.1", port=8765)
+    parser = argparse.ArgumentParser(description="Filesystem MCP Server")
+    parser.add_argument("-H", "--host", default="127.0.0.1", help="Bind host (default: 127.0.0.1)")
+    parser.add_argument("-p", "--port", type=int, default=8765, help="Bind port (default: 8765)")
+    args = parser.parse_args()
+
+    uvicorn.run(app, host=args.host, port=args.port)

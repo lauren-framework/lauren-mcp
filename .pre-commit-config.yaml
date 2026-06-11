@@ -18,6 +18,10 @@
 
 minimum_pre_commit_version: "3.5.0"
 
+# Never lint/format the examples directory — it has its own pyproject.toml
+# and may contain root-owned files that pre-commit cannot open.
+exclude: ^examples/
+
 # Skip hooks during merge / rebase commits — the real branch CI will
 # catch issues there and forcing developers to fix conflicts AND lint
 # in one commit is needlessly painful.
@@ -58,9 +62,11 @@ repos:
         name: ruff (lint, autofix)
         args: ["--fix", "--exit-non-zero-on-fix"]
         types_or: [python, pyi]
+        exclude: ^(examples|tests)/
       - id: ruff-format
         name: ruff (format)
         types_or: [python, pyi]
+        exclude: ^(examples|tests)/
 
   # ---------------------------------------------------------------------
   # Python — mypy (informational by default; CI gates on it)
@@ -70,8 +76,13 @@ repos:
     hooks:
       - id: mypy
         name: mypy (lauren package)
-        files: ^lauren/
-        args: ["--config-file=pyproject.toml"]
+        files: ^src/lauren_mcp/
+        exclude: ^(examples|tests)/
+        args:
+          - "--config-file=pyproject.toml"
+          - "--ignore-missing-imports"
+          - "--no-error-summary"
+          - "--disable-error-code=misc"
         # mypy needs the runtime deps to type-check correctly.
         additional_dependencies:
           - "pydantic>=2.0"

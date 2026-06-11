@@ -43,7 +43,7 @@ def _load_spec(spec: dict[str, Any] | str | Path) -> dict[str, Any]:
         return dict(json.loads(text))
     except json.JSONDecodeError:
         try:
-            import yaml
+            import yaml  # type: ignore[import-untyped]
         except ImportError as exc:
             raise ImportError(
                 "Reading YAML OpenAPI specs requires pyyaml: pip install pyyaml"

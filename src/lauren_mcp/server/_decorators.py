@@ -211,11 +211,10 @@ def _extract_lauren_hint(
     fd = None
     pipes_list: list[Any] = []
 
-    _LParamSpec: type | None = None
-    import contextlib  # noqa: PLC0415
-
-    with contextlib.suppress(ImportError):
+    try:
         from lauren.extractors import _ParamSpec as _LParamSpec  # noqa: PLC0415
+    except ImportError:
+        _LParamSpec = None  # type: ignore[assignment]
 
     for extra in args[1:]:
         if isinstance(extra, FieldDescriptor):

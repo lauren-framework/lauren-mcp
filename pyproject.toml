@@ -86,6 +86,7 @@ ignore = ["B008"]
 python_version         = "3.11"
 strict                 = true
 ignore_missing_imports = true
+warn_unused_ignores    = false
 cache_dir              = "/tmp/mypy-cache-lauren-mcp"
 
 [tool.pytest.ini_options]

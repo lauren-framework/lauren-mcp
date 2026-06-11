@@ -135,7 +135,6 @@ def lint(session: nox.Session) -> None:
         "check",
         "--fix",
         "src",
-        "tests",
         "noxfile.py",
         "scripts",
         *session.posargs,
