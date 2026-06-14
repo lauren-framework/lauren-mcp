@@ -275,7 +275,7 @@ def build(session: nox.Session) -> None:
 def build_check(session: nox.Session) -> None:
     """Check the built distributions with twine."""
     _install_dev(session)
-    session.run("twine", "check", "dist/*", *session.posargs, external=True)
+    session.run("uv", "run", "twine", "check", "dist/*", *session.posargs, external=True)
 
 
 # ---------------------------------------------------------------------------
