@@ -5,8 +5,10 @@
 > See llms.txt for a shorter overview.
 
 Package: lauren-mcp
+Version: 1.0.0
+Status: Beta (Development Status :: 4 - Beta)
 Source: https://github.com/lauren-framework/lauren-mcp
-Docs: https://mcp.lauren-py.dev
+Docs: https://lauren-framework.github.io/lauren-mcp/
 PyPI: https://pypi.org/project/lauren-mcp/
 
 ---

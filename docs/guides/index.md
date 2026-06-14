@@ -18,6 +18,12 @@ Practical, task-oriented guides for every major feature of `lauren-mcp`.
 | [Multiple Servers](multiple-servers.md) | Connect several MCP servers simultaneously; tool namespacing |
 | [Error Handling](error-handling.md) | Timeouts, `McpCallError`, not-found resources, and retry patterns |
 
+## Examples
+
+| Guide | Description |
+|---|---|
+| [Filesystem Example](../../examples/filesystem/README.md) | Production-quality MCP server exposing a sandboxed filesystem, plus an interactive Poolside CLI client built with Rich |
+
 ## Testing
 
 | Guide | Description |

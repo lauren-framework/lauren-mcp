@@ -126,6 +126,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `instrument_dispatcher()` standalone helper; requires `[otel]` extra
 - `lmcp` CLI: `run`, `dev`, `inspect`, `call`, `install` commands; requires `[cli]` extra
 
+### Added — Examples
+
+- `examples/filesystem/client.py`: interactive CLI client for the Filesystem MCP server,
+  powered by the Poolside inference backend (OpenAI-compatible API); uses `rich` for
+  pretty-printed panels, tables, progress spinners, and a live agentic tool-call loop
+- `examples/filesystem/pyproject.toml`: self-contained project with `[client]` extra
+  (`openai>=1.30`, `rich>=13`, `python-dotenv`) and `[deploy]` extra for Modal deployment
+- `examples/filesystem/.env.example`: documents all recognised environment variables
+  (`OPENAI_API_KEY`, `OPENAI_MODEL`, `OPENAI_API_BASE_URL`, `MCP_SERVER_URL`,
+  `MCP_FS_ROOT`, `SYSTEM_PROMPT`)
+
 ### Added — Per-method cross-cutting decorators
 
 - `@use_guards` on individual `@mcp_tool` / `@mcp_resource` / `@mcp_prompt` methods;
@@ -155,6 +166,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Tests: `tests/unit/test_per_tool_*.py`, `tests/integration/test_per_tool_*.py`,
   `tests/end_to_end/test_per_tool_*.py`
 
+### Added — Tests
+
+- `tests/unit/test_decorators_coverage.py` / `test_decorators_coverage2.py` — expanded
+  decorator and metadata edge-case coverage
+- `tests/unit/test_handlers_coverage.py` / `*2.py` / `*3.py` / `*4.py` — handler
+  branch and error-path coverage
+- `tests/unit/test_schema_coverage.py` / `*2.py` / `*3.py` — `SchemaBuilder` edge cases
+- `tests/unit/test_client_transports_coverage.py` — all client transport paths (stdio,
+  ws, SSE, streamable) including reconnect and error handling
+- `tests/unit/test_cli_commands_coverage.py` — `lmcp` CLI command coverage
+- `tests/unit/test_server_transport_coverage.py` — server transport branch coverage
+- `tests/unit/test_openapi_coverage.py` — `build_openapi_server_class` coverage
+- `tests/integration/test_composition_coverage.py` — server composition (mounts,
+  proxies) integration tests
+- `tests/integration/test_server_sse_streamable_coverage.py` — SSE and Streamable HTTP
+  transport integration tests
+- `tests/integration/test_cli_commands_integration.py` — CLI integration tests
+- `examples/filesystem/tests/test_basic_functionality.py` and
+  `test_filesystem_edge_cases.py` — example server test suite
+
 ### Changed
 
 - `LATEST` protocol version updated: `"2025-03-26"` → `"2025-11-25"`
@@ -166,6 +197,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   addition to cancelling the asyncio task
 - `listChanged` advertised as `True` by default (was `False`)
 - All client factories accept `**feature_kwargs` for handlers, roots, and version
+- Build system switched from `setuptools`/`setuptools-scm` to `hatchling`/`hatch-vcs`;
+  `pyproject.toml` updated with `[tool.hatch.version]`, `[tool.hatch.build.targets.wheel]`,
+  and `[tool.hatch.build.targets.sdist]` tables
+- `dev` optional-dependency group removed from `[project.optional-dependencies]`; all
+  development dependencies moved to `[dependency-groups] dev` (PEP 735 / uv native)
+- Coverage minimum threshold raised from 80% to 88% (base deps); running with `[all]`
+  extras reaches 94%+; total test coverage improved to above 90%
+- `PyPI` classifier promoted from `Development Status :: 3 - Alpha` to
+  `Development Status :: 4 - Beta`
+- Documentation URL updated to `https://lauren-framework.github.io/lauren-mcp/`
 
 ---
 
@@ -246,4 +287,4 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `ReadResourceResult`, `GetPromptParams`, `GetPromptResult`
 - Version constants: `LATEST`, `STABLE`, `SUPPORTED`
 
-[Unreleased]: https://github.com/lauren-framework/lauren-mcp/compare/HEAD...HEAD
+[1.0.0]: https://github.com/lauren-framework/lauren-mcp/releases/tag/v1.0.0

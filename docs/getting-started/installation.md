@@ -94,7 +94,7 @@ so changes to the framework are immediately reflected without reinstalling.
 
 ```bash
 cd lauren-mcp
-uv sync --extra all --extra dev --active
+uv sync --dev --active
 ```
 
 4. Run the test suite to verify everything works:

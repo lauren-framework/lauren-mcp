@@ -23,7 +23,7 @@ git clone https://github.com/lauren-framework/lauren-framework ../lauren-framewo
 3. Install all dev dependencies:
 
 ```bash
-uv sync --extra all --extra dev --active
+uv sync --dev --active
 ```
 
 4. Verify the setup:
@@ -71,7 +71,7 @@ uv run --no-sync nox -s llms_check
 | `tests_integration` | Integration tests only, Python 3.12 (installs `all` extra) |
 | `tests_extras` | Verifies import guards work for bare / ws / http / all installs |
 | `coverage` | Full suite with `--cov` and HTML / XML reports |
-| `lint` | `ruff check --fix` over `src/`, `tests/`, `noxfile.py`, `scripts/` |
+| `lint` | `ruff check --fix` over `src/`, `noxfile.py`, `scripts/` (tests and examples excluded via `[tool.ruff]`) |
 | `format` | `ruff format` over the same paths |
 | `typecheck` | `mypy src/lauren_mcp` with `strict = true` |
 | `llms_check` | Verifies `llms-full.txt` covers all public symbols |
@@ -382,7 +382,7 @@ message type):
 ## Test requirements
 
 - All new code must have unit tests.
-- Coverage must not drop below 80% (`nox -s coverage`).
+- Coverage must not drop below 90% (`nox -s coverage`).
 - Integration tests must pass locally before opening a PR.
 - `pytest.mark.eval` tests are optional for contributors but required for
   maintainers before a release.
@@ -402,7 +402,7 @@ message type):
 A PR is ready to merge when:
 
 - [ ] All unit and integration tests pass (`nox -s tests tests_integration`)
-- [ ] Coverage is ≥ 80% (`nox -s coverage`)
+- [ ] Coverage is ≥ 90% (`nox -s coverage`)
 - [ ] Lint and format pass (`nox -s lint format`)
 - [ ] Type check passes (`nox -s typecheck`)
 - [ ] `llms-full.txt` is up to date (`nox -s llms_check`)

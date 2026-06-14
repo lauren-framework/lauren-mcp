@@ -141,7 +141,7 @@ JSON-RPC 2.0 over four transports:
 
 ## Links
 
-- Documentation: https://mcp.lauren-py.dev
+- Documentation: https://lauren-framework.github.io/lauren-mcp/
 - Source: https://github.com/lauren-framework/lauren-mcp
 - PyPI: https://pypi.org/project/lauren-mcp/
 - llms-full.txt: https://raw.githubusercontent.com/lauren-framework/lauren-mcp/refs/heads/main/llms-full.txt

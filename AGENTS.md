@@ -51,6 +51,26 @@
 | `skills/` | Agent skill packs |
 | `tests/docs/` | E2E tests for every doc code example |
 | `tests/integration/test_mcp_lauren_*.py` | Lauren DI + WsTestClient + TestClient integration |
+| `tests/unit/test_cli_commands_coverage.py` | Unit tests for CLI command logic (`run`, `dev`, `inspect`, `call`, `install`) |
+| `tests/unit/test_client_transports_coverage.py` | Unit tests for client transport classes (stdio, WS, SSE, Streamable) |
+| `tests/unit/test_decorators_coverage.py` | Decorator coverage tests (part 1) |
+| `tests/unit/test_decorators_coverage2.py` | Decorator coverage tests (part 2) |
+| `tests/unit/test_handlers_coverage.py` | Handler factory coverage tests (part 1) |
+| `tests/unit/test_handlers_coverage2.py` | Handler factory coverage tests (part 2) |
+| `tests/unit/test_handlers_coverage3.py` | Handler factory coverage tests (part 3) |
+| `tests/unit/test_handlers_coverage4.py` | Handler factory coverage tests (part 4) |
+| `tests/unit/test_openapi_coverage.py` | Unit tests for `build_openapi_server_class` / `RouteEntry` |
+| `tests/unit/test_schema_coverage.py` | `SchemaBuilder` coverage tests (part 1) |
+| `tests/unit/test_schema_coverage2.py` | `SchemaBuilder` coverage tests (part 2) |
+| `tests/unit/test_schema_coverage3.py` | `SchemaBuilder` coverage tests (part 3) |
+| `tests/unit/test_server_transport_coverage.py` | Unit tests for server transport internals (WS, SSE, Streamable) |
+| `tests/unit/conftest.py` | Shared pytest fixtures for the unit test suite |
+| `tests/integration/test_cli_commands_integration.py` | Integration tests for CLI commands against a real Lauren app |
+| `tests/integration/test_composition_coverage.py` | Integration tests for `make_mount_binder` / `make_proxy_binder` composition |
+| `tests/integration/test_server_sse_streamable_coverage.py` | Integration tests for SSE and Streamable HTTP transports |
+| `examples/filesystem/client.py` | Poolside API CLI client example using Rich |
+| `examples/filesystem/pyproject.toml` | Standalone `pyproject.toml` for the filesystem example |
+| `examples/filesystem/.env.example` | Example environment variable config for the filesystem example |
 
 ## By-task lookup
 
@@ -161,11 +181,11 @@
 A change is complete when ALL of the following pass:
 
 ```bash
-uv run --no-sync nox -s lint          # ruff: 0 errors
+uv run --no-sync nox -s lint          # ruff: 0 errors (src only; tests/examples excluded)
 uv run --no-sync nox -s typecheck     # mypy: 0 errors
 uv run --no-sync nox -s llms_check    # all 73+ public symbols documented
 uv run --no-sync nox -s prek          # pre-release hooks pass
-uv run --no-sync pytest tests/ -q     # all tests pass
+uv run --dev pytest tests/ -q         # all tests pass
 ```
 
 If you add a public symbol, `llms_check` will fail — add a `### SymbolName` section

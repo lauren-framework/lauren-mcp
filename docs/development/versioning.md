@@ -1,7 +1,7 @@
 # Versioning
 
 `lauren-mcp` follows **Semantic Versioning 2.0.0** (SemVer) and uses
-`setuptools-scm` to derive version strings from git tags automatically.
+`hatch-vcs` to derive version strings from git tags automatically.
 
 ---
 
@@ -20,18 +20,17 @@ Once `1.0.0` is released, the full SemVer guarantee applies.
 
 ---
 
-## setuptools-scm
+## hatch-vcs
 
 The `pyproject.toml` configuration:
 
 ```toml
-[tool.setuptools_scm]
-fallback_version = "0.0.0+unknown"
-version_scheme   = "post-release"
-local_scheme     = "dirty-tag"
+[tool.hatch.version]
+source = "vcs"
+fallback-version = "0.0.0+unknown"
 ```
 
-`setuptools-scm` reads the version from the most recent git tag:
+`hatch-vcs` reads the version from the most recent git tag:
 
 | Situation | Version string |
 |---|---|
@@ -40,8 +39,8 @@ local_scheme     = "dirty-tag"
 | 3 commits after + uncommitted changes | `0.1.0.post3+g1a2b3c4.d20250601` |
 | No tags in repository | `0.0.0+unknown` (fallback) |
 
-The version string is written to `src/lauren_mcp/_version.py` at build time and
-exposed as `lauren_mcp.__version__`.
+The version string is written to `src/lauren_mcp/_version.py` at build time
+(via `uv build`) and exposed as `lauren_mcp.__version__`.
 
 ---
 

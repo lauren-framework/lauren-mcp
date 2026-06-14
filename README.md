@@ -51,7 +51,7 @@
 
 ---
 
-**Documentation**: <a href="https://mcp.lauren-py.dev" target="_blank">https://mcp.lauren-py.dev</a>
+**Documentation**: <a href="https://lauren-framework.github.io/lauren-mcp/" target="_blank">https://lauren-framework.github.io/lauren-mcp/</a>
 
 **Source Code**: <a href="https://github.com/lauren-framework/lauren-mcp" target="_blank">https://github.com/lauren-framework/lauren-mcp</a>
 
@@ -252,14 +252,33 @@ config = McpServerConfig(
 # Tools available as: fs__read_file, fs__write_file, fs__list_directory, ...
 ```
 
+## Examples
+
+The [`examples/filesystem/`](https://github.com/lauren-framework/lauren-mcp/tree/main/examples/filesystem/) directory contains a fully-working end-to-end example:
+
+| File | Description |
+|---|---|
+| `server.py` | Lauren-based Filesystem MCP server (Streamable HTTP) |
+| `client.py` | Interactive CLI client powered by the Poolside inference backend (OpenAI-compatible), with Rich UI for pretty-printing tool calls and results |
+| `pyproject.toml` | Self-contained project with `[client]` and `[deploy]` optional extras |
+| `.env.example` | Environment variable reference (`OPENAI_API_KEY`, `OPENAI_API_BASE_URL`, `MCP_SERVER_URL`, etc.) |
+
+```bash
+# 1. Start the server
+MCP_FS_ROOT=/tmp/sandbox uv run python examples/filesystem/server.py
+
+# 2. Run the interactive client (separate terminal)
+OPENAI_API_KEY=<key> uv run --extra client python examples/filesystem/client.py
+```
+
 ## Documentation
 
-- [Getting Started](https://mcp.lauren-py.dev/getting-started/)
-- [MCP Server guide](https://mcp.lauren-py.dev/guides/mcp-server/)
-- [MCP Client guide](https://mcp.lauren-py.dev/guides/mcp-client/)
-- [Agent Tools guide](https://mcp.lauren-py.dev/guides/mcp-agent-tools/)
-- [Testing guide](https://mcp.lauren-py.dev/guides/testing/)
-- [API Reference](https://mcp.lauren-py.dev/reference/)
+- [Getting Started](https://lauren-framework.github.io/lauren-mcp/getting-started/)
+- [MCP Server guide](https://lauren-framework.github.io/lauren-mcp/guides/mcp-server/)
+- [MCP Client guide](https://lauren-framework.github.io/lauren-mcp/guides/mcp-client/)
+- [Agent Tools guide](https://lauren-framework.github.io/lauren-mcp/guides/mcp-agent-tools/)
+- [Testing guide](https://lauren-framework.github.io/lauren-mcp/guides/testing/)
+- [API Reference](https://lauren-framework.github.io/lauren-mcp/reference/)
 
 ## API summary
 

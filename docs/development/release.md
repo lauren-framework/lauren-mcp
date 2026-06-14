@@ -1,6 +1,6 @@
 # Release Process
 
-`lauren-mcp` uses `setuptools-scm` for version management. Tags on `main` drive the
+`lauren-mcp` uses `hatch-vcs` for version management. Tags on `main` drive the
 full release pipeline via GitHub Actions.
 
 ---

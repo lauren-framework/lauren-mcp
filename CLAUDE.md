@@ -28,18 +28,28 @@ uv run --no-sync nox -s typecheck
 uv run --no-sync nox -s prek            # pre-release checks (uses --all-files)
 
 # Run tests directly (faster, no nox overhead)
-uv run --no-sync pytest tests/unit -q
-uv run --no-sync pytest tests/integration -q
-uv run --no-sync pytest tests/end_to_end -q
-uv run --no-sync pytest tests/docs -q
-uv run --no-sync pytest tests/integration/test_mcp_lauren_ws_integration.py -v
+uv run --dev pytest tests/unit -q
+uv run --dev pytest tests/integration -q
+uv run --dev pytest tests/end_to_end -q
+uv run --dev pytest tests/docs -q
+uv run --dev pytest tests/integration/test_mcp_lauren_ws_integration.py -v
 
 # Type-check source
-uv run --no-sync mypy src/lauren_mcp
+uv run --dev mypy src/lauren_mcp
 
 # Check llms-full.txt coverage
 uv run --no-sync nox -s llms_check
+
+# Build wheel + sdist (replaces pyproject-build)
+uv run --no-sync nox -s build
+# or directly:
+uv build --wheel --sdist --out-dir dist
 ```
+
+Note: nox session internals now use `uv run --dev` (e.g. `uv run --dev pytest`)
+instead of invoking pytest directly.  `_install_dev` calls `uv sync --dev`
+(changed from `uv sync --extra dev`); `_install_all` calls
+`uv sync --extra all --dev`.
 
 ## Repository layout
 
@@ -256,13 +266,21 @@ from `lauren_mcp` directly: `from lauren_mcp import McpCallError`.
 
 - Type annotations: strict mypy (`strict = true`), all source files annotated.
 - `from __future__ import annotations` on every source file.
-- `ruff` for linting + formatting (`line-length = 100`).
+- `ruff` for linting + formatting (`line-length = 100`).  `tests`, `examples`,
+  `docs`, and `scripts` are excluded from ruff's `check --fix` pass (configured
+  via `[tool.ruff] exclude` in `pyproject.toml`).
 - `asyncio_mode = "auto"` in pytest — every `async def test_*` is awaited.
 - Subprocess server scripts in e2e tests use single-quoted docstrings to avoid
   terminating the outer `'''...'''` string literal.
 - `max_retries=0` on all `McpServer.stdio` calls in tests to prevent 30 s hangs on
   subprocess errors.
 - CLI tests that import `typer` should guard with `pytest.importorskip("typer")`.
+- Build system: `hatchling` + `hatch-vcs` (migrated from `setuptools` +
+  `setuptools-scm`).  Version comes from git tags via `[tool.hatch.version]`.
+  Build with `uv build` (not `pyproject-build`).
+- Development Status classifier: `4 - Beta`.
+- Coverage threshold: `fail_under = 88` (base deps); running with `[all]` extras
+  reaches 94%+.
 
 ## Common pitfalls
 
@@ -281,3 +299,5 @@ from `lauren_mcp` directly: `from lauren_mcp import McpCallError`.
 | `@use_guards` silently ignored / guard never runs | Decorator ordering wrong | `@mcp_tool()` must be the **outermost** decorator; `@use_guards` goes inside |
 | `McpForbiddenError` not raised even though guard returns `False` | Guard class not discovered by DI | Ensure guard is `@injectable()` and listed in `@use_guards`; registrar auto-adds it as provider at startup |
 | `@use_middlewares` on `@mcp_tool` method | Middlewares not meaningful at per-tool level | Remove it; `TypeError` is raised at decoration time by design |
+| `pyproject-build` not found | Build system migrated from setuptools to hatchling | Use `uv build --wheel --sdist --out-dir dist` or `uv run --no-sync nox -s build` |
+| `uv sync --extra dev` fails | Dev dependencies moved to `[dependency-groups] dev` | Use `uv sync --dev` instead of `--extra dev` |
