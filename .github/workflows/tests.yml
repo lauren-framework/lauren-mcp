@@ -145,11 +145,11 @@ jobs:
 
       - name: Install core deps (bare)
         if: matrix.extra == ''
-        run: uv sync --extra dev --active
+        run: uv sync --dev --active
 
       - name: Install with extra ${{ matrix.extra }}
         if: matrix.extra != ''
-        run: uv sync --extra ${{ matrix.extra }} --extra dev --active
+        run: uv sync --extra ${{ matrix.extra }} --dev --active
 
       - name: Run unit tests
         run: uv run pytest tests/unit -q
