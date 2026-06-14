@@ -37,7 +37,7 @@ jobs:
         run: uv tool install nox
 
       - name: Run prek
-        run: nox -s prek
+        run: uv run --dev nox -s prek
 
   # --------------------------------------------------------------------------
   # mypy — static type checking
@@ -65,7 +65,7 @@ jobs:
         run: uv tool install nox
 
       - name: Run mypy
-        run: nox -s typecheck
+        run: uv run --dev nox -s typecheck
 
   # --------------------------------------------------------------------------
   # llms-txt-sync — verify llms-full.txt covers all public symbols
