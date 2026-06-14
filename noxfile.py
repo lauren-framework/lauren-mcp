@@ -28,7 +28,7 @@ def _install_dev(session: nox.Session) -> None:
 
 
 def _install_all(session: nox.Session) -> None:
-    session.run("uv", "sync", "--extra", "all", "--extra", "dev", external=True)
+    session.run("uv", "sync", "--extra", "all", "--dev", external=True)
 
 
 # ---------------------------------------------------------------------------
@@ -205,14 +205,16 @@ def prek(session: nox.Session) -> None:
 def docs(session: nox.Session) -> None:
     """Build the MkDocs documentation (strict mode)."""
     _install_dev(session)
-    session.run("mkdocs", "build", "--strict", *session.posargs, external=True)
+    session.run(
+        "uv", "run", "--dev", "mkdocs", "build", "--strict", *session.posargs, external=True
+    )
 
 
 @nox.session(python=PRIMARY_PYTHON, name="docs_serve")
 def docs_serve(session: nox.Session) -> None:
     """Serve the MkDocs documentation locally."""
     _install_dev(session)
-    session.run("mkdocs", "serve", *session.posargs, external=True)
+    session.run("uv", "run", "--dev", "mkdocs", "serve", *session.posargs, external=True)
 
 
 # ---------------------------------------------------------------------------
