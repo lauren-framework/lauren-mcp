@@ -24,7 +24,7 @@ def _install_dev(session: nox.Session) -> None:
     # tools (ruff, prek, twine, mypy, …) are available in .venv/bin/.
     # Sessions use external=True to find tools there via PATH, and pytest
     # sessions use pythonpath=["src"] in pyproject.toml to import lauren_mcp.
-    session.run("uv", "sync", "--extra", "dev", external=True)
+    session.run("uv", "sync", "--dev", external=True)
 
 
 def _install_all(session: nox.Session) -> None:
@@ -40,21 +40,30 @@ def _install_all(session: nox.Session) -> None:
 def tests(session: nox.Session) -> None:
     """Run full test suite (parametrised across supported Python versions)."""
     _install_dev(session)
-    session.run("pytest", "-W", "ignore", *session.posargs)
+    session.run("uv", "run", "--dev", "pytest", "-W", "ignore", *session.posargs, external=True)
 
 
 @nox.session(python=PRIMARY_PYTHON, name="tests_unit")
 def tests_unit(session: nox.Session) -> None:
     """Run only unit tests on the primary Python version."""
     _install_dev(session)
-    session.run("pytest", "tests/unit", *session.posargs)
+    session.run("uv", "run", "--dev", "pytest", "tests/unit", *session.posargs, external=True)
 
 
 @nox.session(python=PRIMARY_PYTHON, name="tests_integration")
 def tests_integration(session: nox.Session) -> None:
     """Run integration tests (installs 'all' extra)."""
     _install_all(session)
-    session.run("pytest", "tests/integration", *session.posargs)
+    session.run(
+        "uv",
+        "run",
+        "--extra",
+        "all",
+        "pytest",
+        "tests/integration",
+        *session.posargs,
+        external=True,
+    )
 
 
 @nox.session(python=PRIMARY_PYTHON, name="tests_extras")
@@ -218,10 +227,10 @@ def build(session: nox.Session) -> None:
     if dist.exists():
         shutil.rmtree(dist)
     _install_dev(session)
-    # pyproject-build is the CLI entry-point for the build package, installed
-    # in .venv/bin/ — use it directly rather than python -m build so the
-    # package doesn't need to be installed in the (root-owned) session venv.
-    session.run("pyproject-build", "--wheel", "--sdist", *session.posargs, external=True)
+    out_dir = str(dist)
+    session.run(
+        "uv", "build", "--wheel", "--sdist", "--out-dir", out_dir, *session.posargs, external=True
+    )
 
 
 @nox.session(python=PRIMARY_PYTHON, name="build_check")

@@ -214,7 +214,7 @@ def _extract_lauren_hint(
     try:
         from lauren.extractors import _ParamSpec as _LParamSpec  # noqa: PLC0415
     except ImportError:
-        _LParamSpec = None  # type: ignore[assignment]
+        _LParamSpec = None  # type: ignore[assignment,no-redef]
 
     for extra in args[1:]:
         if isinstance(extra, FieldDescriptor):
