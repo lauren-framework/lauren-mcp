@@ -120,6 +120,11 @@ def coverage(session: nox.Session) -> None:
     """Run full suite with coverage and produce a report."""
     _install_all(session)
     session.run(
+        "uv",
+        "run",
+        "--dev",
+        "python",
+        "-m",
         "pytest",
         "--cov=src/lauren_mcp",
         "--cov-report=term-missing",
