@@ -161,7 +161,17 @@ def format_(session: nox.Session) -> None:
     """Run ruff formatter and auto-fix lint issues."""
     _install_dev(session)
     session.run(
-        "ruff", "format", "src", "tests", "noxfile.py", "scripts", *session.posargs, external=True
+        "uv",
+        "run",
+        "--dev",
+        "ruff",
+        "format",
+        "src",
+        "tests",
+        "noxfile.py",
+        "scripts",
+        *session.posargs,
+        external=True,
     )
 
 
@@ -169,7 +179,7 @@ def format_(session: nox.Session) -> None:
 def typecheck(session: nox.Session) -> None:
     """Run mypy type-checker."""
     _install_dev(session)
-    session.run("mypy", "src/lauren_mcp", *session.posargs, external=True)
+    session.run("uv", "run", "--dev", "mypy", "src/lauren_mcp", *session.posargs, external=True)
 
 
 # ---------------------------------------------------------------------------
@@ -184,6 +194,9 @@ def llms_check(session: nox.Session) -> None:
     # Add src/ to PYTHONPATH so lauren_mcp is importable directly from source
     # without requiring an editable install in the session venv.
     session.run(
+        "uv",
+        "run",
+        "--dev",
         "python",
         "scripts/check_llms_full.py",
         *session.posargs,
@@ -198,7 +211,7 @@ def prek(session: nox.Session) -> None:
     # --all-files avoids the git stash step (which requires writing git objects
     # that may be owned by root in this environment).
     args = session.posargs or ("--all-files",)
-    session.run("prek", "run", *args, external=True)
+    session.run("uv", "run", "--dev", "prek", "run", *args, external=True)
 
 
 # ---------------------------------------------------------------------------
