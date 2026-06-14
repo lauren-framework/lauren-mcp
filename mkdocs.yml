@@ -110,6 +110,8 @@ nav:
     - development/index.md
     - Release Process: development/release.md
     - Versioning: development/versioning.md
+  - Examples:
+    - Filesystem Example: examples/filesystem/README.md
 
 extra:
   social:

@@ -219,10 +219,24 @@ def prek(session: nox.Session) -> None:
 # ---------------------------------------------------------------------------
 
 
+def _docs_prev(session: nox.Session) -> None:
+    """Build the MkDocs documentation (non-strict mode)."""
+    _install_dev(session)
+    import shutil
+
+    readme_str = "README.md"
+    src = pathlib.Path("examples") / "filesystem" / readme_str
+    dest_dir = pathlib.Path("docs") / "examples" / "filesystem"
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    shutil.copy(src, dest_dir / readme_str)
+    session.log(f"Copied {src} to {dest_dir / readme_str}")
+
+
 @nox.session(python=PRIMARY_PYTHON, name="docs")
 def docs(session: nox.Session) -> None:
     """Build the MkDocs documentation (strict mode)."""
     _install_dev(session)
+    _docs_prev(session)
     session.run(
         "uv", "run", "--dev", "mkdocs", "build", "--strict", *session.posargs, external=True
     )
@@ -232,6 +246,7 @@ def docs(session: nox.Session) -> None:
 def docs_serve(session: nox.Session) -> None:
     """Serve the MkDocs documentation locally."""
     _install_dev(session)
+    _docs_prev(session)
     session.run("uv", "run", "--dev", "mkdocs", "serve", *session.posargs, external=True)
 
 

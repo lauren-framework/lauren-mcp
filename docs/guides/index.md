@@ -22,7 +22,7 @@ Practical, task-oriented guides for every major feature of `lauren-mcp`.
 
 | Guide | Description |
 |---|---|
-| [Filesystem Example](../../examples/filesystem/README.md) | Production-quality MCP server exposing a sandboxed filesystem, plus an interactive Poolside CLI client built with Rich |
+| [Filesystem Example](../examples/filesystem/README.md) | Production-quality MCP server exposing a sandboxed filesystem, plus an interactive Poolside CLI client built with Rich |
 
 ## Testing
 
