@@ -20,7 +20,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          fetch-depth: 0  # setuptools-scm needs full history
+          fetch-depth: 0  # hatch-vcs needs full history to compute the version
 
       - name: Set up Python 3.12
         uses: actions/setup-python@v5
@@ -32,19 +32,20 @@ jobs:
         with:
           enable-cache: false
 
-      - name: Install nox + build backend
-        run: |
-          uv tool install nox
-          uv pip install build
+      - name: Install nox
+        run: uv tool install nox
+
+      - name: Create virtual environment
+        run: uv sync --dev
 
       - name: Check llms-full.txt
-        run: uv run --dev nox -s llms_check
+        run: nox -s llms_check
 
       - name: Build wheel and sdist
-        run: uv run --dev nox -s build
+        run: nox -s build
 
       - name: Check distributions
-        run: uv run --dev nox -s build_check
+        run: nox -s build_check
 
       - name: Upload build artifacts
         uses: actions/upload-artifact@v4
