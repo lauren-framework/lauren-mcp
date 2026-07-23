@@ -23,7 +23,7 @@ Quick start
     await client.call_tool("write_file", {"path": "hello.txt", "content": "hi"})
 
     # Or use the lmcp CLI
-    lmcp inspect --url https://<your-app>.modal.run/mcp/
+    lmcp inspect https://<your-app>.modal.run/mcp/ --transport streamable
 
     # Tool discovery — open in a browser or fetch with curl
     curl https://<your-app>.modal.run/tools.json

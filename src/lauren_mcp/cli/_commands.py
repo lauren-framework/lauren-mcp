@@ -9,7 +9,8 @@ from __future__ import annotations
 import asyncio
 import json
 import sys
-from typing import Annotated
+from pathlib import Path
+from typing import Annotated, Any
 
 import typer
 
@@ -27,13 +28,17 @@ def run(
     port: Annotated[int, typer.Option(help="Bind port")] = 8000,
     env_file: Annotated[str | None, typer.Option(help=".env file path")] = None,
     reload: Annotated[bool, typer.Option(help="Hot-reload (not yet implemented)")] = False,
+    stdio: Annotated[bool, typer.Option(help="Serve MCP over stdin/stdout")] = False,
 ) -> None:
     """Start an MCP server from a Python source file."""
     _load_env(env_file)
     if reload:
         typer.echo("Warning: --reload is not yet implemented; running without reload.")
     server_cls = resolve_server_class(file_spec)
-    _start_server(server_cls, transport=transport, host=host, port=port)
+    if stdio:
+        _start_stdio_server(server_cls, transport=transport)
+    else:
+        _start_server(server_cls, transport=transport, host=host, port=port)
 
 
 # ---------------------------------------------------------------------------
@@ -77,34 +82,33 @@ def inspect_cmd(
 async def _inspect_async(file_spec_or_url: str, transport: str) -> None:
     from lauren_mcp._client._factory import McpServer  # noqa: PLC0415
 
-    if file_spec_or_url.startswith(("ws://", "wss://")):
-        client = McpServer.ws(file_spec_or_url)
-    elif file_spec_or_url.startswith(("http://", "https://")):
-        client = McpServer.http(file_spec_or_url)
+    if file_spec_or_url.startswith(("ws://", "wss://", "http://", "https://")):
+        client = _make_remote_client(McpServer, file_spec_or_url, transport)
     else:
         # Local file spec: run server in subprocess and connect via stdio.
         server_cls = resolve_server_class(file_spec_or_url)
         script = _make_stdio_script(server_cls, transport)
-        client = McpServer.stdio(["python", "-c", script], max_retries=0)
-    await client.connect()
+        client = McpServer.stdio([sys.executable, "-c", script], max_retries=0)
+    try:
+        await client.connect()
 
-    tools = await client.list_tools()
-    resources = await client.list_resources()
-    prompts = await client.list_prompts()
+        tools = await client.list_tools()
+        resources = await client.list_resources()
+        prompts = await client.list_prompts()
 
-    typer.echo(f"\nTools ({len(tools)}):")
-    for t in tools:
-        typer.echo(f"  {t.name}: {t.description}")
+        typer.echo(f"\nTools ({len(tools)}):")
+        for t in tools:
+            typer.echo(f"  {t.name}: {t.description}")
 
-    typer.echo(f"\nResources ({len(resources)}):")
-    for r in resources:
-        typer.echo(f"  {r.uri}: {r.name}")
+        typer.echo(f"\nResources ({len(resources)}):")
+        for r in resources:
+            typer.echo(f"  {r.uri}: {r.name}")
 
-    typer.echo(f"\nPrompts ({len(prompts)}):")
-    for p in prompts:
-        typer.echo(f"  {p.name}: {p.description}")
-
-    await client.close()
+        typer.echo(f"\nPrompts ({len(prompts)}):")
+        for p in prompts:
+            typer.echo(f"  {p.name}: {p.description}")
+    finally:
+        await client.close()
 
 
 # ---------------------------------------------------------------------------
@@ -148,19 +152,29 @@ async def _call_async(
 ) -> None:
     from lauren_mcp._client._factory import McpServer  # noqa: PLC0415
 
-    if file_spec_or_url.startswith(("ws://", "wss://")):
-        client = McpServer.ws(file_spec_or_url)
-    elif file_spec_or_url.startswith(("http://", "https://")):
-        client = McpServer.http(file_spec_or_url)
+    if file_spec_or_url.startswith(("ws://", "wss://", "http://", "https://")):
+        client = _make_remote_client(McpServer, file_spec_or_url, transport)
     else:
         server_cls = resolve_server_class(file_spec_or_url)
         script = _make_stdio_script(server_cls, transport)
-        client = McpServer.stdio(["python", "-c", script], max_retries=0)
-    await client.connect()
+        client = McpServer.stdio([sys.executable, "-c", script], max_retries=0)
+    try:
+        await client.connect()
 
-    result = await client.call_tool(tool_name, arguments)
-    typer.echo(json.dumps(result, indent=2, default=str))
-    await client.close()
+        result = await client.call_tool(tool_name, arguments)
+        typer.echo(json.dumps(result, indent=2, default=str))
+    finally:
+        await client.close()
+
+
+def _make_remote_client(factory: Any, url: str, transport: str) -> Any:
+    """Create the client matching a remote URL and requested transport."""
+
+    if url.startswith(("ws://", "wss://")):
+        return factory.ws(url)
+    if transport == "sse":
+        return factory.http(url)
+    return factory.streamable_http(url)
 
 
 # ---------------------------------------------------------------------------
@@ -177,7 +191,7 @@ def install(
     server_cls = resolve_server_class(file_spec)
     server_name = name or server_cls.__name__
     config_path = _get_config_path(client)
-    _write_mcp_config(config_path, server_name, file_spec)
+    _write_mcp_config(config_path, server_name, _absolute_file_spec(file_spec))
     typer.echo(f"Registered {server_name!r} in {config_path}")
 
 
@@ -227,13 +241,35 @@ def _start_server(
     uvicorn.run(app, host=host, port=port, log_level=log_level)
 
 
+def _start_stdio_server(server_cls: type, *, transport: str) -> None:  # type: ignore[type-arg]
+    """Build a Lauren app and serve it over MCP's stdio protocol."""
+
+    from lauren import LaurenFactory, module  # noqa: PLC0415
+
+    from lauren_mcp._server._stdio import run_stdio_server  # noqa: PLC0415
+    from lauren_mcp.server._module import McpServerModule  # noqa: PLC0415
+
+    @module(imports=[McpServerModule.for_root(server_cls, transport=transport)])
+    class _AppModule:
+        pass
+
+    app = LaurenFactory.create(_AppModule)
+    asyncio.run(run_stdio_server(app))
+
+
 def _make_stdio_script(server_cls: type, transport: str) -> str:  # type: ignore[type-arg]
     """Build a ``python -c`` script string that runs *server_cls* over stdio."""
     module_name = server_cls.__module__
     class_name = server_cls.__name__
+    module = sys.modules.get(module_name)
+    module_file = getattr(module, "__file__", None)
+    module_path = Path(module_file).resolve().parent if module_file else None
+    path_setup = f"sys.path.insert(0, {str(module_path)!r})\n" if module_path is not None else ""
     return (
-        f"import sys; sys.path.insert(0, '.')\n"
-        f"import {module_name} as _m\n"
+        "import sys\n"
+        f"{path_setup}"
+        "import importlib\n"
+        f"_m = importlib.import_module({module_name!r})\n"
         f"from lauren import LaurenFactory, module\n"
         f"from lauren_mcp.server._module import McpServerModule\n"
         f"@module(imports=[McpServerModule.for_root(_m.{class_name}, transport='{transport}')])\n"
@@ -291,6 +327,15 @@ def _write_mcp_config(config_path: str, server_name: str, file_spec: str) -> Non
     assert isinstance(servers, dict)
     servers[server_name] = {
         "command": sys.executable,
-        "args": ["-m", "lauren_mcp.cli", "run", file_spec],
+        "args": ["-m", "lauren_mcp.cli", "run", file_spec, "--stdio"],
     }
     path.write_text(_json.dumps(existing, indent=2))
+
+
+def _absolute_file_spec(file_spec: str) -> str:
+    """Make a file spec independent of the MCP host client's working directory."""
+
+    if ":" in file_spec:
+        file_part, class_name = file_spec.rsplit(":", 1)
+        return f"{Path(file_part).resolve()}:{class_name}"
+    return str(Path(file_spec).resolve())

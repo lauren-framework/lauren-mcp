@@ -3,7 +3,11 @@
 from __future__ import annotations
 
 import json
+import os
+import socket
+import subprocess
 import sys
+import time
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -16,6 +20,8 @@ from typer.testing import CliRunner  # noqa: E402
 from lauren_mcp.cli import app  # noqa: E402
 
 runner = CliRunner()
+REPO_ROOT = Path(__file__).resolve().parents[2]
+FILESYSTEM_SERVER = REPO_ROOT / "examples" / "filesystem" / "server.py"
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -99,6 +105,19 @@ class TestRunCli:
         call_kwargs = mock_start.call_args.kwargs
         assert call_kwargs["host"] == "0.0.0.0"
         assert call_kwargs["port"] == 9000
+
+    def test_run_with_stdio_flag(self, tmp_path: Path) -> None:
+        p = _write_server_file(tmp_path)
+        with (
+            patch("lauren_mcp.cli._commands._load_env"),
+            patch("lauren_mcp.cli._commands.resolve_server_class") as mock_resolve,
+            patch("lauren_mcp.cli._commands._start_stdio_server") as mock_start,
+        ):
+            mock_resolve.return_value = type("FakeServer", (), {})
+            result = runner.invoke(app, ["run", str(p), "--stdio"])
+
+        assert result.exit_code == 0
+        mock_start.assert_called_once_with(mock_resolve.return_value, transport="ws")
 
 
 # ---------------------------------------------------------------------------
@@ -247,7 +266,7 @@ class TestInstallCli:
         with (
             patch("lauren_mcp.cli._commands.resolve_server_class") as mock_resolve,
             patch("lauren_mcp.cli._commands._get_config_path") as mock_cfg_path,
-            patch("lauren_mcp.cli._commands._write_mcp_config") as mock_write,
+            patch("lauren_mcp.cli._commands._write_mcp_config"),
         ):
             fake_cls = type("MyServer", (), {"__name__": "MyServer"})
             mock_resolve.return_value = fake_cls
@@ -271,7 +290,7 @@ class TestInstallCli:
             result = runner.invoke(app, ["install", "server.py", "--name", "custom"])
 
         assert result.exit_code == 0
-        mock_write.assert_called_once_with(str(cfg), "custom", "server.py")
+        mock_write.assert_called_once_with(str(cfg), "custom", str(Path("server.py").resolve()))
 
     def test_install_cursor_client(self, tmp_path: Path) -> None:
         cfg = tmp_path / "mcp.json"
@@ -302,3 +321,191 @@ class TestInstallCli:
         data = json.loads(cfg.read_text())
         assert "TestSrv" in data["mcpServers"]
         assert data["mcpServers"]["TestSrv"]["command"] == sys.executable
+
+
+# ---------------------------------------------------------------------------
+# Real CLI smoke tests against examples/filesystem/server.py
+# ---------------------------------------------------------------------------
+
+
+def _run_lmcp(*args: str, env: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:
+    """Run the installed CLI entry point with the test interpreter."""
+
+    command_env = os.environ.copy()
+    if env:
+        command_env.update(env)
+    result = subprocess.run(
+        [sys.executable, "-m", "lauren_mcp.cli", *args],
+        cwd=REPO_ROOT,
+        env=command_env,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    assert result.returncode == 0, f"lmcp failed:\nstdout={result.stdout}\nstderr={result.stderr}"
+    return result
+
+
+def _free_port() -> int:
+    with socket.socket() as sock:
+        sock.bind(("127.0.0.1", 0))
+        return int(sock.getsockname()[1])
+
+
+def _wait_for_port(port: int) -> None:
+    deadline = time.monotonic() + 15
+    while time.monotonic() < deadline:
+        try:
+            with socket.create_connection(("127.0.0.1", port), timeout=0.2):
+                return
+        except OSError:
+            time.sleep(0.05)
+    raise AssertionError(f"CLI server did not listen on port {port}")
+
+
+def _start_lmcp_server(command: str, port: int, sandbox: Path) -> subprocess.Popen[str]:
+    process_env = os.environ.copy()
+    process_env["MCP_FS_ROOT"] = str(sandbox)
+    process = subprocess.Popen(
+        [
+            sys.executable,
+            "-m",
+            "lauren_mcp.cli",
+            command,
+            str(FILESYSTEM_SERVER),
+            "--transport",
+            "streamable",
+            "--host",
+            "127.0.0.1",
+            "--port",
+            str(port),
+        ],
+        cwd=REPO_ROOT,
+        env=process_env,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    try:
+        _wait_for_port(port)
+    except Exception:
+        stdout, stderr = process.communicate(timeout=5)
+        raise AssertionError(f"{command} failed:\nstdout={stdout}\nstderr={stderr}") from None
+    return process
+
+
+def _stop_lmcp_server(process: subprocess.Popen[str]) -> None:
+    process.terminate()
+    try:
+        process.wait(timeout=10)
+    except subprocess.TimeoutExpired:
+        process.kill()
+        process.wait(timeout=5)
+
+
+class TestFilesystemExampleCli:
+    def test_local_inspect_and_call(self, tmp_path: Path) -> None:
+        sandbox = tmp_path / "sandbox"
+        env = {"MCP_FS_ROOT": str(sandbox)}
+
+        inspect_result = _run_lmcp("inspect", str(FILESYSTEM_SERVER), env=env)
+        assert "list_files" in inspect_result.stdout
+        assert "file://{path}" in inspect_result.stdout
+        assert "edit_file_prompt" in inspect_result.stdout
+
+        write_result = _run_lmcp(
+            "call",
+            str(FILESYSTEM_SERVER),
+            "write_file",
+            "--arg",
+            "path=cli.txt",
+            "--arg",
+            "content=created by lmcp",
+            env=env,
+        )
+        assert '"isError": false' in write_result.stdout
+
+        read_result = _run_lmcp(
+            "call",
+            str(FILESYSTEM_SERVER),
+            "read_file",
+            "--arg",
+            "path=cli.txt",
+            env=env,
+        )
+        assert "created by lmcp" in read_result.stdout
+
+    @pytest.mark.parametrize("command", ["run", "dev"])
+    def test_server_commands_against_filesystem_example(self, tmp_path: Path, command: str) -> None:
+        pytest.importorskip("httpx")
+        pytest.importorskip("httpx_sse")
+        port = _free_port()
+        process = _start_lmcp_server(command, port, tmp_path / "sandbox")
+        try:
+            url = f"http://127.0.0.1:{port}/filesystem"
+            inspect_result = _run_lmcp(
+                "inspect", url, "--transport", "streamable", env={"MCP_FS_ROOT": str(tmp_path)}
+            )
+            assert "Tools (12)" in inspect_result.stdout
+        finally:
+            _stop_lmcp_server(process)
+
+    def test_install_creates_runnable_config(self, tmp_path: Path) -> None:
+        config_home = tmp_path / "home"
+        install_env = os.environ.copy()
+        install_env["HOME"] = str(config_home)
+        _run_lmcp(
+            "install",
+            str(FILESYSTEM_SERVER),
+            "--client",
+            "cursor",
+            "--name",
+            "filesystem",
+            env=install_env,
+        )
+
+        config_path = config_home / ".config" / "Cursor" / "mcp.json"
+        data = json.loads(config_path.read_text())
+        entry = data["mcpServers"]["filesystem"]
+        assert entry["command"] == sys.executable
+        assert entry["args"][:3] == ["-m", "lauren_mcp.cli", "run"]
+        assert entry["args"][3:] == [str(FILESYSTEM_SERVER), "--stdio"]
+
+        process = subprocess.Popen(
+            [entry["command"], *entry["args"]],
+            cwd=REPO_ROOT,
+            env={**install_env, "MCP_FS_ROOT": str(tmp_path / "sandbox")},
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        try:
+            output, error = process.communicate(
+                input=(
+                    json.dumps(
+                        {
+                            "jsonrpc": "2.0",
+                            "id": 1,
+                            "method": "initialize",
+                            "params": {
+                                "protocolVersion": "2025-03-26",
+                                "capabilities": {},
+                                "clientInfo": {"name": "test", "version": "1"},
+                            },
+                        }
+                    )
+                    + "\n"
+                    + '{"jsonrpc":"2.0","method":"notifications/initialized"}\n'
+                    + '{"jsonrpc":"2.0","id":2,"method":"tools/list"}\n'
+                ),
+                timeout=30,
+            )
+        finally:
+            if process.poll() is None:
+                process.kill()
+                process.wait(timeout=5)
+        assert process.returncode == 0, error
+        responses = [json.loads(line) for line in output.splitlines() if line]
+        assert responses[0]["id"] == 1
+        assert len(responses[1]["result"]["tools"]) == 12

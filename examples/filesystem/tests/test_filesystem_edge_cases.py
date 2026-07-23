@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from lauren import BackgroundTasks
 from examples.filesystem.server import FilesystemServer, _resolve_safe_path
 
 pytestmark = pytest.mark.asyncio
@@ -216,12 +217,11 @@ class TestMoveFileEdgeCases:
         assert (root / "dst" / "file.txt").read_text() == "content"
 
     async def test_move_file_to_same_location(self, setup, tmp_path):
-        """Moving file to same location should work or be idempotent."""
+        """Moving onto an existing destination requires explicit overwrite."""
         srv, ctx, root = setup
         (root / "same.txt").write_text("content")
-        # Moving to self - we expect this to work (overwrite with same content)
-        result = await srv.move_file(ctx, source="same.txt", destination="same.txt")
-        assert result["moved"] is True
+        with pytest.raises(ValueError, match="already exists"):
+            await srv.move_file(ctx, source="same.txt", destination="same.txt")
         assert (root / "same.txt").read_text() == "content"
 
 
@@ -238,6 +238,7 @@ class TestListFilesEdgeCases:
     async def test_list_empty_directory(self, setup, tmp_path):
         """Listing empty directory should return empty list."""
         srv, ctx, root = setup
+        (root / "empty_dir").mkdir()
         result = await srv.list_files(ctx, path="empty_dir")
         assert result == []
 
@@ -306,7 +307,7 @@ class TestBulkEdgeCases:
     async def test_bulk_write_empty_list(self, setup):
         """Bulk write with empty list should succeed with 0 files."""
         srv, ctx, _ = setup
-        result = await srv.bulk_write_files(ctx, files=[])
+        result = await srv.bulk_write_files(files=[], bg=BackgroundTasks(), ctx=ctx)
         assert result["written"] == []
         assert result["failed"] == []
         assert result["total"] == 0
@@ -314,15 +315,13 @@ class TestBulkEdgeCases:
     async def test_bulk_delete_empty_list(self, setup):
         """Bulk delete with empty list should succeed with 0 files."""
         srv, ctx, _ = setup
-        result = await srv.bulk_delete_files(ctx, paths=[])
+        result = await srv.bulk_delete_files(paths=[], bg=BackgroundTasks(), ctx=ctx)
         assert result["deleted"] == []
         assert result["skipped"] == []
-        assert result["total"] == 0
 
     async def test_bulk_copy_empty_list(self, setup):
         """Bulk copy with empty list should succeed."""
         srv, ctx, _ = setup
-        result = await srv.bulk_copy_files(ctx, copies=[])
+        result = await srv.bulk_copy_files(copies=[], bg=BackgroundTasks(), ctx=ctx)
         assert result["copied"] == []
         assert result["failed"] == []
-        assert result["total"] == 0

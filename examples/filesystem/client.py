@@ -7,7 +7,7 @@ results are pretty-printed with Rich.
 
 Usage:
     # 1. Start the server in one terminal
-    MCP_FS_ROOT=/tmp/sandbox python examples/filesystem/server.py
+    MCP_FS_ROOT=/tmp/sandbox lmcp run examples/filesystem/server.py --transport streamable
 
     # 2. Run the client in another terminal
     POOLSIDE_API_KEY=<key> python examples/filesystem/client.py
@@ -424,7 +424,7 @@ async def main() -> None:
                 f"[bold red]Could not connect to MCP server.[/]\n\n"
                 f"[dim]{exc}[/dim]\n\n"
                 f"Make sure the server is running:\n"
-                "  [cyan]MCP_FS_ROOT=/tmp/sandbox python examples/filesystem/server.py[/]",
+                "  [cyan]MCP_FS_ROOT=/tmp/sandbox lmcp run examples/filesystem/server.py --transport streamable[/]",
                 title="[bold red]Connection error[/]",
                 border_style="red",
             )

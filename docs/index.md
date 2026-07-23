@@ -105,6 +105,13 @@ await client.close()
   server notifications; each returns an unsubscribe callable
 - `client.notify_roots_changed()` — push updated roots to the server
 
+### CLI
+
+Install `pip install "lauren-mcp[cli]"` to get the `lmcp` command. It can run a
+server (`run` or `dev`), inspect or call a local file or remote MCP endpoint,
+and create Claude Desktop or Cursor configuration (`install`). See the
+[CLI reference](reference/cli.md).
+
 ### Server composition
 
 `McpServerModule.for_root(Cls, mounts=[(OtherCls, "prefix_")], proxies=[(client, "prefix_")])`

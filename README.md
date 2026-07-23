@@ -90,9 +90,9 @@ consuming remote MCP tools, schema generation, transport configuration, and more
 | `pip install "lauren-mcp[http]"` | + HTTP+SSE client (`httpx` + `httpx-sse`) |
 | `pip install "lauren-mcp[pydantic]"` | + Pydantic model schemas (`pydantic>=2`) |
 | `pip install "lauren-mcp[msgspec]"` | + msgspec.Struct schemas (`msgspec`) |
-| `pip install "lauren-mcp[cli]"` | + `lmcp` CLI (`typer` + `uvicorn`) |
+| `pip install "lauren-mcp[cli]"` | + `lmcp` CLI, Uvicorn, and all client transport dependencies |
 | `pip install "lauren-mcp[otel]"` | + OpenTelemetry tracing (`opentelemetry-api`) |
-| `pip install "lauren-mcp[all]"` | Everything |
+| `pip install "lauren-mcp[all]"` | Everything, including the `lmcp` CLI |
 
 ## MCP protocol versions
 
@@ -136,6 +136,48 @@ consuming remote MCP tools, schema generation, transport configuration, and more
 - `client.set_logging_level(level)` — 8 severity levels
 - `client.complete(ref, argument)`
 - `ClientCredentialsProvider` for OAuth client credentials flow
+
+## `lmcp` CLI
+
+Install the CLI with its complete runtime surface:
+
+```bash
+pip install "lauren-mcp[cli]"
+```
+
+Run a server over HTTP, or over stdio for an MCP host such as Claude Desktop:
+
+```bash
+lmcp run my_server.py --transport streamable --port 8000
+lmcp run my_server.py --stdio
+```
+
+Development mode uses debug logging:
+
+```bash
+lmcp dev my_server.py --transport streamable --port 8000
+```
+
+`inspect` and `call` accept either a local file spec (`server.py` or
+`server.py:ServerClass`) or a remote URL. Local files are launched through a
+stdio subprocess; HTTP URLs use Streamable HTTP by default, while
+`--transport sse` selects legacy HTTP+SSE:
+
+```bash
+lmcp inspect my_server.py
+lmcp call my_server.py search --arg query=widgets --arg limit=5
+lmcp inspect http://127.0.0.1:8000/mcp --transport streamable
+lmcp call ws://127.0.0.1:8000/mcp/ws search --arg query=widgets
+```
+
+Register a server with Claude Desktop or Cursor. The generated config uses an
+absolute file path and `run --stdio`, so it remains valid when the host starts
+the process from a different working directory:
+
+```bash
+lmcp install my_server.py --client claude
+lmcp install my_server.py --client cursor --name my-server
+```
 
 ## Per-tool decorators
 

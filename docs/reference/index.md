@@ -43,6 +43,12 @@ Complete reference for all public symbols in `lauren_mcp`.
 | [`McpServerConfig`](client.md#mcpserverconfig) | `from lauren_mcp import McpServerConfig` | Pairs an alias with a client for use with `McpToolBridge` |
 | [`McpToolBridge`](client.md#mcptoolbridge) | `from lauren_mcp import McpToolBridge` | Lifecycle manager for multiple MCP client connections |
 
+## Command-line interface
+
+| Reference | Description |
+|---|---|
+| [CLI reference](cli.md) | `lmcp run`, `dev`, `inspect`, `call`, and `install` |
+
 ## Wire types
 
 | Symbol | Description |

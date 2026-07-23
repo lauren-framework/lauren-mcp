@@ -66,7 +66,7 @@ _SERVER_SCRIPT = textwrap.dedent("""\
 
         def context_factory(tool_name, tool_use_id=None, progress_token=None,
                             send_notification=None, client_rpc=None,
-                            client_capabilities=None):
+                            client_capabilities=None, tool_metadata=None):
             from lauren_mcp import McpToolContext
             return McpToolContext(
                 tool_name=tool_name,
@@ -77,6 +77,7 @@ _SERVER_SCRIPT = textwrap.dedent("""\
                 _client_rpc=client_rpc,
                 _client_capabilities=client_capabilities,
                 _log_level_state=log_state,
+                metadata=tool_metadata or {},
             )
 
         server = FilesystemServer()

@@ -100,6 +100,7 @@ nav:
     - reference/index.md
     - Server API: reference/server.md
     - Client API: reference/client.md
+    - CLI: reference/cli.md
     - Wire Types: reference/types.md
   - Generated Reference:
     - Server: generated-reference/server.md

@@ -86,13 +86,30 @@ The server listens on `http://127.0.0.1:8765`.
 ### Via the lauren-mcp CLI
 
 ```bash
-MCP_FS_ROOT=/tmp/sandbox lmcp run examples/filesystem/server.py --transport streamable
+pip install "lauren-mcp[cli]"
+
+# Streamable HTTP
+MCP_FS_ROOT=/tmp/sandbox lmcp run examples/filesystem/server.py \
+  --transport streamable --port 8765
+
+# Development mode
+MCP_FS_ROOT=/tmp/sandbox lmcp dev examples/filesystem/server.py \
+  --transport streamable --port 8765
+
+# Inspect or call the running server
+lmcp inspect http://127.0.0.1:8765/filesystem --transport streamable
+lmcp call http://127.0.0.1:8765/filesystem write_file \
+  --transport streamable --arg path=hello.txt --arg content='hello from lmcp'
+
+# Local stdio inspection and MCP-host installation
+MCP_FS_ROOT=/tmp/sandbox lmcp inspect examples/filesystem/server.py
+lmcp install examples/filesystem/server.py --client cursor --name filesystem
 ```
 
 ### stdio (for agent use)
 
 ```bash
-MCP_FS_ROOT=/tmp/sandbox python examples/filesystem/server.py
+MCP_FS_ROOT=/tmp/sandbox lmcp run examples/filesystem/server.py --stdio
 ```
 
 ## Connecting with Claude Desktop
@@ -104,7 +121,8 @@ Add to your `claude_desktop_config.json`:
   "mcpServers": {
     "filesystem": {
       "command": "python",
-      "args": ["examples/filesystem/server.py"],
+      "args": ["-m", "lauren_mcp.cli", "run",
+               "/absolute/path/to/examples/filesystem/server.py", "--stdio"],
       "env": {
         "MCP_FS_ROOT": "/tmp/sandbox"
       }

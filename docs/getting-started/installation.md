@@ -11,9 +11,10 @@ generation:
 | `pip install lauren-mcp` | Core only | Server-only; stdio client; write your own transport |
 | `pip install "lauren-mcp[ws]"` | Core + `websockets` | WebSocket client transport |
 | `pip install "lauren-mcp[http]"` | Core + `httpx` + `httpx-sse` | HTTP+SSE client (legacy 2024-11-05) **and** Streamable HTTP client (2025-03-26) |
+| `pip install "lauren-mcp[cli]"` | Core + Typer, Uvicorn, WebSocket, and HTTP client dependencies | The `lmcp` command (`run`, `dev`, `inspect`, `call`, `install`) |
 | `pip install "lauren-mcp[pydantic]"` | Core + `pydantic>=2` | Rich JSON Schema generation for Pydantic `BaseModel` parameters |
 | `pip install "lauren-mcp[msgspec]"` | Core + `msgspec>=0.18` | Rich JSON Schema generation for `msgspec.Struct` parameters |
-| `pip install "lauren-mcp[all]"` | Core + WS + HTTP + pydantic + msgspec | Everything |
+| `pip install "lauren-mcp[all]"` | Core + WS + HTTP + pydantic + msgspec + CLI | Everything |
 
 !!! note "HTTP extras cover both SSE transports"
     The `[http]` extra installs `httpx` and `httpx-sse`, which are used by both
@@ -47,6 +48,9 @@ pip install "lauren-mcp[msgspec]"
 
 # Everything
 pip install "lauren-mcp[all]"
+
+# CLI and all dependencies needed by its local and remote workflows
+pip install "lauren-mcp[cli]"
 ```
 
 ## uv

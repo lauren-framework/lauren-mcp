@@ -13,7 +13,7 @@ Lauren Python web framework.  It provides:
 - **Lauren integration** — `McpServerModule.for_root(server_cls)` builds a Lauren
   `@module` that wires handlers into the DI graph and mounts transport controllers.
 - **CLI** — `lmcp` entry-point (Typer app) with `run`, `dev`, `inspect`, `call`,
-  and `install` commands.
+  and `install` commands. `run --stdio` exposes the same app to MCP hosts.
 
 ## Essential commands
 
@@ -33,6 +33,10 @@ uv run --dev pytest tests/integration -q
 uv run --dev pytest tests/end_to_end -q
 uv run --dev pytest tests/docs -q
 uv run --dev pytest tests/integration/test_mcp_lauren_ws_integration.py -v
+
+# Exercise the CLI and filesystem example (requires the [cli] extra)
+uv run --extra cli lmcp --help
+uv run --extra cli lmcp inspect examples/filesystem/server.py
 
 # Type-check source
 uv run --dev mypy src/lauren_mcp
@@ -124,8 +128,11 @@ src/lauren_mcp/
 
   cli/
     __init__.py            Typer app "lmcp" (requires [cli] extra)
+    __main__.py            python -m lauren_mcp.cli entry point
     _commands.py           run, dev, inspect, call, install commands
     _resolve.py            resolve_server_class — file-spec → @mcp_server class
+
+  _server/_stdio.py        newline-delimited JSON-RPC gateway for CLI stdio mode
 
 tests/
   unit/                    Pure unit tests (no subprocess, no network)
@@ -275,6 +282,8 @@ from `lauren_mcp` directly: `from lauren_mcp import McpCallError`.
 - `max_retries=0` on all `McpServer.stdio` calls in tests to prevent 30 s hangs on
   subprocess errors.
 - CLI tests that import `typer` should guard with `pytest.importorskip("typer")`.
+- The `[cli]` extra includes Typer, Uvicorn, WebSocket, and HTTP client
+  dependencies because `inspect` and `call` support both local and remote servers.
 - Build system: `hatchling` + `hatch-vcs` (migrated from `setuptools` +
   `setuptools-scm`).  Version comes from git tags via `[tool.hatch.version]`.
   Build with `uv build` (not `pyproject-build`).
@@ -296,6 +305,8 @@ from `lauren_mcp` directly: `from lauren_mcp import McpCallError`.
 | Tool context not visible in `asyncio.to_thread` | CURRENT_BINDING doesn't cross thread boundary | Copy `binding = CURRENT_BINDING.get()` before entering thread |
 | `@mcp_lifespan` cleanup not called | Lauren doesn't support async `@pre_destruct` in older versions | Requires lauren>=1.6.0 |
 | CLI test fails with `ModuleNotFoundError: typer` | typer is an optional dep | Add `pytest.importorskip("typer")` at top of test file |
+| `lmcp inspect` or `lmcp call` cannot import a local server | The subprocess cannot see the source directory | The CLI injects the resolved module directory and uses `sys.executable`; keep `max_retries=0` for failures |
+| `lmcp install` starts but the MCP host sees no protocol | A host expects stdio, not an HTTP server | Generated configs use `python -m lauren_mcp.cli run <absolute-file> --stdio` |
 | `@use_guards` silently ignored / guard never runs | Decorator ordering wrong | `@mcp_tool()` must be the **outermost** decorator; `@use_guards` goes inside |
 | `McpForbiddenError` not raised even though guard returns `False` | Guard class not discovered by DI | Ensure guard is `@injectable()` and listed in `@use_guards`; registrar auto-adds it as provider at startup |
 | `@use_middlewares` on `@mcp_tool` method | Middlewares not meaningful at per-tool level | Remove it; `TypeError` is raised at decoration time by design |

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import json
 import sys
 from pathlib import Path
@@ -22,8 +21,8 @@ from lauren_mcp.cli._commands import (  # noqa: E402
     _write_mcp_config,
     call,
     dev,
-    install,
     inspect_cmd,
+    install,
     run,
 )
 
@@ -308,6 +307,26 @@ class TestRunCommand:
 
         mock_load_env.assert_called_once_with(".env")
 
+    def test_run_can_start_stdio_server(self, tmp_path: Path) -> None:
+        p = _write_server_file(tmp_path)
+        with (
+            patch("lauren_mcp.cli._commands._load_env"),
+            patch("lauren_mcp.cli._commands.resolve_server_class") as mock_resolve,
+            patch("lauren_mcp.cli._commands._start_stdio_server") as mock_start,
+        ):
+            mock_resolve.return_value = type("FakeServer", (), {})
+            run(
+                str(p),
+                transport="ws",
+                host="127.0.0.1",
+                port=8000,
+                env_file=None,
+                reload=False,
+                stdio=True,
+            )
+
+        mock_start.assert_called_once_with(mock_resolve.return_value, transport="ws")
+
 
 # ---------------------------------------------------------------------------
 # dev command
@@ -402,12 +421,12 @@ class TestInspectCmd:
         mock_client.list_prompts = AsyncMock(return_value=[])
 
         mock_factory = MagicMock()
-        mock_factory.http = MagicMock(return_value=mock_client)
+        mock_factory.streamable_http = MagicMock(return_value=mock_client)
 
         with patch("lauren_mcp._client._factory.McpServer", mock_factory):
             await _inspect_async("http://localhost:8000/mcp", "streamable")
 
-        mock_factory.http.assert_called_once_with("http://localhost:8000/mcp")
+        mock_factory.streamable_http.assert_called_once_with("http://localhost:8000/mcp")
 
     async def test_inspect_async_local_file(
         self, tmp_path: Path, capsys: pytest.CaptureFixture
@@ -526,12 +545,12 @@ class TestCallCommand:
         mock_client.call_tool = AsyncMock(return_value={"result": "done"})
 
         mock_factory = MagicMock()
-        mock_factory.http = MagicMock(return_value=mock_client)
+        mock_factory.streamable_http = MagicMock(return_value=mock_client)
 
         with patch("lauren_mcp._client._factory.McpServer", mock_factory):
             await _call_async("https://example.com/mcp", "ping", {}, "streamable")
 
-        mock_factory.http.assert_called_once_with("https://example.com/mcp")
+        mock_factory.streamable_http.assert_called_once_with("https://example.com/mcp")
         captured = capsys.readouterr()
         assert "done" in captured.out
 
@@ -594,7 +613,7 @@ class TestInstallCommand:
             mock_cfg_path.return_value = str(cfg)
             install("server.py", name=None, client="claude")
 
-        mock_write.assert_called_once_with(str(cfg), "MyServer", "server.py")
+        mock_write.assert_called_once_with(str(cfg), "MyServer", str(Path("server.py").resolve()))
         captured = capsys.readouterr()
         assert "MyServer" in captured.out
 
@@ -612,7 +631,9 @@ class TestInstallCommand:
             mock_cfg_path.return_value = str(cfg)
             install("server.py", name="custom_name", client="claude")
 
-        mock_write.assert_called_once_with(str(cfg), "custom_name", "server.py")
+        mock_write.assert_called_once_with(
+            str(cfg), "custom_name", str(Path("server.py").resolve())
+        )
 
     def test_install_cursor_client(self, tmp_path: Path, capsys: pytest.CaptureFixture) -> None:
         cfg = tmp_path / "mcp.json"

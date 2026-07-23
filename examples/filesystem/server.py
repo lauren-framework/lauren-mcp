@@ -7,7 +7,7 @@ Usage (HTTP / WebSocket):
     MCP_FS_ROOT=/tmp/sandbox python examples/filesystem/server.py
 
 Usage (stdio for agent use):
-    MCP_FS_ROOT=/tmp/sandbox python examples/filesystem/server.py --stdio
+    MCP_FS_ROOT=/tmp/sandbox lmcp run examples/filesystem/server.py --stdio
 
 Environment variables:
     MCP_FS_ROOT   Base directory for all operations (default: current dir).

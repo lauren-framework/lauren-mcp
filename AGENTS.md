@@ -23,6 +23,7 @@
 | `src/lauren_mcp/_server/_ws.py` | `mcp_ws_controller()` (Lauren WS gateway) |
 | `src/lauren_mcp/_server/_sse.py` | `mcp_http_sse_controller()` (Lauren HTTP+SSE gateway) |
 | `src/lauren_mcp/_server/_streamable.py` | `mcp_streamable_http_controller`, `StreamableSessionStore` |
+| `src/lauren_mcp/_server/_stdio.py` | newline-delimited JSON-RPC gateway for CLI stdio mode |
 | `src/lauren_mcp/_server/_session.py` | `SseSessionStore` |
 | `src/lauren_mcp/_server/_handshake.py` | `negotiate_version()`, `build_initialize_result()` |
 | `src/lauren_mcp/_server/_binding.py` | `CURRENT_BINDING` ContextVar, `TransportBinding` dataclass |
@@ -43,6 +44,7 @@
 | `src/lauren_mcp/_client/_streamable.py` | `McpStreamableHttpClient` — MCP 2025-03-26 (requires `[http]` extra) |
 | `src/lauren_mcp/_client/_oauth.py` | `ClientCredentialsProvider`, `InMemoryTokenStorage` |
 | `src/lauren_mcp/cli/__init__.py` | Typer `app` ("lmcp" entry-point, requires `[cli]` extra) |
+| `src/lauren_mcp/cli/__main__.py` | `python -m lauren_mcp.cli` entry-point |
 | `src/lauren_mcp/cli/_commands.py` | `run`, `dev`, `inspect`, `call`, `install` commands |
 | `src/lauren_mcp/cli/_resolve.py` | `resolve_server_class` — file-spec → `@mcp_server` class |
 | `llms-full.txt` | Full API reference for LLMs — must stay in sync with `__all__` |
@@ -158,6 +160,9 @@
 - Two `McpServerModule.for_root()` in the same `@module` will raise
   `ModuleExportViolation` (McpDispatcher can only be in one module) — use separate apps
 - CLI tests: add `pytest.importorskip("typer")` at the top of the file
+- CLI integration tests use `python -m lauren_mcp.cli` and the real
+  `examples/filesystem/server.py`; the `[cli]` extra includes WS and HTTP client
+  dependencies needed by remote `inspect`/`call`.
 
 ## Common errors
 
@@ -173,6 +178,8 @@
 | `McpToolContext` param included in JSON schema | `_is_context_annotation` failed to match | Ensure the annotation string or type resolves to `McpToolContext`; check `from __future__ import annotations` is present |
 | Tool gets wrong transport context | `asyncio.to_thread` doesn't copy ContextVar | Copy `binding = CURRENT_BINDING.get()` before the thread call |
 | `ImportError: typer` in CLI test | `[cli]` extra not installed | Add `pytest.importorskip("typer")` at top of test file |
+| `lmcp inspect` cannot import a local server | The subprocess cannot see the source directory | The CLI uses `sys.executable` and injects the resolved module directory into `sys.path` |
+| MCP host receives no messages after `lmcp install` | Config started HTTP mode instead of stdio | Generated entries invoke `run <absolute-file> --stdio` |
 | `@use_guards` ignored / guard never runs | Decorator ordering wrong — `@use_guards` is outermost | Move `@mcp_tool()` to be the outermost decorator and `@use_guards` inside |
 | Guard registered but `can_activate` not called | Guard class not discovered as provider | Confirm class is `@injectable()` and passed to `@use_guards`; registrar discovers it at `@post_construct` |
 
