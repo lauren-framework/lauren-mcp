@@ -69,6 +69,8 @@ class _ClientFeaturesMixin:
     ) -> None:
         self._requested_protocol_version: str = protocol_version or LATEST
         self._negotiated_protocol_version: str | None = None
+        self._server_capabilities: dict[str, Any] = {}
+        self._server_info: dict[str, Any] = {}
         self._roots = roots
         self._progress_handlers: list[NotificationHandler] = (
             [progress_handler] if progress_handler else []
@@ -97,6 +99,16 @@ class _ClientFeaturesMixin:
         if self._negotiated_protocol_version is None:
             raise RuntimeError("protocol_version is only available after connect()")
         return self._negotiated_protocol_version
+
+    @property
+    def capabilities(self) -> dict[str, Any]:
+        """Capabilities advertised by the server during initialization."""
+        return dict(self._server_capabilities)
+
+    @property
+    def server_info(self) -> dict[str, Any]:
+        """Implementation metadata advertised by the server."""
+        return dict(self._server_info)
 
     # ------------------------------------------------------------------
     # Handler registration

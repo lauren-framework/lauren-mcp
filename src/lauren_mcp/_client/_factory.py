@@ -70,6 +70,8 @@ class McpServer:
         *,
         max_retries: int = 3,
         startup_timeout: float = 10.0,
+        cwd: str | None = None,
+        env: dict[str, str] | None = None,
         **feature_kwargs: Any,
     ) -> McpClientProtocol:
         """Create an MCP stdio client that launches *command* as a subprocess.
@@ -80,8 +82,13 @@ class McpServer:
             Argv sequence, e.g. ``["python", "-m", "myserver"]``.
         max_retries:
             Subprocess restart attempts on unexpected EOF.
-        startup_timeout:
-            Seconds to wait for the ``initialize`` handshake response.
+            startup_timeout:
+                Seconds to wait for the ``initialize`` handshake response.
+            cwd:
+                Optional working directory for the child process.
+            env:
+                Optional complete child environment. The command is always
+                executed directly, never through a shell.
         """
         from ._stdio import McpStdioClient
 
@@ -89,6 +96,8 @@ class McpServer:
             command,
             max_retries=max_retries,
             startup_timeout=startup_timeout,
+            cwd=cwd,
+            env=env,
             **feature_kwargs,
         )
 

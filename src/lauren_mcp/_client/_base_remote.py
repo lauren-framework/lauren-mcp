@@ -134,6 +134,10 @@ class _McpBaseRemoteClient(_ClientFeaturesMixin, McpClientProtocol):
             self._negotiated_protocol_version = result.get(
                 "protocolVersion", self._requested_protocol_version
             )
+            capabilities = result.get("capabilities")
+            server_info = result.get("serverInfo")
+            self._server_capabilities = dict(capabilities) if isinstance(capabilities, dict) else {}
+            self._server_info = dict(server_info) if isinstance(server_info, dict) else {}
         self._initialized = True
         # Send the initialized notification (no response expected)
         await self._send_raw(

@@ -25,7 +25,7 @@ classifiers = [
     "Typing :: Typed",
 ]
 dependencies = [
-    "lauren>=1.6.0",
+    "lauren>=1.7.0",
     "anyio>=4.0",
 ]
 
@@ -118,7 +118,7 @@ python_version         = "3.11"
 strict                 = true
 ignore_missing_imports = true
 warn_unused_ignores    = false
-cache_dir              = "/tmp/mypy-cache-lauren-mcp"
+cache_dir              = ".mypy_cache"
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
@@ -154,5 +154,5 @@ dev = [
     "griffe>=1.0",
     "hatchling>=1.21",
     "hatch-vcs>=0.4",
-    "twine>=5.0",
+    "twine>=7.0",
 ]

@@ -5,8 +5,10 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-from asyncio.subprocess import DEVNULL, PIPE
-from collections.abc import Callable
+import os
+import signal
+from asyncio.subprocess import PIPE
+from collections.abc import Callable, Mapping
 from typing import Any
 
 from lauren_mcp._types import (
@@ -57,6 +59,11 @@ class McpStdioClient(_ClientFeaturesMixin, McpClientProtocol):
     startup_timeout:
         Seconds to wait for the ``initialize`` response before raising
         ``asyncio.TimeoutError``.  Defaults to ``10.0``.
+    cwd:
+        Optional working directory for the child process.
+    env:
+        Optional complete child environment. The argv is passed directly to
+        ``create_subprocess_exec`` and is never interpreted by a shell.
     """
 
     def __init__(
@@ -66,6 +73,8 @@ class McpStdioClient(_ClientFeaturesMixin, McpClientProtocol):
         client_info: Implementation | None = None,
         max_retries: int = 3,
         startup_timeout: float = 10.0,
+        cwd: str | None = None,
+        env: Mapping[str, str] | None = None,
         protocol_version: str | None = None,
         roots: Any = None,
         progress_handler: Any = None,
@@ -82,6 +91,8 @@ class McpStdioClient(_ClientFeaturesMixin, McpClientProtocol):
         )
         self._max_retries = max_retries
         self._startup_timeout = startup_timeout
+        self._cwd = cwd
+        self._env = dict(env) if env is not None else None
         self._init_features(
             protocol_version=protocol_version,
             roots=roots,
@@ -97,6 +108,8 @@ class McpStdioClient(_ClientFeaturesMixin, McpClientProtocol):
         # Internal state (reset by _start_process)
         self._proc: asyncio.subprocess.Process | None = None
         self._reader_task: asyncio.Task[None] | None = None
+        self._stderr_task: asyncio.Task[None] | None = None
+        self._stderr_tail: list[str] = []
         self._pending: dict[int, asyncio.Future[Any]] = {}
         self._notification_listeners: list[Callable[[JsonRpcNotification], None]] = []
         self._next_id: int = 0
@@ -121,17 +134,24 @@ class McpStdioClient(_ClientFeaturesMixin, McpClientProtocol):
             except (asyncio.CancelledError, Exception):
                 pass
             self._reader_task = None
+        if self._stderr_task and not self._stderr_task.done():
+            self._stderr_task.cancel()
+            try:  # noqa: SIM105
+                await self._stderr_task
+            except (asyncio.CancelledError, Exception):
+                pass
+            self._stderr_task = None
 
         proc = self._proc
         if proc is not None and proc.returncode is None:
             try:
-                proc.terminate()
+                self._signal_process(proc, signal.SIGTERM)
                 try:
                     await asyncio.wait_for(proc.wait(), timeout=3.0)
                 except TimeoutError:
-                    proc.kill()
+                    self._signal_process(proc, signal.SIGKILL)
                     await proc.wait()
-            except ProcessLookupError:
+            except (ProcessLookupError, PermissionError):
                 pass
         self._proc = None
         self._initialized = False
@@ -152,12 +172,56 @@ class McpStdioClient(_ClientFeaturesMixin, McpClientProtocol):
             *self._command,
             stdin=PIPE,
             stdout=PIPE,
-            stderr=DEVNULL,
+            stderr=PIPE,
+            cwd=self._cwd,
+            env=self._env,
+            start_new_session=os.name == "posix",
         )
         self._pending = {}
         self._next_id = 0
         self._initialized = False
         self._reader_task = asyncio.create_task(self._read_loop())
+        self._stderr_tail = []
+        stderr = getattr(self._proc, "stderr", None)
+        if stderr is not None:
+            self._stderr_task = asyncio.create_task(self._read_stderr(stderr))
+
+    async def _read_stderr(self, stream: Any) -> None:
+        """Drain stderr without treating it as MCP protocol data.
+
+        Keep only a bounded tail for diagnostics.  The caller decides whether
+        and how to redact it before exposing it to a user or event sink.
+        """
+        while True:
+            line = await stream.readline()
+            if not line:
+                return
+            text = line.decode("utf-8", errors="replace").rstrip()
+            if text:
+                self._stderr_tail.append(text[-2048:])
+                self._stderr_tail = self._stderr_tail[-16:]
+
+    @property
+    def stderr_tail(self) -> str:
+        """Return the bounded stderr tail captured from the child process."""
+        return "\n".join(self._stderr_tail)
+
+    @staticmethod
+    def _signal_process(proc: asyncio.subprocess.Process, sig: signal.Signals) -> None:
+        """Signal the owned process group, falling back to the child only."""
+        pid = getattr(proc, "pid", None)
+        if os.name == "posix" and isinstance(pid, int) and pid > 0:
+            try:
+                os.killpg(pid, sig)
+                return
+            except ProcessLookupError:
+                raise
+            except PermissionError:
+                raise
+        if sig == signal.SIGKILL:
+            proc.kill()
+        else:
+            proc.terminate()
 
     # ------------------------------------------------------------------
     # Internal: handshake
@@ -184,6 +248,10 @@ class McpStdioClient(_ClientFeaturesMixin, McpClientProtocol):
             self._negotiated_protocol_version = result.get(
                 "protocolVersion", self._requested_protocol_version
             )
+            capabilities = result.get("capabilities")
+            server_info = result.get("serverInfo")
+            self._server_capabilities = dict(capabilities) if isinstance(capabilities, dict) else {}
+            self._server_info = dict(server_info) if isinstance(server_info, dict) else {}
         self._initialized = True
         # Send the initialized notification (no response expected)
         await self._send_raw(

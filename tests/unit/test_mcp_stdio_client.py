@@ -145,6 +145,28 @@ def _error_resp(id_: int, code: int, message: str) -> bytes:
 
 class TestMcpStdioClientConnect:
     @pytest.mark.asyncio
+    async def test_connect_forwards_cwd_and_environment_without_shell(self):
+        client = McpStdioClient(
+            ["python", "server.py"],
+            cwd="/tmp/mcp-workspace",
+            env={"MCP_MODE": "test"},
+        )
+        proc = MockProcess(response_lines=[_init_resp(0)])
+
+        with patch(
+            "asyncio.create_subprocess_exec",
+            new=AsyncMock(return_value=proc),
+        ) as mock_exec:
+            try:  # noqa: SIM105
+                await asyncio.wait_for(client.connect(), timeout=2.0)
+            except TimeoutError:
+                pass
+
+        kwargs = mock_exec.call_args.kwargs
+        assert kwargs["cwd"] == "/tmp/mcp-workspace"
+        assert kwargs["env"] == {"MCP_MODE": "test"}
+
+    @pytest.mark.asyncio
     async def test_connect_starts_subprocess_with_correct_command(self):
         command = ["python", "server.py"]
         client = McpStdioClient(command)
@@ -178,6 +200,20 @@ class TestMcpStdioClientConnect:
         written = proc.stdin.get_lines()
         methods = [m["method"] for m in written]
         assert "initialize" in methods
+
+    @pytest.mark.asyncio
+    async def test_connect_captures_server_capabilities_and_info(self):
+        client = McpStdioClient(["python", "server.py"])
+        proc = MockProcess(response_lines=[_init_resp(0)])
+
+        with patch("asyncio.create_subprocess_exec", new=AsyncMock(return_value=proc)):
+            try:  # noqa: SIM105
+                await asyncio.wait_for(client.connect(), timeout=2.0)
+            except TimeoutError:
+                pass
+
+        assert client.capabilities == {"tools": {}}
+        assert client.server_info == {"name": "test-server", "version": "1.0"}
 
     @pytest.mark.asyncio
     async def test_connect_sends_notifications_initialized_after_handshake(self):
