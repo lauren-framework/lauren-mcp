@@ -137,16 +137,21 @@ repos:
       # Mirrors `nox -s llms_check` — every public symbol in
       # `lauren.__all__` must appear in `llms-full.txt`. Runs only when
       # the package or the reference file changes (cheap on every commit).
+      #
+      # We use `language: system` (not `language: python`) so prek does
+      # not create an isolated env. The script `check_llms_full.py` only
+      # uses the stdlib and adds `src/` to `sys.path` so it can
+      # `import lauren_mcp` without an editable install. An earlier
+      # version set `additional_dependencies: ["pydantic>=2.0", "-e ."]`
+      # which worked on uv 0.12.4 but fails on uv 0.12.9 because of a
+      # regression in how `uv pip install --project <tmp> -e .` resolves
+      # the project root (prek invokes uv with a tmp project dir).
       - id: llms-full-txt-sync
         name: llms-full.txt is in sync with lauren_mcp.__all__
         entry: python scripts/check_llms_full.py
-        language: python
+        language: system
         pass_filenames: false
         files: ^(lauren/.*\.py|llms-full\.txt)$
-        # Editable install of the package so the script can `import lauren`.
-        additional_dependencies:
-          - "pydantic>=2.0"
-          - "-e ."
 
       # Quick smoke: noxfile.py and pyproject.toml are syntactically valid.
       - id: nox-list
