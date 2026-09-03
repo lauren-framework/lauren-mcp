@@ -187,19 +187,105 @@ class TestMcpBaseRemoteClient:
         assert not fut.done()
 
     async def test_fail_all_pending_cancels_all_futures(self):
-        """_fail_all_pending must set exceptions on all in-flight futures."""
+        """_fail_all_pending must drain _pending regardless of future state.
+
+        Futures that have a live result-callback (i.e. someone is awaiting
+        them) receive a ``McpCallError``; futures that have been abandoned
+        (no result-callback) are ``cancel()``-ed so Python's asyncio does
+        not log ``Future exception was never retrieved`` at GC time.
+        """
         client = _ConcreteClient()
         loop = asyncio.get_running_loop()
+        # Two abandoned futures (no awaiter).
         fut1: asyncio.Future = loop.create_future()
         fut2: asyncio.Future = loop.create_future()
         client._pending[1] = fut1
         client._pending[2] = fut2
         client._fail_all_pending("Test failure")
-        with pytest.raises(McpCallError):
-            await fut1
-        with pytest.raises(McpCallError):
-            await fut2
+        assert fut1.cancelled() or fut1.exception() is not None
+        assert fut2.cancelled() or fut2.exception() is not None
         assert client._pending == {}
+
+    async def test_fail_all_pending_awaited_future_raises_mcp_call_error(self):
+        """A future with a live result-callback must surface the McpCallError."""
+        client = _ConcreteClient()
+        loop = asyncio.get_running_loop()
+        fut: asyncio.Future = loop.create_future()
+        client._pending[1] = fut
+        # Register a result-callback that ``await``s the future.  The
+        # ``add_done_callback`` we add is the same hook ``asyncio`` uses
+        # internally when a coroutine awaits the future, so it is the
+        # closest synchronous approximation of "someone is awaiting this
+        # future" that we can register in a unit test.
+        captured: dict[str, BaseException | None] = {}
+
+        def _capture(_f: asyncio.Future) -> None:
+            try:
+                captured["err"] = _f.exception()
+            except (asyncio.CancelledError, Exception) as e:  # pragma: no cover
+                captured["err"] = e
+
+        fut.add_done_callback(_capture)
+        client._fail_all_pending("awaited failure")
+        assert fut.done()
+        assert fut.cancelled() is False
+        assert fut.exception() is not None
+        assert isinstance(fut.exception(), McpCallError)
+        assert "awaited failure" in str(fut.exception())
+        assert client._pending == {}
+
+    async def test_fail_all_pending_abandoned_future_does_not_set_exception(self):
+        """An abandoned future (no result-callback) must NOT have an exception set.
+
+        Regression for the noisy
+        ``ERROR asyncio: Future exception was never retrieved`` log
+        that fires when a future is garbage-collected with an unhandled
+        exception set.  Abandoned futures in ``_pending`` are ``cancel()``-ed
+        so they remain silent at GC time.
+        """
+        client = _ConcreteClient()
+        loop = asyncio.get_running_loop()
+        fut: asyncio.Future = loop.create_future()
+        # No add_done_callback — the future is "abandoned".  ``_callbacks``
+        # is ``None`` on a brand-new future (CPython private API), so we
+        # normalise via ``or []`` to keep the assertion independent of
+        # the exact initial sentinel.
+        assert (fut._callbacks or []) == []  # type: ignore[attr-defined]  # noqa: SLF001
+        client._pending[1] = fut
+        client._fail_all_pending("abandoned failure")
+        assert fut.done()
+        assert fut.cancelled() is True
+        # ``Future.exception()`` raises ``CancelledError`` for cancelled
+        # futures (it does not return None), so the only way to confirm
+        # that no ``McpCallError`` was attached is to assert the
+        # cancellation flag and absence of an exception attribute set
+        # through ``set_exception``.
+        assert not hasattr(fut, "_exception") or fut._exception is None  # type: ignore[attr-defined]  # noqa: SLF001
+        assert client._pending == {}
+
+    async def test_close_does_not_set_exception_on_abandoned_futures(self):
+        """close() must cancel abandoned futures instead of failing them.
+
+        End-to-end check of the close() path: in a real client the
+        ``initialize`` future is sometimes abandoned (e.g. when the
+        consumer re-issues ``connect()`` before the previous handshake
+        completed, or when the surrounding event loop is being torn
+        down).  ``_fail_all_pending`` must cancel those abandoned
+        futures rather than set ``McpCallError("Client closed")`` on
+        them, which is what triggered the original regression.
+        """
+        client = _ConcreteClient()
+        loop = asyncio.get_running_loop()
+        abandoned: asyncio.Future = loop.create_future()
+        client._pending[1] = abandoned
+        await client.close()
+        assert abandoned.cancelled() is True
+        # Cancelled futures raise ``CancelledError`` from ``.exception()``;
+        # the no-``McpCallError`` guarantee is therefore that
+        # ``._exception`` is unset (it is set only by ``set_exception``).
+        assert not hasattr(abandoned, "_exception") or abandoned._exception is None  # type: ignore[attr-defined]  # noqa: SLF001
+        assert client._pending == {}
+        assert client._connection_closed is True
 
     async def test_list_tools_sends_tools_list_method(self):
         client = _ConcreteClient()
