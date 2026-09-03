@@ -106,6 +106,25 @@ class TestMcpStreamableHttpClient:
             await client._start_connection()
         assert client._http_client is mock_http
         assert client._session_id is None
+        # The client must opt in to following HTTP redirects so that
+        # server-side normalisations (e.g. Next.js trailing-slash
+        # ``307 /api/mcp/`` → ``/api/mcp``) are transparent to callers.
+        MockClient.assert_called_once()
+        kwargs = MockClient.call_args.kwargs
+        assert kwargs.get("follow_redirects") is True
+
+    async def test_start_connection_propagates_auth_and_headers(self):
+        """Headers + auth must still be forwarded alongside ``follow_redirects``."""
+        client = self._make_client(headers={"X-Custom": "v"}, auth=("user", "pass"))
+        with patch("lauren_mcp._client._streamable.httpx.AsyncClient") as MockClient:
+            mock_http = AsyncMock()
+            MockClient.return_value = mock_http
+            await client._start_connection()
+        kwargs = MockClient.call_args.kwargs
+        assert kwargs["headers"] == {"X-Custom": "v"}
+        assert kwargs["auth"] == ("user", "pass")
+        assert kwargs["follow_redirects"] is True
+        assert kwargs["timeout"] is None
 
     # ------------------------------------------------------------------
     # _close_connection
@@ -553,6 +572,135 @@ class TestMcpStreamableHttpClient:
 
             client._push_task = None  # prevent push loop
             await client.close()
+
+    # ------------------------------------------------------------------
+    # Redirect-following regression (trailing-slash 307 → 200)
+    # ------------------------------------------------------------------
+    #
+    # The client must transparently follow server-side redirects.  A
+    # common case is a Next.js (or other framework) handler that
+    # registers ``/api/mcp`` but the user configures ``/api/mcp/`` in
+    # their MCP host; the framework replies ``307`` with
+    # ``Location: /api/mcp`` and the real response.  Before the fix,
+    # ``httpx.AsyncClient(follow_redirects=False)`` (the default) would
+    # raise on the 3xx because the body did not contain a valid JSON-RPC
+    # message, breaking every initialize/tools/list/tools/call.
+    #
+    # These tests use a real ``httpx.AsyncClient`` with a ``MockTransport``
+    # so the redirect-following path is actually exercised end-to-end,
+    # not just verified by inspecting the constructor kwargs.
+
+    async def test_redirect_trailing_slash_is_followed_on_initialize(self):
+        """307 on the first ``POST`` must be followed so ``initialize`` succeeds.
+
+        Regression test for the bug where Next.js (and other frameworks)
+        register a handler at ``/api/mcp`` but the user configures
+        ``/api/mcp/`` (with a trailing slash) in their MCP host.  The
+        framework responds ``307 Location: /api/mcp`` and the real
+        response.  Before ``follow_redirects=True`` was added to the
+        underlying ``httpx.AsyncClient``, the 3xx would bubble up as an
+        error because the body did not contain a valid JSON-RPC reply.
+        """
+        from lauren_mcp._client._streamable import McpStreamableHttpClient
+
+        # Capture the real ``httpx.AsyncClient`` *before* the patch so
+        # the factory below can call the real constructor and not the
+        # patched ``MagicMock``.
+        real_async_client = httpx.AsyncClient
+
+        # We use ``id=42`` to identify our synthetic initialize request.
+        init_response = _json_rpc_response(42, _make_initialize_result())
+
+        post_urls: list[str] = []
+
+        def _handler(request: httpx.Request) -> httpx.Response:
+            url = str(request.url)
+            post_urls.append(url)
+            if url.endswith("/mcp/"):
+                # Server-side normalisation: trailing slash → no trailing slash.
+                return httpx.Response(307, headers={"location": "http://testserver/mcp"})
+            if url.endswith("/mcp"):
+                return httpx.Response(
+                    200,
+                    headers={
+                        "content-type": "application/json",
+                        "mcp-session-id": "redirected-session",
+                    },
+                    content=init_response.encode(),
+                )
+            return httpx.Response(404)
+
+        transport = httpx.MockTransport(_handler)
+        # We patch ``httpx.AsyncClient`` so the client's own
+        # ``_start_connection`` constructor installs a real httpx client
+        # bound to our ``MockTransport`` (and carrying
+        # ``follow_redirects=True``).  This way the real redirect-following
+        # code path is exercised end-to-end, and this test fails fast if
+        # a future refactor drops the ``follow_redirects=True`` kwarg.
+        with patch("lauren_mcp._client._streamable.httpx.AsyncClient") as MockClient:
+
+            def _factory(*args: Any, **kwargs: Any) -> Any:
+                assert kwargs.get("follow_redirects") is True, (
+                    "McpStreamableHttpClient must opt in to follow_redirects=True "
+                    "so server-side normalisations (e.g. trailing-slash 307) "
+                    "are transparent.  See _start_connection in _streamable.py."
+                )
+                return real_async_client(transport=transport, *args, **kwargs)
+
+            MockClient.side_effect = _factory
+
+            client = McpStreamableHttpClient(
+                "http://testserver/mcp/",  # with trailing slash
+                max_retries=0,
+                startup_timeout=5.0,
+            )
+            try:
+                await client._start_connection()
+                # We call _send_raw directly (bypassing the higher-level
+                # ``connect()`` / ``_handshake()`` machinery) so the test
+                # is laser-focused on the redirect-following behaviour.
+                await client._send_raw({"jsonrpc": "2.0", "method": "initialize", "id": 42})
+                assert client._session_id == "redirected-session"
+                # The transport must have been called twice: once for the 307
+                # (with trailing slash) and once for the 200 (without).
+                assert len(post_urls) == 2, post_urls
+                assert post_urls[0].endswith("/mcp/")
+                assert post_urls[1].endswith("/mcp")
+            finally:
+                await client._close_connection()
+
+    async def test_redirect_too_many_hops_raises_mcp_call_error(self):
+        """Redirect loop surfaces as ``McpCallError`` (httpx gives up after 20 hops)."""
+        from lauren_mcp._client._streamable import McpStreamableHttpClient
+        from lauren_mcp._client._stdio import McpCallError
+
+        real_async_client = httpx.AsyncClient
+
+        def _always_redirect(request: httpx.Request) -> httpx.Response:
+            # A → B → A → B → … loop.  httpx's default cap (20) stops it
+            # with a ``TooManyRedirects`` exception, which the client
+            # re-raises as ``McpCallError("HTTP send failed: ...")``.
+            return httpx.Response(
+                307,
+                headers={"location": "http://testserver/other"},
+            )
+
+        transport = httpx.MockTransport(_always_redirect)
+        with patch("lauren_mcp._client._streamable.httpx.AsyncClient") as MockClient:
+            MockClient.side_effect = lambda *a, **kw: real_async_client(
+                transport=transport, *a, **kw
+            )
+            client = McpStreamableHttpClient(
+                "http://testserver/mcp",
+                max_retries=0,
+                startup_timeout=5.0,
+            )
+            try:
+                await client._start_connection()
+                with pytest.raises(McpCallError, match="HTTP send failed"):
+                    await client._send_raw({"jsonrpc": "2.0", "method": "ping", "id": 1})
+            finally:
+                await client._close_connection()
 
 
 # ===========================================================================
