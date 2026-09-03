@@ -203,11 +203,34 @@ class _McpBaseRemoteClient(_ClientFeaturesMixin, McpClientProtocol):
             self._handle_server_request(msg)
 
     def _fail_all_pending(self, reason: str = "Connection lost") -> None:
-        """Fail all pending futures with a McpCallError."""
+        """Fail all pending futures with a McpCallError.
+
+        Futures that still have at least one result-callback registered
+        (i.e. an active ``await fut`` somewhere on the stack) receive the
+        ``McpCallError`` exception, so the awaiting code surfaces a clear,
+        attributable error.  Futures that are pending but have *no*
+        registered callback are already abandoned: the caller that created
+        the ``_request`` has moved on (or was cancelled) and will never
+        ``.result()`` the future.  Setting an exception on those abandoned
+        futures is pointless, and worse, it triggers Python's
+        ``asyncio`` ``"Future exception was never retrieved"`` log
+        message at garbage-collection time — the exact warning that
+        surfaces as ``ERROR asyncio: Future exception was never
+        retrieved`` during normal ``McpStreamableHttpClient.close()``
+        teardown once a session has been established and torn down.
+
+        Those abandoned futures are ``cancel()``-ed instead, which is
+        silent at GC time and still drains ``_pending`` so the
+        subsequent ``_close_connection`` sees a clean state.
+        """
         error = McpCallError(reason, code=-32000)
         for fut in list(self._pending.values()):
-            if not fut.done():
+            if fut.done():
+                continue
+            if fut._callbacks:  # type: ignore[attr-defined]
                 fut.set_exception(error)
+            else:
+                fut.cancel()
         self._pending.clear()
 
     # ------------------------------------------------------------------
