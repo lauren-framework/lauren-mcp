@@ -34,6 +34,12 @@ class McpStreamableHttpClient(_McpBaseRemoteClient):
     background GET stream is opened after the handshake to receive
     server-push notifications.
 
+    The underlying ``httpx.AsyncClient`` is configured to follow HTTP
+    redirects (up to ``httpx``'s default of 20 hops).  This makes the
+    client transparent to common server-side normalisations such as a
+    trailing-slash redirect (e.g. ``POST /api/mcp/`` → ``307`` → ``/api/mcp``)
+    that some web frameworks emit automatically.
+
     Requires ``httpx``::
 
         pip install 'lauren-mcp[sse]'
@@ -90,8 +96,19 @@ class McpStreamableHttpClient(_McpBaseRemoteClient):
     # ------------------------------------------------------------------
 
     async def _start_connection(self) -> None:
+        # ``follow_redirects=True`` so the client transparently handles
+        # server-side redirects such as the trailing-slash ``307`` that
+        # Next.js (and other frameworks) emit when the configured endpoint
+        # ends in ``/`` but the handler is registered without one.  Without
+        # this, the initial ``POST`` returns a 3xx, the client never reads
+        # the response body, and the server's 2xx reply is lost — making
+        # every ``initialize``/``tools/list``/``tools/call`` fail.
+        # The default ``max_redirects=20`` cap (httpx >= 0.28) is kept.
         self._http_client = httpx.AsyncClient(
-            headers={**self._headers}, auth=self._auth, timeout=None
+            headers={**self._headers},
+            auth=self._auth,
+            timeout=None,
+            follow_redirects=True,
         )
         self._session_id = None
 
