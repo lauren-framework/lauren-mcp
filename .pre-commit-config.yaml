@@ -65,6 +65,7 @@ repos:
         exclude: ^(examples|tests)/
       - id: ruff-format
         name: ruff (format)
+        args: ["--check", "--diff"]
         types_or: [python, pyi]
         exclude: ^(examples|tests)/
 
