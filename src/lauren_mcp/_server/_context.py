@@ -643,9 +643,7 @@ class McpToolContext:
                 if inspect.isawaitable(accepted):
                     accepted = await accepted
                 if accepted is False:
-                    raise McpSamplingPolicyError(
-                        "Sampling response rejected by application policy"
-                    )
+                    raise McpSamplingPolicyError("Sampling response rejected by application policy")
             await emit("completed", model=result.model)
         except McpSamplingPolicyError as exc:
             await emit("rejected", error=exc)
