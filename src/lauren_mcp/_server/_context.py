@@ -483,6 +483,8 @@ class McpToolContext:
     # Sampling
     # ------------------------------------------------------------------
 
+    # Policies are supplied per call so each tool can enforce its own trust boundary.
+
     async def sample(
         self,
         messages: str | list[Any],  # list[SamplingMessage]
