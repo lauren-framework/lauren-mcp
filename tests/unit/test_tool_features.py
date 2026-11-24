@@ -72,10 +72,11 @@ class TestToolAnnotations:
             ToolAnnotations(**{field: "yes"})
 
     def test_decorator_rejects_untyped_annotations(self):
+        async def invalid(self) -> str:
+            return "invalid"
+
         with pytest.raises(TypeError, match="ToolAnnotations"):
-            @mcp_tool(annotations={"readOnlyHint": True})
-            async def invalid(self) -> str:
-                return "invalid"
+            mcp_tool(annotations={"readOnlyHint": True})(invalid)
 
 
 class TestTagsAndMeta:
@@ -234,10 +235,11 @@ class TestStructuredOutput:
             )
 
     def test_invalid_output_schema_rejected_at_decoration(self):
+        async def invalid(self) -> dict:
+            return {}
+
         with pytest.raises(ValueError, match="Invalid output_schema"):
-            @mcp_tool(output_schema={"type": "not-a-json-schema-type"})
-            async def invalid(self) -> dict:
-                return {}
+            mcp_tool(output_schema={"type": "not-a-json-schema-type"})(invalid)
 
     def test_tool_stream_does_not_infer_output_schema(self):
         class Server:
