@@ -499,14 +499,34 @@ Rules:
 Exposes a URI-addressable resource.  Path template variables are extracted from the URI
 and passed as keyword arguments.
 
-### Basic resource
+### Static and templated resources
+
+A static resource uses an exact URI. A templated resource extracts URI variables
+and passes them to the decorated method as keyword arguments.
 
 ```python
-from lauren_mcp import mcp_resource
+from lauren_mcp import mcp_resource, ResourceAnnotations
 
 @mcp_server("/mcp")
 class CatalogueServer:
-    @mcp_resource("/items/{item_id}", mime_type="application/json")
+    @mcp_resource(
+        "catalogue://summary",
+        annotations=ResourceAnnotations(audience=["user"], priority=0.8),
+        name="catalogue_summary",
+        title="Catalogue summary",
+        description="A concise overview of the current catalogue.",
+        mime_type="text/plain",
+    )
+    async def catalogue_summary(self) -> str:
+        return "The catalogue currently contains 42 items."
+
+    @mcp_resource(
+        "catalogue://items/{item_id}",
+        name="catalogue_item",
+        title="Catalogue item",
+        description="Retrieve one item by its identifier.",
+        mime_type="application/json",
+    )
     async def get_item(self, item_id: str) -> dict:
         """Return a catalogue item.
 
@@ -525,9 +545,15 @@ def mcp_resource(
     *,
     name: str | None = None,
     description: str | None = None,
+    title: str | None = None,
     mime_type: str | None = None,
-) -> Callable:
+    annotations: ResourceAnnotations | None = None,
+) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
 ```
+
+`title` is a human-readable display name. `annotations` carries MCP resource
+hints such as audience and priority. Both are included in `resources/list`
+when provided. A template without variables is a static resource URI.
 
 ### URI template syntax
 
@@ -553,9 +579,11 @@ async def search(self, topic: str, page: int = 1, size: int = 10) -> list:
     ...
 ```
 
-Type annotations on query parameters are used to coerce the string URI variable into the
-declared Python type (`int`, `float`, `bool`).  Path variables annotated as `int` or
-`float` are also coerced.
+Type annotations on URI parameters are used to coerce extracted values into the
+declared Python type (`int`, `float`, `bool`).
+
+A `resources/read` request for an unregistered URI returns the MCP
+`RESOURCE_NOT_FOUND` error (`-32002`), rather than a generic internal error.
 
 ### Binary and multi-item responses
 

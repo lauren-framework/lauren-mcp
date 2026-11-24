@@ -34,6 +34,10 @@ class McpInvalidParamsError(Exception):
         self.message = message
 
 
+class McpResourceNotFoundError(LookupError):
+    """Raised when resources/read targets an unregistered resource URI."""
+
+
 class McpForbiddenError(RuntimeError):
     """Raised when a per-tool guard rejects a tool/resource/prompt call.
 
@@ -142,6 +146,12 @@ class McpDispatcher:
                 code=McpErrorCode.INVALID_PARAMS,
                 message=f"Invalid parameter: {exc.field}",
                 data={"field": exc.field, "message": exc.message},
+            )
+        except McpResourceNotFoundError as exc:
+            return build_error_response(
+                id=request.id,
+                code=McpErrorCode.RESOURCE_NOT_FOUND,
+                message=str(exc),
             )
         except McpForbiddenError as exc:
             return build_error_response(

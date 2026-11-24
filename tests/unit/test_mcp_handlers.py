@@ -35,6 +35,9 @@ class FakeServer:
     async def get_item(self, item_id: str) -> str:
         return f"Item {item_id}"
 
+    async def static_summary(self) -> str:
+        return "Static catalogue summary"
+
     async def returns_dict(self, key: str = "default") -> dict:
         return {"key": key, "value": 42}
 
@@ -280,6 +283,24 @@ class TestMakeResourcesListHandler:
         result = await handler(_req("resources/list"))
         assert result["resources"][0]["mimeType"] == "text/html"
 
+    async def test_title_and_annotations_are_included(self):
+        from lauren_mcp._types import ResourceAnnotations
+
+        meta = McpResourceMeta(
+            uri_template="catalogue://summary",
+            name="summary",
+            description="Catalogue summary",
+            mime_type="text/plain",
+            method_name="returns_list_result",
+            title="Catalogue summary",
+            annotations=ResourceAnnotations(audience=["user"], priority=0.8),
+        )
+        result = await make_resources_list_handler([meta])(_req("resources/list"))
+        resource = result["resources"][0]
+        assert resource["title"] == "Catalogue summary"
+        assert resource["annotations"]["audience"] == ["user"]
+        assert resource["annotations"]["priority"] == 0.8
+
     async def test_description_absent_when_none(self):
         resources = [_make_resource_meta("/items/{id}", "items", "get_item")]
         handler = make_resources_list_handler(resources)
@@ -316,10 +337,24 @@ class TestMakeResourcesReadHandler:
         result = await handler(_req("resources/read", {"uri": "/items/42"}))
         assert result["contents"][0]["text"] == "Item 42"
 
-    async def test_unknown_uri_raises_value_error(self):
+    async def test_unknown_uri_raises_resource_not_found_error(self):
+        from lauren_mcp._server._dispatcher import McpResourceNotFoundError
+
         handler = make_resources_read_handler(FAKE, [])
-        with pytest.raises(ValueError, match="No resource matches URI"):
+        with pytest.raises(McpResourceNotFoundError, match="No resource matches URI"):
             await handler(_req("resources/read", {"uri": "/unknown/path"}))
+
+    async def test_static_resource_uri_is_read_exactly(self):
+        meta = McpResourceMeta(
+            uri_template="catalogue://summary",
+            name="summary",
+            description="Catalogue summary",
+            mime_type="text/plain",
+            method_name="static_summary",
+        )
+        handler = make_resources_read_handler(FAKE, [meta])
+        result = await handler(_req("resources/read", {"uri": "catalogue://summary"}))
+        assert result["contents"][0]["uri"] == "catalogue://summary"
 
     async def test_multiple_resources_picks_correct_one_by_uri(self):
         resources = [

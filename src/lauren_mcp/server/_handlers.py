@@ -13,6 +13,7 @@ from typing import Any
 
 from lauren_mcp._server._binding import CURRENT_BINDING
 from lauren_mcp._server._context import LogLevelState, McpToolContext
+from lauren_mcp._server._dispatcher import McpResourceNotFoundError
 from lauren_mcp._types import (
     BlobResource,
     EmbeddedResource,
@@ -771,8 +772,6 @@ def make_tools_call_handler(
     get_tools = tools if callable(tools) else (lambda: tools)
 
     async def handler(req: JsonRpcRequest) -> dict[str, Any]:
-        from lauren_mcp._server._dispatcher import McpInvalidParamsError  # noqa: PLC0415
-
         params: dict[str, Any] = req.params if isinstance(req.params, dict) else {}
         name = params.get("name")
         arguments = params.get("arguments") or {}
@@ -1116,7 +1115,9 @@ def make_resources_read_handler(
     get_resources = resources if callable(resources) else (lambda: resources)
 
     async def handler(req: JsonRpcRequest) -> dict[str, Any]:
-        from lauren_mcp._server._dispatcher import McpInvalidParamsError  # noqa: PLC0415
+        from lauren_mcp._server._dispatcher import (  # noqa: PLC0415
+            McpInvalidParamsError,
+        )
 
         params: dict[str, Any] = req.params if isinstance(req.params, dict) else {}
         uri = params.get("uri", "")
@@ -1274,7 +1275,7 @@ def make_resources_read_handler(
                     except Exception:
                         _logger.exception("Depends cleanup raised; ignoring")
 
-        raise ValueError(f"No resource matches URI: {uri!r}")
+        raise McpResourceNotFoundError(f"No resource matches URI: {uri!r}")
 
     return handler
 
