@@ -180,7 +180,7 @@ suffix. `title` and `annotations` are included in `resources/list`.
 **Example**
 
 ```python
-from lauren_mcp import mcp_resource
+from lauren_mcp import mcp_resource, ResourceAnnotations
 
 @mcp_resource(
     "catalogue://summary",
