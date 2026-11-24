@@ -323,7 +323,7 @@ class TestSseOpenStream:
         ctrl._dispatcher = dispatcher
         ctrl._sessions = sessions
         ctrl._registry = registry
-    ctrl._subscriptions = ResourceSubscriptionManager()
+        ctrl._subscriptions = ResourceSubscriptionManager()
 
         mock_request = MagicMock(spec=LaurenRequest)
         mock_request.headers = {}
@@ -349,7 +349,7 @@ class TestSseOpenStream:
         ctrl._dispatcher = dispatcher
         ctrl._sessions = sessions
         ctrl._registry = registry
-    ctrl._subscriptions = ResourceSubscriptionManager()
+        ctrl._subscriptions = ResourceSubscriptionManager()
 
         mock_request = MagicMock()
         mock_request.headers = {}
@@ -421,7 +421,7 @@ class TestSseRequestDispatch:
         ctrl._dispatcher = dispatcher
         ctrl._sessions = sessions
         ctrl._registry = registry
-    ctrl._subscriptions = ResourceSubscriptionManager()
+        ctrl._subscriptions = ResourceSubscriptionManager()
 
         session_id = "rpc-dispatch-sess"
         queue = sessions.create(session_id)
