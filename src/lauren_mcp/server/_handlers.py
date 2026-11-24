@@ -685,9 +685,7 @@ def _validate_output(structured: Any, meta: McpToolMeta) -> None:
             f"Tool {meta.name!r} declared an outputSchema but returned no structuredContent"
         )
     if not isinstance(structured, dict):
-        raise ValueError(
-            f"Tool {meta.name!r} structuredContent must be a JSON object"
-        )
+        raise ValueError(f"Tool {meta.name!r} structuredContent must be a JSON object")
 
     from lauren_mcp._schema_validation import validate_output
 
