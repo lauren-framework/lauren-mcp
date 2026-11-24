@@ -19,15 +19,16 @@ SendFn = Callable[[str], Awaitable[None]]
 class ResourceSubscriptionManager:
     """SINGLETON that tracks per-URI subscriptions and broadcasts update events.
 
-    Session keys come from :class:`~lauren_mcp._server._registry.McpConnectionRegistry`
-    (WS transport) or the ``session_id`` allocated by
-    :class:`~lauren_mcp._server._session.SseSessionStore` /
-    :class:`~lauren_mcp._server._streamable.StreamableSessionStore`.
+    Session keys are opaque ``TransportBinding.subscription_key`` values:
+    connection-registry keys for WebSocket and protocol session IDs for HTTP.
     """
 
     def __init__(self) -> None:
         # uri -> {session_key -> send_fn}
         self._subscriptions: dict[str, dict[str, SendFn]] = {}
+        # URI-scoped locks preserve notification order for concurrent updates.
+        # The integer tracks callers waiting on or holding each lock.
+        self._notification_locks: dict[str, tuple[asyncio.Lock, int]] = {}
 
     def subscribe(self, uri: str, session_key: str, send_fn: SendFn) -> None:
         """Register *send_fn* as the delivery channel for *session_key* on *uri*."""
@@ -56,24 +57,45 @@ class ResourceSubscriptionManager:
         return dict(self._subscriptions.get(uri, {}))
 
     async def notify_updated(self, uri: str) -> None:
-        """Broadcast ``notifications/resources/updated`` to all subscribers of *uri*."""
-        subs = self._subscriptions.get(uri)
-        if not subs:
+        """Notify each active subscriber once, preserving same-URI call order.
+
+        Delivery is best-effort: failed sends are logged and are not retried.
+        Concurrent updates for the same URI are serialized; updates for
+        different URIs may be delivered concurrently.
+        """
+        if not self._subscriptions.get(uri):
             return
-        payload = json.dumps(
-            {
-                "jsonrpc": "2.0",
-                "method": "notifications/resources/updated",
-                "params": {"uri": uri},
-            }
-        )
-        results = await asyncio.gather(
-            *(fn(payload) for fn in list(subs.values())),
-            return_exceptions=True,
-        )
-        for result in results:
-            if isinstance(result, Exception):
-                _logger.warning("ResourceSubscription: send failed — %s", result)
+
+        lock, users = self._notification_locks.get(uri, (asyncio.Lock(), 0))
+        self._notification_locks[uri] = (lock, users + 1)
+        try:
+            async with lock:
+                # Take the snapshot after acquiring the lock so a completed
+                # unsubscribe is respected by updates waiting behind this one.
+                subscribers = list(self._subscriptions.get(uri, {}).values())
+                if not subscribers:
+                    return
+
+                payload = json.dumps(
+                    {
+                        "jsonrpc": "2.0",
+                        "method": "notifications/resources/updated",
+                        "params": {"uri": uri},
+                    }
+                )
+                results = await asyncio.gather(
+                    *(fn(payload) for fn in subscribers),
+                    return_exceptions=True,
+                )
+                for result in results:
+                    if isinstance(result, Exception):
+                        _logger.warning("ResourceSubscription: send failed — %s", result)
+        finally:
+            current_lock, current_users = self._notification_locks[uri]
+            if current_users == 1 and uri not in self._subscriptions:
+                del self._notification_locks[uri]
+            else:
+                self._notification_locks[uri] = (current_lock, current_users - 1)
 
     @property
     def subscription_count(self) -> int:

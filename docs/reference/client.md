@@ -230,6 +230,21 @@ async def read_resource(uri: str) -> Any
 ```
 Read a resource by exact URI (`resources/read`).
 
+```python
+async def subscribe_resource(uri: str) -> None
+async def unsubscribe_resource(uri: str) -> None
+```
+
+Subscribe or unsubscribe to `notifications/resources/updated` for a resource
+URI. A resource-updated notification is an invalidation signal; read the URI
+again to retrieve its current contents.
+
+Subscriptions are connection-scoped on WebSocket, session-scoped on legacy
+SSE, and MCP-session-scoped on Streamable HTTP. WebSocket and legacy SSE
+reconnects require a new subscription. A Streamable HTTP client can reconnect
+its GET event stream using the same session ID and retain subscriptions until
+it terminates that session with `DELETE`.
+
 ### Prompts
 
 ```python

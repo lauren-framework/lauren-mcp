@@ -20,6 +20,7 @@ from lauren_mcp._server._event_store import EventStore
 from lauren_mcp._server._handshake import negotiate_version
 from lauren_mcp._server._propagate import _apply_server_metadata
 from lauren_mcp._server._registry import McpConnectionRegistry
+from lauren_mcp._server._subscriptions import ResourceSubscriptionManager
 from lauren_mcp._server._transport_security import (
     McpTransportSecurityGuard,
     TransportSecuritySettings,
@@ -155,10 +156,12 @@ def mcp_streamable_http_controller(
             dispatcher: McpDispatcher,
             sessions: StreamableSessionStore,
             registry: McpConnectionRegistry,
+            subscriptions: ResourceSubscriptionManager,
         ) -> None:
             self._dispatcher = dispatcher
             self._sessions = sessions
             self._registry = registry
+            self._subscriptions = subscriptions
 
         # --------------------------------------------------------------
         # POST — the main MCP endpoint
@@ -381,6 +384,7 @@ def mcp_streamable_http_controller(
                 headers=request.headers,
                 execution_context=execution_context or ExecutionContext(request=request),
                 session_id=session.session_id,
+                subscription_key=session.session_id,
                 send_notification=_send_notification,
                 client_rpc=_client_rpc,
                 client_capabilities=session.client_capabilities,
@@ -536,6 +540,7 @@ def mcp_streamable_http_controller(
                     json.dumps({"error": f"Missing '{_SESSION_HEADER}' header"}), status=400
                 )
             self._sessions.remove(session_id)
+            self._subscriptions.unsubscribe_all(session_id)
             return Response(body=b"", status=204)
 
         # --------------------------------------------------------------

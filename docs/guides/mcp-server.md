@@ -614,6 +614,61 @@ async def bundle(self, name: str) -> ResourceResult:
 
 ---
 
+## Resource subscriptions
+
+A client can subscribe to a resource URI with `resources/subscribe`. When the
+resource changes, notify subscribers from your server logic with the injected
+`ResourceSubscriptionManager`:
+
+```python
+from lauren_mcp import mcp_server, mcp_tool
+from lauren_mcp._server._subscriptions import ResourceSubscriptionManager
+
+@mcp_server("/mcp")
+class CatalogueServer:
+    def __init__(self, subscriptions: ResourceSubscriptionManager) -> None:
+        self._subscriptions = subscriptions
+
+    @mcp_tool()
+    async def update_catalogue(self, item_id: str) -> str:
+        # Persist the update first.
+        await self._subscriptions.notify_updated("catalogue://items")
+        return f"Updated {item_id}"
+```
+
+Clients use `client.subscribe_resource(uri)` and
+`client.unsubscribe_resource(uri)`. The notification is
+`notifications/resources/updated` with the changed URI; it is an invalidation
+signal, so clients should call `resources/read` to fetch the latest contents.
+
+### Lifecycle by transport
+
+- **WebSocket:** a subscription belongs to one live connection. Disconnecting
+  removes all of that connection's subscriptions. A reconnect is a new
+  connection and must subscribe again.
+- **Legacy SSE:** a subscription belongs to the SSE session. Closing the SSE
+  stream removes its subscriptions and session. Reopening the stream creates
+  a new session; clients must subscribe again.
+- **Streamable HTTP:** a subscription belongs to the MCP session, not to an
+  individual GET event stream. A temporary GET-stream disconnect does not end
+  the session, so the client can reconnect with the same session ID and retain
+  subscriptions. Sending `DELETE` to the session endpoint terminates the
+  session and removes its subscriptions. The server does not currently impose
+  an idle-session TTL; clients should send `DELETE` when finished.
+- **Stateless HTTP and stdio:** resource subscriptions are unavailable because
+  these transports do not provide a persistent, connection-scoped push channel.
+
+### Delivery guarantees
+
+Delivery is best-effort and in-memory. Each call to `notify_updated(uri)`
+makes one send attempt per active subscriber. Failed sends are logged and are
+not retried; notifications are not persisted or replayed after a disconnect.
+Concurrent updates for the same URI are serialized in call order, while
+updates for different URIs may be delivered concurrently. Calling
+`notify_updated` repeatedly produces repeated notifications; the manager
+does not deduplicate or coalesce updates. Clients should treat notifications
+as invalidation hints rather than a durable event log.
+
 ## `@mcp_prompt`
 
 Registers a parameterised prompt template.  Parameter names and docstring `Args:` entries

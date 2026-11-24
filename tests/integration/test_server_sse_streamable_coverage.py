@@ -45,6 +45,7 @@ from lauren.testing import TestClient
 from lauren_mcp import McpServerModule, mcp_server, mcp_tool
 from lauren_mcp._server._dispatcher import McpDispatcher
 from lauren_mcp._server._registry import McpConnectionRegistry
+from lauren_mcp._server._subscriptions import ResourceSubscriptionManager
 from lauren_mcp._server._streamable import (
     StreamableSessionStore,
     mcp_streamable_http_controller,
@@ -140,6 +141,7 @@ def _make_raw_streamable_ctrl(path: str, **kwargs: Any) -> Any:
     ctrl._dispatcher = dispatcher
     ctrl._sessions = sessions
     ctrl._registry = registry
+    ctrl._subscriptions = ResourceSubscriptionManager()
     return ctrl
 
 
@@ -321,6 +323,7 @@ class TestSseOpenStream:
         ctrl._dispatcher = dispatcher
         ctrl._sessions = sessions
         ctrl._registry = registry
+        ctrl._subscriptions = ResourceSubscriptionManager()
 
         mock_request = MagicMock(spec=LaurenRequest)
         mock_request.headers = {}
@@ -346,6 +349,7 @@ class TestSseOpenStream:
         ctrl._dispatcher = dispatcher
         ctrl._sessions = sessions
         ctrl._registry = registry
+        ctrl._subscriptions = ResourceSubscriptionManager()
 
         mock_request = MagicMock()
         mock_request.headers = {}
@@ -417,6 +421,7 @@ class TestSseRequestDispatch:
         ctrl._dispatcher = dispatcher
         ctrl._sessions = sessions
         ctrl._registry = registry
+        ctrl._subscriptions = ResourceSubscriptionManager()
 
         session_id = "rpc-dispatch-sess"
         queue = sessions.create(session_id)
@@ -462,6 +467,7 @@ async def test_sse_handle_rpc_body_read_exception() -> None:
     ctrl._dispatcher = dispatcher
     ctrl._sessions = sessions
     ctrl._registry = registry
+    ctrl._subscriptions = ResourceSubscriptionManager()
 
     session_id = "body-err-sess"
     queue = sessions.create(session_id)
@@ -1523,3 +1529,77 @@ class TestFullStreamableIntegration:
         assert resp.status_code == 200
         # Body should contain the message event
         assert "data:" in resp.text
+
+
+
+async def test_sse_stream_disconnect_cleans_resource_subscriptions() -> None:
+    """Closing a legacy SSE stream removes subscriptions for its session."""
+    from lauren_mcp._server._session import SseSessionStore
+    from lauren_mcp._server._sse import mcp_http_sse_controller
+
+    ctrl_cls = mcp_http_sse_controller("/sse-sub-cleanup")
+    ctrl = object.__new__(ctrl_cls)
+    ctrl._dispatcher = McpDispatcher()
+    ctrl._sessions = SseSessionStore()
+    ctrl._registry = McpConnectionRegistry()
+    ctrl._subscriptions = ResourceSubscriptionManager()
+
+    result = await ctrl.open_stream(_make_mock_request())
+    session_id = next(iter(ctrl._sessions._sessions))
+
+    async def send(raw: str) -> None:
+        pass
+
+    ctrl._subscriptions.subscribe("file:///cleanup.txt", session_id, send)
+    assert ctrl._subscriptions.subscription_count == 1
+
+    generator = result._source.__aiter__()
+    await generator.__anext__()  # endpoint event
+    await generator.aclose()
+
+    assert ctrl._subscriptions.subscription_count == 0
+    assert ctrl._sessions.get(session_id) is None
+
+
+async def test_streamable_get_disconnect_preserves_session_subscriptions() -> None:
+    """A GET event-stream reconnect does not end its Streamable HTTP session."""
+    ctrl = _make_raw_streamable_ctrl("/streamable-sub-reconnect")
+    session = ctrl._sessions.create("2025-03-26")
+
+    async def send(raw: str) -> None:
+        pass
+
+    ctrl._subscriptions.subscribe("file:///persist.txt", session.session_id, send)
+    session.push_queue.put_nowait(None)
+
+    request = _make_mock_request(
+        headers={
+            "accept": "text/event-stream",
+            _SESSION_HEADER: session.session_id,
+        }
+    )
+    result = await ctrl.handle_get(request)
+    async for _event in result._source:
+        pass
+
+    assert ctrl._subscriptions.subscription_count == 1
+    assert ctrl._sessions.get(session.session_id) is session
+
+
+async def test_streamable_delete_cleans_resource_subscriptions() -> None:
+    """DELETE terminates the logical session and removes its subscriptions."""
+    ctrl = _make_raw_streamable_ctrl("/streamable-sub-delete")
+    session = ctrl._sessions.create("2025-03-26")
+
+    async def send(raw: str) -> None:
+        pass
+
+    ctrl._subscriptions.subscribe("file:///delete.txt", session.session_id, send)
+    assert ctrl._subscriptions.subscription_count == 1
+
+    request = _make_mock_request(headers={_SESSION_HEADER: session.session_id})
+    response = await ctrl.handle_delete(request)
+
+    assert response.status == 204
+    assert ctrl._subscriptions.subscription_count == 0
+    assert ctrl._sessions.get(session.session_id) is None

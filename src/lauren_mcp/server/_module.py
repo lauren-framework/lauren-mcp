@@ -487,10 +487,13 @@ class McpServerModule:
                     if not uri:
                         raise ValueError("resources/subscribe requires 'uri'")
                     binding = CURRENT_BINDING.get()
-                    session_key = (binding.session_id or "unknown") if binding else "unknown"
+                    session_key = binding.subscription_key if binding else None
                     send_notification = binding.send_notification if binding else None
-                    if send_notification is None:
-                        raise ValueError("resources/subscribe requires a push-capable transport")
+                    if send_notification is None or session_key is None:
+                        raise ValueError(
+                            "resources/subscribe requires a push-capable transport "
+                            "with a connection-scoped identity"
+                        )
                     # Wrap the dict-based send_notification into a raw-string SendFn
                     import json as _json  # noqa: PLC0415
 
@@ -512,7 +515,12 @@ class McpServerModule:
                     if not uri:
                         raise ValueError("resources/unsubscribe requires 'uri'")
                     binding = CURRENT_BINDING.get()
-                    session_key = (binding.session_id or "unknown") if binding else "unknown"
+                    session_key = binding.subscription_key if binding else None
+                    if session_key is None:
+                        raise ValueError(
+                            "resources/unsubscribe requires a push-capable transport "
+                            "with a connection-scoped identity"
+                        )
                     sub_mgr.unsubscribe(uri, session_key)
                     return {}
 
