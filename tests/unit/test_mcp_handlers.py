@@ -35,6 +35,9 @@ class FakeServer:
     async def get_item(self, item_id: str) -> str:
         return f"Item {item_id}"
 
+    async def static_summary(self) -> str:
+        return "Static catalogue summary"
+
     async def returns_dict(self, key: str = "default") -> dict:
         return {"key": key, "value": 42}
 
@@ -347,7 +350,7 @@ class TestMakeResourcesReadHandler:
             name="summary",
             description="Catalogue summary",
             mime_type="text/plain",
-            method_name="returns_list_result",
+            method_name="static_summary",
         )
         handler = make_resources_read_handler(FAKE, [meta])
         result = await handler(_req("resources/read", {"uri": "catalogue://summary"}))
