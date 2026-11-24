@@ -45,6 +45,7 @@ from lauren.testing import TestClient
 from lauren_mcp import McpServerModule, mcp_server, mcp_tool
 from lauren_mcp._server._dispatcher import McpDispatcher
 from lauren_mcp._server._registry import McpConnectionRegistry
+from lauren_mcp._server._subscriptions import ResourceSubscriptionManager
 from lauren_mcp._server._streamable import (
     StreamableSessionStore,
     mcp_streamable_http_controller,
@@ -140,6 +141,7 @@ def _make_raw_streamable_ctrl(path: str, **kwargs: Any) -> Any:
     ctrl._dispatcher = dispatcher
     ctrl._sessions = sessions
     ctrl._registry = registry
+    ctrl._subscriptions = ResourceSubscriptionManager()
     return ctrl
 
 
@@ -321,6 +323,7 @@ class TestSseOpenStream:
         ctrl._dispatcher = dispatcher
         ctrl._sessions = sessions
         ctrl._registry = registry
+    ctrl._subscriptions = ResourceSubscriptionManager()
 
         mock_request = MagicMock(spec=LaurenRequest)
         mock_request.headers = {}
@@ -346,6 +349,7 @@ class TestSseOpenStream:
         ctrl._dispatcher = dispatcher
         ctrl._sessions = sessions
         ctrl._registry = registry
+    ctrl._subscriptions = ResourceSubscriptionManager()
 
         mock_request = MagicMock()
         mock_request.headers = {}
@@ -417,6 +421,7 @@ class TestSseRequestDispatch:
         ctrl._dispatcher = dispatcher
         ctrl._sessions = sessions
         ctrl._registry = registry
+    ctrl._subscriptions = ResourceSubscriptionManager()
 
         session_id = "rpc-dispatch-sess"
         queue = sessions.create(session_id)
@@ -462,6 +467,7 @@ async def test_sse_handle_rpc_body_read_exception() -> None:
     ctrl._dispatcher = dispatcher
     ctrl._sessions = sessions
     ctrl._registry = registry
+    ctrl._subscriptions = ResourceSubscriptionManager()
 
     session_id = "body-err-sess"
     queue = sessions.create(session_id)
