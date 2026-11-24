@@ -778,9 +778,32 @@ class CreateMessageResult:
 
 
 class McpSamplingNotAvailable(RuntimeError):
-    """Raised when ``ctx.sample()`` is called but the connected client did not
-    advertise the ``sampling`` capability (or the transport cannot deliver
-    server-to-client requests)."""
+    """Raised when the client lacks sampling support or the transport cannot request it."""
+
+
+class McpSamplingPolicyError(PermissionError):
+    """Raised when an application sampling policy rejects a model request."""
+
+
+class McpElicitationPolicyError(PermissionError):
+    """Raised when an application elicitation policy rejects a user prompt."""
+
+
+class McpRootsNotAvailable(RuntimeError):
+    """Raised when the connected client does not expose MCP roots."""
+
+
+@dataclass(frozen=True)
+class SamplingEvent:
+    """Content-redacted lifecycle event emitted around a sampling request."""
+
+    status: Literal["requested", "completed", "rejected", "failed"]
+    max_tokens: int
+    message_count: int
+    tool_count: int
+    elapsed_ms: float
+    model: str | None = None
+    error_type: str | None = None
 
 
 def validate_sampling_messages(messages: list[SamplingMessage]) -> None:
@@ -817,15 +840,53 @@ def validate_sampling_messages(messages: list[SamplingMessage]) -> None:
 
 
 @dataclass
+class ElicitParams:
+    """Typed request payload for standard and URL elicitation."""
+
+    message: str
+    requested_schema: dict[str, Any] | None = None
+    requested_url: str | None = None
+    elicitation_id: str | None = None
+
+    def __post_init__(self) -> None:
+        if not self.message:
+            raise ValueError("ElicitParams.message must be non-empty")
+        if self.requested_schema is not None and self.requested_url is not None:
+            raise ValueError("Elicitation cannot request both a schema and a URL")
+        if self.requested_url is not None and not self.elicitation_id:
+            raise ValueError("URL elicitation requires an elicitation_id")
+
+    def to_dict(self) -> dict[str, Any]:
+        params: dict[str, Any] = {"message": self.message}
+        if self.requested_schema is not None:
+            params["requestedSchema"] = self.requested_schema
+        if self.requested_url is not None:
+            params["requestedUrl"] = self.requested_url
+        if self.elicitation_id is not None:
+            params["elicitationId"] = self.elicitation_id
+        return params
+
+
+@dataclass
 class ElicitResult:
     """Result of an ``elicitation/create`` request."""
 
     action: Literal["accept", "decline", "cancel"]
     content: dict[str, Any] | None = None
 
+    def __post_init__(self) -> None:
+        if self.action not in ("accept", "decline", "cancel"):
+            raise ValueError(f"Invalid elicitation action: {self.action!r}")
+        if self.content is not None and not isinstance(self.content, dict):
+            raise TypeError("ElicitResult.content must be a JSON object or None")
+
     @classmethod
     def from_dict(cls, obj: dict[str, Any]) -> ElicitResult:
-        return cls(action=obj.get("action", "cancel"), content=obj.get("content"))
+        if not isinstance(obj, dict):
+            raise TypeError("Elicitation response must be a JSON object")
+        if obj.get("action") not in ("accept", "decline", "cancel"):
+            raise ValueError("Elicitation response action must be accept, decline, or cancel")
+        return cls(action=obj["action"], content=obj.get("content"))
 
 
 class McpElicitationNotAvailable(RuntimeError):
@@ -875,11 +936,23 @@ class Root:
     uri: str
     name: str | None = None
 
+    def __post_init__(self) -> None:
+        if not isinstance(self.uri, str) or not self.uri:
+            raise ValueError("Root.uri must be a non-empty string")
+        if self.name is not None and not isinstance(self.name, str):
+            raise TypeError("Root.name must be a string or None")
+
     def to_dict(self) -> dict[str, Any]:
         obj: dict[str, Any] = {"uri": self.uri}
         if self.name is not None:
             obj["name"] = self.name
         return obj
+
+    @classmethod
+    def from_dict(cls, obj: dict[str, Any]) -> Root:
+        if not isinstance(obj, dict):
+            raise TypeError("Root must be a JSON object")
+        return cls(uri=obj.get("uri", ""), name=obj.get("name"))
 
 
 # ---------------------------------------------------------------------------
@@ -1045,9 +1118,14 @@ __all__ = [
     "CreateMessageParams",
     "CreateMessageResult",
     "McpSamplingNotAvailable",
+    "McpSamplingPolicyError",
+    "SamplingEvent",
     "validate_sampling_messages",
+    "ElicitParams",
     "ElicitResult",
     "McpElicitationNotAvailable",
+    "McpElicitationPolicyError",
+    "McpRootsNotAvailable",
     "UrlElicitResult",
     "McpUrlElicitationNotAvailable",
     "Root",

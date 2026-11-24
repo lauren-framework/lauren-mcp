@@ -205,7 +205,8 @@ client = McpServer.ws(
 ### Dynamic registration
 
 Handlers registered after `connect()` can be removed by calling the returned
-unsubscribe function:
+unsubscribe function. The roots-change callback is invoked when the peer sends a
+`notifications/roots/list_changed` notification:
 
 ```python
 unsubscribe = client.on_progress(lambda p: ...)
@@ -213,6 +214,7 @@ unsubscribe()  # remove this handler
 
 client.on_log(my_log_handler)
 client.on_list_changed(my_cache_invalidator)
+client.on_roots_changed(refresh_roots_cache)
 ```
 
 All handler callbacks may be sync or async. Async callbacks are scheduled as
@@ -223,7 +225,9 @@ background tasks; exceptions are logged and swallowed.
 ## Roots (filesystem context for servers)
 
 Roots advertise the filesystem locations relevant to a client session. Some
-server tools use them to scope searches or read operations.
+server tools use them as context for workspace-aware operations. They are not
+filesystem grants: servers must independently authorize every operation, and
+clients should expose only the roots relevant to the current session.
 
 ### Static roots
 
@@ -242,12 +246,19 @@ Pass a callable (sync or async). Call `notify_roots_changed()` when the set
 changes so the server knows to re-fetch:
 
 ```python
+# Keep an explicit allow-list; do not publish the entire host filesystem.
+allowed_roots = [Root("file:///srv/app/workspaces/acme", name="Acme workspace")]
+
 async def get_roots():
-    return [Root(f"file://{path}") for path in await discover_paths()]
+    return list(allowed_roots)
 
 client = McpServer.ws(url, roots=get_roots)
-# ... later, after paths change:
+# ... after the authorized workspace set changes:
+allowed_roots[:] = [Root("file:///srv/app/workspaces/contoso", name="Contoso")]
 await client.notify_roots_changed()
+
+# Optional callback for a roots-change notification received from the peer.
+unsubscribe = client.on_roots_changed(refresh_roots_cache)
 ```
 
 ---

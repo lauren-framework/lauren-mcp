@@ -160,6 +160,25 @@ McpServerModule.for_root(
 
 ---
 
+## Client-provided roots
+
+When the connected client advertises `roots`, tools can call
+`await ctx.list_roots()` to obtain typed `Root` values. Roots are untrusted
+context only; they do not grant filesystem access. Apply normal path validation,
+tenant isolation and authorization before reading or writing anything.
+
+```python
+@mcp_tool()
+async def list_workspace_hints(self, ctx: McpToolContext) -> list[dict]:
+    roots = await ctx.list_roots()
+    return [{"uri": root.uri, "name": root.name} for root in roots]
+```
+
+The method raises `McpRootsNotAvailable` when the peer does not advertise roots
+or the transport cannot carry server-initiated requests.
+
+---
+
 ## `@mcp_tool`
 
 Marks an `async` method as an MCP tool.  JSON Schema is generated from type

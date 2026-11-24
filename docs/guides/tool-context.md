@@ -153,11 +153,35 @@ async def ingest(self, file_path: str, ctx: McpToolContext) -> str:
 
 ---
 
+## Roots from the connected client
+
+When the peer advertises the MCP `roots` capability, `ctx.list_roots()` retrieves
+its current roots as typed `Root` values. Roots are untrusted context, not filesystem
+permissions. Resolve paths, enforce tenant boundaries, and authorize every operation
+independently; never treat a returned URI as permission to read or write that location.
+
+```python
+roots = await ctx.list_roots()
+for root in roots:
+    # Use only as a hint for an independently-authorized workspace lookup.
+    await audit_workspace_hint(root.uri, root.name)
+```
+
+It raises `McpRootsNotAvailable` if the transport cannot make server-to-client
+requests or the client did not advertise roots.
+
+---
+
 ## Logging to client
 
 `McpToolContext` provides eight logging methods that map to MCP log levels. Log
 messages are delivered to the client as `notifications/message` JSON-RPC
-notifications in real time.
+notifications in real time. Each MCP severity is also mapped to Python logging
+(`debug` 10, `info` 20, `notice` 25, `warning` 30, `error` 40,
+`critical` 50, `alert` 60, `emergency` 70). The original protocol severity
+remains available as the log record's `mcp_level` attribute. If the active
+transport has no client-notification channel, the message is still written to
+Python logging and no MCP notification is attempted.
 
 ```python
 await ctx.debug(msg, *args)
@@ -222,6 +246,39 @@ result = await ctx.sample(
 # result: CreateMessageResult
 ```
 
+### Sampling policy and observability
+
+Applications can pass a synchronous or asynchronous `policy` to inspect the
+typed `CreateMessageParams` before the request is sent. Reject by returning
+`False` or raising an application exception. Use it to cap `maxTokens`, allow-list
+model preferences, and inspect permitted message content.
+
+An optional `response_policy(result)` validates the typed `CreateMessageResult`
+before it is returned to the tool. An optional `observer` receives `SamplingEvent`
+values for requested, completed, rejected, and failed outcomes. Events contain counts, token limits, elapsed time,
+model name and error type — **not prompt or response content**. Sampling is always
+mediated by the connected MCP client; Lauren does not call a model provider directly.
+
+```python
+def allow_sampling(request) -> bool:
+    return request.maxTokens <= 512 and approved_messages(request.messages)
+
+async def record_sampling(event):
+    metrics.increment("mcp.sampling", tags={"status": event.status})
+
+def allow_response(result) -> bool:
+    return result.model in APPROVED_MODELS
+
+result = await ctx.sample(
+    "Summarise this document",
+    max_tokens=512,
+    policy=allow_sampling,
+    response_policy=allow_response,
+    observer=record_sampling,
+    timeout=30,
+)
+```
+
 ### Basic sampling
 
 ```python
@@ -241,6 +298,30 @@ async def summarise(self, text: str, ctx: McpToolContext) -> str:
     )
     # result.content is a TextContent | ImageContent
     return result.content.text
+```
+
+### Elicitation policies, validation and privacy
+
+`ctx.elicit()` accepts an optional `policy(message, schema)` callback, a
+`validator(content)` callback, and a timeout. The generated JSON Schema is
+validated against accepted response content before the application validator runs.
+Decline and cancel are returned as typed `ElicitResult.action` values; malformed
+actions and malformed accepted content raise validation errors.
+
+Use elicitation only for the minimum non-sensitive information needed to complete
+the task. Do not request passwords, API keys, access tokens, recovery codes, or
+other credentials. Use a dedicated authentication or secret-management flow instead.
+
+```python
+result = await ctx.elicit(
+    "Which report format should I use?",
+    Literal["pdf", "csv"],
+    policy=lambda message, schema: "credential" not in message.lower(),
+    validator=lambda content: content.get("value") in {"pdf", "csv"},
+    timeout=60,
+)
+if result.action != "accept":
+    return "No format selected."
 ```
 
 ### Agentic loops

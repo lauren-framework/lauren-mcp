@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import asyncio
 import enum
+import inspect
 import json
 import logging
 import typing
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
@@ -15,9 +17,15 @@ from lauren_mcp._types import (
     ClientCapabilities,
     CreateMessageParams,
     CreateMessageResult,
+    ElicitParams,
     ElicitResult,
     McpElicitationNotAvailable,
+    McpElicitationPolicyError,
+    McpRootsNotAvailable,
     McpSamplingNotAvailable,
+    McpSamplingPolicyError,
+    Root,
+    SamplingEvent,
     SamplingMessage,
     TextContent,
 )
@@ -38,6 +46,18 @@ _LEVEL_RANK: dict[str, int] = {
 
 #: Frozenset of all valid MCP log level strings (all 8 syslog-aligned levels).
 VALID_LOG_LEVELS: frozenset[str] = frozenset(_LEVEL_RANK.keys())
+
+# Preserve MCP's eight-level severity while mapping records into Python logging.
+_MCP_TO_PYTHON_LEVEL: dict[str, int] = {
+    "debug": logging.DEBUG,
+    "info": logging.INFO,
+    "notice": 25,
+    "warning": logging.WARNING,
+    "error": logging.ERROR,
+    "critical": logging.CRITICAL,
+    "alert": 60,
+    "emergency": 70,
+}
 
 
 class McpSamplingLoopError(RuntimeError):
@@ -377,6 +397,29 @@ class McpToolContext:
         )
 
     # ------------------------------------------------------------------
+    # Roots
+    # ------------------------------------------------------------------
+
+    async def list_roots(self) -> list[Root]:
+        """Fetch the roots exposed by the connected MCP client.
+
+        Roots are untrusted context supplied by the peer. They are not
+        filesystem grants; applications must still enforce path authorization.
+        """
+        if self._client_rpc is None:
+            raise McpRootsNotAvailable("This transport cannot request client roots")
+        caps = self._client_capabilities
+        if caps is None or caps.roots is None:
+            raise McpRootsNotAvailable(
+                "The connected client did not advertise the 'roots' capability"
+            )
+        raw = await self._client_rpc("roots/list", {})
+        roots = raw.get("roots") if isinstance(raw, dict) else None
+        if not isinstance(roots, list):
+            raise ValueError("roots/list response must contain a roots array")
+        return [Root.from_dict(item) for item in roots]
+
+    # ------------------------------------------------------------------
     # Logging
     # ------------------------------------------------------------------
 
@@ -386,9 +429,16 @@ class McpToolContext:
         Dropped silently when below the server's minimum level or when the
         transport has no notification channel.
         """
-        if self._send_notification is None:
-            return
+        if level not in _MCP_TO_PYTHON_LEVEL:
+            raise ValueError(f"Unsupported MCP log level: {level!r}")
         if self._log_level_state is not None and not self._log_level_state.allows(level):
+            return
+        _logger.log(
+            _MCP_TO_PYTHON_LEVEL[level],
+            message,
+            extra={"mcp_level": level, "mcp_logger": self.tool_name, "mcp_data": data or {}},
+        )
+        if self._send_notification is None:
             return
         payload: dict[str, Any] = {"message": message}
         if data:
@@ -434,6 +484,9 @@ class McpToolContext:
     # Sampling
     # ------------------------------------------------------------------
 
+    # Policies are supplied per call so each tool can enforce its own trust boundary.
+    # The response policy is evaluated before returning the client's completion.
+
     async def sample(
         self,
         messages: str | list[Any],  # list[SamplingMessage]
@@ -449,6 +502,10 @@ class McpToolContext:
         tools: list[Any] | None = None,
         tool_choice: dict[str, Any] | None = None,
         max_tool_iterations: int = 10,
+        policy: Callable[[CreateMessageParams], bool | Awaitable[bool]] | None = None,
+        observer: Callable[[SamplingEvent], Any] | None = None,
+        response_policy: Callable[[CreateMessageResult], bool | Awaitable[bool]] | None = None,
+        timeout: float | None = None,
     ) -> Any:
         """Ask the connected MCP client to run an LLM call on our behalf.
 
@@ -473,8 +530,17 @@ class McpToolContext:
         tool_choice:
             Forwarded to the client as-is.  ``None`` omits the field (client default).
         max_tool_iterations:
-            Advisory upper bound on agentic loop iterations passed to the client
-            in ``CreateMessageParams.metadata["max_tool_iterations"]``.  Default: 10.
+            Advisory upper bound on agentic loop iterations passed to the client.
+        policy:
+            Optional sync/async request policy over typed CreateMessageParams.
+            Return False to reject before sending the request.
+        response_policy:
+            Optional sync/async validator over the typed CreateMessageResult.
+            Return False to reject the response before returning it to the tool.
+        observer:
+            Optional callback receiving content-redacted SamplingEvent lifecycle data.
+        timeout:
+            Optional timeout in seconds for the client RPC.
 
         Raises
         ------
@@ -528,8 +594,63 @@ class McpToolContext:
             params_dict["tools"] = coerced_tools
         if tool_choice is not None:
             params_dict["toolChoice"] = tool_choice
-        raw = await self._client_rpc("sampling/createMessage", params_dict)
-        result = CreateMessageResult.from_dict(raw if isinstance(raw, dict) else {})
+        started = asyncio.get_running_loop().time()
+        event_base = {
+            "max_tokens": max_tokens,
+            "message_count": len(messages),
+            "tool_count": len(coerced_tools or []),
+        }
+
+        async def emit(
+            status: Literal["requested", "completed", "rejected", "failed"],
+            *,
+            model: str | None = None,
+            error: Exception | None = None,
+        ) -> None:
+            if observer is None:
+                return
+            event = SamplingEvent(
+                status=status,
+                **event_base,
+                elapsed_ms=(asyncio.get_running_loop().time() - started) * 1000,
+                model=model,
+                error_type=type(error).__name__ if error else None,
+            )
+            try:
+                observed = observer(event)
+                if inspect.isawaitable(observed):
+                    await observed
+            except Exception:
+                _logger.exception("MCP sampling observer failed")
+
+        try:
+            if policy is not None:
+                allowed = policy(params)
+                if inspect.isawaitable(allowed):
+                    allowed = await allowed
+                if allowed is False:
+                    raise McpSamplingPolicyError("Sampling request rejected by application policy")
+            await emit("requested")
+            request = self._client_rpc("sampling/createMessage", params_dict)
+            raw = (
+                await asyncio.wait_for(request, timeout=timeout)
+                if timeout is not None
+                else await request
+            )
+            result = CreateMessageResult.from_dict(raw if isinstance(raw, dict) else {})
+            if response_policy is not None:
+                accepted = response_policy(result)
+                if inspect.isawaitable(accepted):
+                    accepted = await accepted
+                if accepted is False:
+                    raise McpSamplingPolicyError("Sampling response rejected by application policy")
+            await emit("completed", model=result.model)
+        except McpSamplingPolicyError as exc:
+            await emit("rejected", error=exc)
+            raise
+        except Exception as exc:
+            await emit("failed", error=exc)
+            raise
         if result_type is None:
             return result
         try:
@@ -548,6 +669,10 @@ class McpToolContext:
         self,
         message: str,
         response_type: Any = None,
+        *,
+        policy: Callable[[str, dict[str, Any] | None], bool | Awaitable[bool]] | None = None,
+        validator: Callable[[dict[str, Any]], Any] | None = None,
+        timeout: float | None = None,
     ) -> ElicitResult:
         """Ask the connected MCP client to prompt its user for input.
 
@@ -558,7 +683,9 @@ class McpToolContext:
 
         Raises :class:`McpElicitationNotAvailable` when the client did not
         advertise the ``elicitation`` capability or the transport cannot carry
-        server-to-client requests (legacy SSE).
+        server-to-client requests (legacy SSE). The optional policy runs before the
+        request; accepted content is checked against the generated JSON Schema and
+        then passed to the optional application validator. *timeout* bounds the RPC.
         """
         if self._client_rpc is None:
             raise McpElicitationNotAvailable(
@@ -570,12 +697,34 @@ class McpToolContext:
                 "The connected client did not advertise the 'elicitation' capability"
             )
 
-        params: dict[str, Any] = {"message": message}
         schema = build_elicitation_schema(response_type)
-        if schema is not None:
-            params["requestedSchema"] = schema
-        raw = await self._client_rpc("elicitation/create", params)
-        return ElicitResult.from_dict(raw if isinstance(raw, dict) else {})
+        params = ElicitParams(message=message, requested_schema=schema).to_dict()
+        if policy is not None:
+            allowed = policy(message, schema)
+            if inspect.isawaitable(allowed):
+                allowed = await allowed
+            if allowed is False:
+                raise McpElicitationPolicyError("Elicitation rejected by application policy")
+        request = self._client_rpc("elicitation/create", params)
+        raw = (
+            await asyncio.wait_for(request, timeout=timeout)
+            if timeout is not None
+            else await request
+        )
+        result = ElicitResult.from_dict(raw)
+        if result.action == "accept" and schema is not None:
+            if result.content is None:
+                raise ValueError("Accepted elicitation response is missing its requested content")
+            from jsonschema import validate  # noqa: PLC0415
+
+            validate(instance=result.content, schema=schema)
+        if result.action == "accept" and result.content is not None and validator is not None:
+            checked = validator(result.content)
+            if inspect.isawaitable(checked):
+                checked = await checked
+            if checked is False:
+                raise ValueError("Elicitation response rejected by application validator")
+        return result
 
     async def elicit_url(
         self,
@@ -640,10 +789,10 @@ class McpToolContext:
 
         eid = elicitation_id if elicitation_id is not None else uuid.uuid4().hex
 
-        rpc_params: dict[str, Any] = {
-            "message": message,
-            "requestedUrl": url,
-            "elicitationId": eid,
-        }
+        rpc_params = ElicitParams(
+            message=message,
+            requested_url=url,
+            elicitation_id=eid,
+        ).to_dict()
         raw = await self._client_rpc("elicitation/create", rpc_params)
         return UrlElicitResult.from_dict(raw if isinstance(raw, dict) else {})

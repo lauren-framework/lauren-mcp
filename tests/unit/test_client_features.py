@@ -65,6 +65,15 @@ class TestNotificationHandlers:
         )
         assert seen[0]["level"] == "info"
 
+    def test_roots_changed_routing(self):
+        seen: list[str] = []
+        client = FakeClient()
+        unsubscribe = client.on_roots_changed(lambda: seen.append("changed"))
+        client._route_notification(JsonRpcNotification(method="notifications/roots/list_changed"))
+        unsubscribe()
+        client._route_notification(JsonRpcNotification(method="notifications/roots/list_changed"))
+        assert seen == ["changed"]
+
     def test_list_changed_routing(self):
         seen: list[str] = []
         client = FakeClient(list_changed_handler=seen.append)

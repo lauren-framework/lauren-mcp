@@ -9,7 +9,7 @@ from ._client._factory import McpServer
 from ._client._protocol import McpClientProtocol
 from ._client._stdio import McpCallError
 from ._mcp_version import LATEST, STABLE, SUPPORTED
-from ._server._context import McpToolContext
+from ._server._context import LogLevel, McpToolContext
 from ._server._dispatcher import McpForbiddenError
 from ._server._exec_context import McpExecutionContext
 from ._types import (
@@ -20,6 +20,7 @@ from ._types import (
     CompletionResult,
     CreateMessageParams,
     CreateMessageResult,
+    ElicitParams,
     ElicitResult,
     EmbeddedResource,
     GetPromptParams,
@@ -34,9 +35,12 @@ from ._types import (
     JsonRpcRequest,
     JsonRpcResponse,
     McpElicitationNotAvailable,
+    McpElicitationPolicyError,
     McpErrorCode,
     McpParseError,
+    McpRootsNotAvailable,
     McpSamplingNotAvailable,
+    McpSamplingPolicyError,
     McpUrlElicitationNotAvailable,
     PromptArgument,
     PromptMessage,
@@ -50,6 +54,7 @@ from ._types import (
     ResourceSchema,
     Role,
     Root,
+    SamplingEvent,
     SamplingMessage,
     ServerCapabilities,
     TextContent,
@@ -93,6 +98,7 @@ __all__ = [
     "McpServerConfig",
     "McpToolBridge",
     "McpToolContext",
+    "LogLevel",
     "McpExecutionContext",
     "McpForbiddenError",
     "McpCallHandler",
@@ -136,6 +142,11 @@ __all__ = [
     "CreateMessageParams",
     "CreateMessageResult",
     "McpSamplingNotAvailable",
+    "McpSamplingPolicyError",
+    "McpElicitationPolicyError",
+    "McpRootsNotAvailable",
+    "SamplingEvent",
+    "ElicitParams",
     "ElicitResult",
     "McpElicitationNotAvailable",
     "Root",
