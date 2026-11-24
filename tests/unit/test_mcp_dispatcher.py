@@ -278,12 +278,15 @@ class TestConcurrentDispatches:
 class TestResourceNotFound:
     @pytest.mark.asyncio
     async def test_unknown_resource_uri_uses_mcp_resource_not_found_code(self):
-        from lauren_mcp._server._dispatcher import McpResourceNotFoundError
+        from lauren_mcp.server._handlers import make_resources_read_handler
 
         dispatcher = make_dispatcher()
+        resource_handler = make_resources_read_handler(object(), [])
 
         async def read_resource(params):
-            raise McpResourceNotFoundError("No resource matches URI: 'catalogue://missing'")
+            return await resource_handler(
+                JsonRpcRequest(method="resources/read", id=44, params=params)
+            )
 
         dispatcher.register("resources/read", read_resource)
         result = await dispatcher.dispatch(
