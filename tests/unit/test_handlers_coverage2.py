@@ -139,7 +139,7 @@ class TestValidateOutput:
             "t",
             output_schema={"type": "object", "required": ["x", "y"], "properties": {}},
         )
-        with pytest.raises(ValueError, match="missing required key"):
+        with pytest.raises(ValueError, match="does not satisfy"):
             _validate_output({"x": 1}, meta)  # missing "y"
 
     def test_passes_when_all_required_keys_present(self):
