@@ -221,9 +221,9 @@ class TestMcpErrorCode:
     def test_content_too_large_value(self):
         assert McpErrorCode.CONTENT_TOO_LARGE == -32801
 
-    def test_all_seven_codes_defined(self):
+    def test_all_eight_codes_defined(self):
         codes = list(McpErrorCode)
-        assert len(codes) == 7
+        assert len(codes) == 8
 
 
 # ---------------------------------------------------------------------------
