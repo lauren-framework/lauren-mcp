@@ -4,12 +4,13 @@ from __future__ import annotations
 
 import asyncio
 import enum
+import inspect
 import json
 import logging
 import typing
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from typing import Any, Literal
-from collections.abc import Awaitable, Callable
 
 from lauren_mcp._server._binding import ClientRpc, SendNotification
 from lauren_mcp._types import (
@@ -408,7 +409,9 @@ class McpToolContext:
             raise McpRootsNotAvailable("This transport cannot request client roots")
         caps = self._client_capabilities
         if caps is None or caps.roots is None:
-            raise McpRootsNotAvailable("The connected client did not advertise the 'roots' capability")
+            raise McpRootsNotAvailable(
+                "The connected client did not advertise the 'roots' capability"
+            )
         raw = await self._client_rpc("roots/list", {})
         roots = raw.get("roots") if isinstance(raw, dict) else None
         if not isinstance(roots, list):
@@ -584,7 +587,12 @@ class McpToolContext:
             "tool_count": len(coerced_tools or []),
         }
 
-        async def emit(status: str, *, model: str | None = None, error: Exception | None = None) -> None:
+        async def emit(
+            status: Literal["requested", "completed", "rejected", "failed"],
+            *,
+            model: str | None = None,
+            error: Exception | None = None,
+        ) -> None:
             if observer is None:
                 return
             event = SamplingEvent(
@@ -595,7 +603,7 @@ class McpToolContext:
             )
             try:
                 observed = observer(event)
-                if asyncio.iscoroutine(observed):
+                if inspect.isawaitable(observed):
                     await observed
             except Exception:
                 _logger.exception("MCP sampling observer failed")
@@ -603,13 +611,17 @@ class McpToolContext:
         try:
             if policy is not None:
                 allowed = policy(params)
-                if asyncio.iscoroutine(allowed):
+                if inspect.isawaitable(allowed):
                     allowed = await allowed
                 if allowed is False:
                     raise McpSamplingPolicyError("Sampling request rejected by application policy")
             await emit("requested")
             request = self._client_rpc("sampling/createMessage", params_dict)
-            raw = await asyncio.wait_for(request, timeout=timeout) if timeout is not None else await request
+            raw = (
+                await asyncio.wait_for(request, timeout=timeout)
+                if timeout is not None
+                else await request
+            )
             result = CreateMessageResult.from_dict(raw if isinstance(raw, dict) else {})
             await emit("completed", model=result.model)
         except McpSamplingPolicyError as exc:
@@ -673,15 +685,21 @@ class McpToolContext:
             if allowed is False:
                 raise McpElicitationPolicyError("Elicitation rejected by application policy")
         request = self._client_rpc("elicitation/create", params)
-        raw = await asyncio.wait_for(request, timeout=timeout) if timeout is not None else await request
+        raw = (
+            await asyncio.wait_for(request, timeout=timeout)
+            if timeout is not None
+            else await request
+        )
         result = ElicitResult.from_dict(raw)
-        if result.action == "accept" and result.content is not None and schema is not None:
+        if result.action == "accept" and schema is not None:
+            if result.content is None:
+                raise ValueError("Accepted elicitation response is missing its requested content")
             from jsonschema import validate  # noqa: PLC0415
 
             validate(instance=result.content, schema=schema)
         if result.action == "accept" and result.content is not None and validator is not None:
             checked = validator(result.content)
-            if asyncio.iscoroutine(checked):
+            if inspect.isawaitable(checked):
                 checked = await checked
             if checked is False:
                 raise ValueError("Elicitation response rejected by application validator")
