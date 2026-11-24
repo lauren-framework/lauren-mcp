@@ -225,7 +225,9 @@ background tasks; exceptions are logged and swallowed.
 ## Roots (filesystem context for servers)
 
 Roots advertise the filesystem locations relevant to a client session. Some
-server tools use them to scope searches or read operations.
+server tools use them as context for workspace-aware operations. They are not
+filesystem grants: servers must independently authorize every operation, and
+clients should expose only the roots relevant to the current session.
 
 ### Static roots
 
