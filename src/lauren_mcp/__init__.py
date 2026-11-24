@@ -9,7 +9,7 @@ from ._client._factory import McpServer
 from ._client._protocol import McpClientProtocol
 from ._client._stdio import McpCallError
 from ._mcp_version import LATEST, STABLE, SUPPORTED
-from ._server._context import McpToolContext
+from ._server._context import LogLevel, McpToolContext
 from ._server._dispatcher import McpForbiddenError
 from ._server._exec_context import McpExecutionContext
 from ._types import (
@@ -97,6 +97,7 @@ __all__ = [
     "McpServerConfig",
     "McpToolBridge",
     "McpToolContext",
+    "LogLevel",
     "McpExecutionContext",
     "McpForbiddenError",
     "McpCallHandler",
