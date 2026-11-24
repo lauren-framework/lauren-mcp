@@ -128,10 +128,10 @@ class TestValidateOutput:
         # Should not raise
         _validate_output({"x": 1}, meta)
 
-    def test_none_structured_no_validation(self):
-        meta = _make_tool_meta("t", "t", output_schema={"required": ["x"]})
-        # None structured content → no validation
-        _validate_output(None, meta)
+    def test_none_structured_content_fails_when_schema_declared(self):
+        meta = _make_tool_meta("t", "t", output_schema={"type": "object", "required": ["x"]})
+        with pytest.raises(ValueError, match="no structuredContent"):
+            _validate_output(None, meta)
 
     def test_raises_on_missing_required_key(self):
         meta = _make_tool_meta(
