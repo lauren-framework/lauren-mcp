@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Added — MCP client/server capabilities
+
+- Typed `McpToolContext.list_roots()`, roots-change callback registration, and explicit
+  trust-boundary guidance for client-provided filesystem roots.
+- Python logging-level mapping for all eight MCP log severities while retaining the
+  original protocol level on each log record.
+- Elicitation policy and response-validation hooks, strict typed outcomes, and timeouts.
+- Sampling request policy hooks, content-redacted lifecycle events, and request timeouts.
+
 ### Improved — Tool contracts
 
 - Validate complete structured tool results against declared JSON Schemas, including
