@@ -771,7 +771,7 @@ def make_tools_call_handler(
     get_tools = tools if callable(tools) else (lambda: tools)
 
     async def handler(req: JsonRpcRequest) -> dict[str, Any]:
-        from lauren_mcp._server._dispatcher import McpInvalidParamsError  # noqa: PLC0415
+        from lauren_mcp._server._dispatcher import McpInvalidParamsError, McpResourceNotFoundError  # noqa: PLC0415
 
         params: dict[str, Any] = req.params if isinstance(req.params, dict) else {}
         name = params.get("name")
@@ -1274,7 +1274,7 @@ def make_resources_read_handler(
                     except Exception:
                         _logger.exception("Depends cleanup raised; ignoring")
 
-        raise ValueError(f"No resource matches URI: {uri!r}")
+        raise McpResourceNotFoundError(f"No resource matches URI: {uri!r}")
 
     return handler
 
