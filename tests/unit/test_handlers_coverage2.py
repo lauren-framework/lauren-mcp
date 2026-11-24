@@ -128,10 +128,10 @@ class TestValidateOutput:
         # Should not raise
         _validate_output({"x": 1}, meta)
 
-    def test_none_structured_no_validation(self):
-        meta = _make_tool_meta("t", "t", output_schema={"required": ["x"]})
-        # None structured content → no validation
-        _validate_output(None, meta)
+    def test_none_structured_content_fails_when_schema_declared(self):
+        meta = _make_tool_meta("t", "t", output_schema={"type": "object", "required": ["x"]})
+        with pytest.raises(ValueError, match="no structuredContent"):
+            _validate_output(None, meta)
 
     def test_raises_on_missing_required_key(self):
         meta = _make_tool_meta(
@@ -139,7 +139,7 @@ class TestValidateOutput:
             "t",
             output_schema={"type": "object", "required": ["x", "y"], "properties": {}},
         )
-        with pytest.raises(ValueError, match="missing required key"):
+        with pytest.raises(ValueError, match="does not satisfy"):
             _validate_output({"x": 1}, meta)  # missing "y"
 
     def test_passes_when_all_required_keys_present(self):
@@ -508,5 +508,5 @@ class TestStructuredOutputValidation:
         )
         server = FakeStructuredServer()
         handler = make_tools_call_handler(server, [meta])
-        with pytest.raises(ValueError, match="missing required key"):
+        with pytest.raises(ValueError, match="does not satisfy"):
             await handler(_req("tools/call", {"name": "missing_key_tool", "arguments": {}}))

@@ -240,6 +240,28 @@ ToolAnnotations(
 Defaults follow the MCP specification's conservative assumptions: unknown tools are
 presumed destructive and open-world.
 
+!!! warning "Annotations are hints, not access control"
+    These values help clients and agents reason about tool behaviour. They do not
+    enforce permissions, prevent side effects, or replace server-side authorization,
+    confirmation flows, or guards. A tool marked `readOnlyHint=True` can still mutate
+    state if its implementation does so.
+
+Use explicit metadata for destructive operations as well:
+
+```python
+@mcp_tool(
+    annotations=ToolAnnotations(
+        readOnlyHint=False,
+        destructiveHint=True,
+        idempotentHint=False,
+        openWorldHint=False,
+    ),
+)
+async def delete_item(self, item_id: str) -> dict:
+    """Permanently delete an item."""
+    ...
+```
+
 ### Return value coercion
 
 The handler normalises any return value into the `tools/call` wire format automatically:
@@ -273,8 +295,15 @@ async def process(self, data: str) -> ToolOutput:
 
 ### `output_schema` validation
 
-When `output_schema` is set, `for_root` advertises `outputSchema` in `tools/list` and
-the handler validates required keys before returning.  The schema may be:
+When `output_schema` is set, `for_root` advertises `outputSchema` in `tools/list`.
+The framework validates the complete structured result against the declared JSON
+Schema (including nested properties, types, required keys, arrays, and supported
+format assertions) before returning it. The schema is checked when the decorator is
+applied, so malformed schemas fail during application setup. A tool with an
+`output_schema` must return a structured JSON object; plain text without
+`structuredContent` is a validation failure.
+
+The schema may be:
 
 - A plain JSON Schema `dict`
 - A Pydantic `BaseModel` class — `model_json_schema()` is called automatically

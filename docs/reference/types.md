@@ -298,7 +298,8 @@ class ToolAnnotations:
     openWorldHint: bool = True      # MCP spec conservative default
 ```
 
-Behavioural hints transmitted to clients in `tools/list`.  See
+Behavioural hints transmitted to clients in `tools/list`. They are advisory only:
+they do not enforce permissions or replace server-side authorization. See
 [`mcp_tool`](server.md#mcp_tool).
 
 ---

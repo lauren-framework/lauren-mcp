@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## Unreleased
+
+### Improved — Tool contracts
+
+- Validate complete structured tool results against declared JSON Schemas, including
+  nested constraints and format assertions; reject missing structured content and
+  malformed schema declarations.
+- Validate ToolAnnotations hint values as booleans and document that annotations are
+  advisory metadata, not an authorization boundary.
+
 ## [1.0.0] — 2026-06-14
 
 ### Added — Transports

@@ -119,23 +119,36 @@ except McpCallError as exc:
 
 ## 4. Output schema validation errors
 
-When `@mcp_tool(output_schema=...)` is declared, the dispatcher validates the
-tool's return value against the schema before sending the response. A validation
-failure raises `ValueError` which is also wrapped as an `INTERNAL_ERROR`:
+When `@mcp_tool(output_schema=...)` is declared, the framework validates the
+entire `structuredContent` object against that JSON Schema before sending the
+response. This includes nested object and array constraints, types, required
+properties, numeric/string bounds, enums, and supported format assertions.
+
+A malformed schema is rejected when the decorator is applied. If a tool returns
+missing structured content or a value that violates its schema, the dispatcher
+returns a JSON-RPC `INTERNAL_ERROR`; clients surface it as `McpCallError`.
 
 ```python
 from lauren_mcp import mcp_tool
 
-schema = {"type": "object", "required": ["count"], "properties": {"count": {"type": "integer"}}}
+schema = {
+    "type": "object",
+    "properties": {
+        "count": {"type": "integer", "minimum": 0},
+        "label": {"type": "string", "minLength": 1},
+    },
+    "required": ["count", "label"],
+    "additionalProperties": False,
+}
 
 @mcp_tool(output_schema=schema)
 async def stats(self) -> dict:
     """Return statistics."""
-    return {"count": 5, "total": 100}   # valid — "count" is present
+    return {"count": 5, "label": "active"}  # valid
 ```
 
-If the tool returns `{"wrong_key": 1}` the client will receive `McpCallError`
-with a message indicating the missing required field.
+Returning `{"count": "five", "label": ""}`, an undeclared property, or plain
+text without `structuredContent` fails validation.
 
 ---
 

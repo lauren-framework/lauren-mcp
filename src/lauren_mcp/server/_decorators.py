@@ -10,7 +10,7 @@ from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
 from lauren_mcp._server._context import McpToolContext
-from lauren_mcp._types import ToolAnnotations
+from lauren_mcp._types import ToolAnnotations, ToolStream
 
 from ._docstring import parse_docstring
 from ._meta import (
@@ -704,6 +704,11 @@ def _auto_output_schema(
     if annotation is None or annotation is inspect.Parameter.empty:
         return None
 
+    # ToolStream's yielded chunks are progress updates; its final display result
+    # is not necessarily structuredContent and must not receive an inferred schema.
+    if annotation is ToolStream or typing.get_origin(annotation) is ToolStream:
+        return None
+
     # Resolve string annotations (from __future__ import annotations)
     if isinstance(annotation, str):
         return None  # cannot resolve at decoration time; skip
@@ -792,6 +797,9 @@ def mcp_tool(
     """
 
     def decorator(fn: Callable[..., Any]) -> Callable[..., Any]:
+        if annotations is not None and not isinstance(annotations, ToolAnnotations):
+            raise TypeError("annotations must be a ToolAnnotations instance or None")
+
         (
             auto_name,
             auto_desc,
@@ -819,6 +827,16 @@ def mcp_tool(
                 hints = {}
             return_annotation = hints.get("return", inspect.Parameter.empty)
             resolved_output_schema = _auto_output_schema(return_annotation, structured_output)
+
+        if resolved_output_schema is not None:
+            from lauren_mcp._schema_validation import validate_schema
+
+            try:
+                validate_schema(resolved_output_schema)
+            except Exception as exc:
+                raise ValueError(
+                    f"Invalid output_schema for tool {resolved_name!r}: {exc}"
+                ) from exc
 
         # Backward-compat: also populate param_specs with raw FieldDescriptor /
         # _ParamSpec objects for code that still accesses meta.param_specs.

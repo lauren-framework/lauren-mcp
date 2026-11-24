@@ -27,6 +27,7 @@ classifiers = [
 dependencies = [
     "lauren>=1.7.0",
     "anyio>=4.0",
+    "jsonschema>=4.20",
 ]
 
 [project.optional-dependencies]

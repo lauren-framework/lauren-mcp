@@ -16,7 +16,7 @@ from lauren_mcp import (
     mcp_resource,
     mcp_tool,
 )
-from lauren_mcp._types import JsonRpcRequest
+from lauren_mcp._types import JsonRpcRequest, ToolStream
 from lauren_mcp.server._handlers import (
     make_resources_read_handler,
     make_tools_call_handler,
@@ -62,6 +62,21 @@ class TestToolAnnotations:
         assert a.destructiveHint is True
         assert a.idempotentHint is False
         assert a.openWorldHint is True
+
+    @pytest.mark.parametrize(
+        "field",
+        ["readOnlyHint", "destructiveHint", "idempotentHint", "openWorldHint"],
+    )
+    def test_annotation_hints_require_booleans(self, field):
+        with pytest.raises(TypeError, match=f"{field} must be a bool"):
+            ToolAnnotations(**{field: "yes"})
+
+    def test_decorator_rejects_untyped_annotations(self):
+        async def invalid(self) -> str:
+            return "invalid"
+
+        with pytest.raises(TypeError, match="ToolAnnotations"):
+            mcp_tool(annotations={"readOnlyHint": True})(invalid)
 
 
 class TestTagsAndMeta:
@@ -172,8 +187,71 @@ class TestStructuredOutput:
         entry = (await make_tools_list_handler([meta])(req("tools/list")))["tools"][0]
         assert entry["outputSchema"] == schema
 
-        with pytest.raises(ValueError, match="missing required"):
+        with pytest.raises(ValueError, match="does not satisfy"):
             await make_tools_call_handler(Server(), [meta])(req("tools/call", name="stats"))
+
+    async def test_nested_schema_constraints_are_enforced(self):
+        schema = {
+            "type": "object",
+            "properties": {
+                "profile": {
+                    "type": "object",
+                    "properties": {
+                        "email": {"type": "string", "format": "email"},
+                        "age": {"type": "integer", "minimum": 18},
+                    },
+                    "required": ["email", "age"],
+                },
+                "roles": {"type": "array", "items": {"type": "string"}},
+            },
+            "required": ["profile", "roles"],
+            "additionalProperties": False,
+        }
+
+        class Server:
+            @mcp_tool(output_schema=schema)
+            async def profile(self) -> dict:
+                return {
+                    "profile": {"email": "not-an-email", "age": 17},
+                    "roles": ["admin"],
+                }
+
+        meta = getattr(Server.profile, MCP_TOOL_META)
+        with pytest.raises(ValueError, match="does not satisfy"):
+            await make_tools_call_handler(Server(), [meta])(
+                req("tools/call", name="profile")
+            )
+
+    async def test_declared_schema_requires_structured_content(self):
+        class Server:
+            @mcp_tool(output_schema={"type": "object", "properties": {}})
+            async def plain_text(self) -> str:
+                return "not structured"
+
+        meta = getattr(Server.plain_text, MCP_TOOL_META)
+        with pytest.raises(ValueError, match="no structuredContent"):
+            await make_tools_call_handler(Server(), [meta])(
+                req("tools/call", name="plain_text")
+            )
+
+    def test_invalid_output_schema_rejected_at_decoration(self):
+        async def invalid(self) -> dict:
+            return {}
+
+        with pytest.raises(ValueError, match="Invalid output_schema"):
+            mcp_tool(output_schema={"type": "not-a-json-schema-type"})(invalid)
+
+    def test_tool_stream_does_not_infer_output_schema(self):
+        class Server:
+            @mcp_tool()
+            async def stream(self) -> ToolStream[str]:
+                async def chunks():
+                    yield "token"
+
+                return ToolStream(generator=chunks())
+
+        meta = getattr(Server.stream, MCP_TOOL_META)
+        assert meta.output_schema is None
 
 
 class TestBinaryResources:

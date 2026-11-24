@@ -388,7 +388,8 @@ async def _execute_with_interceptors(
             ic: Any = _ic,
             inner: Callable[[], Any] = _inner,
         ) -> dict[str, Any]:
-            return await ic.intercept(exec_ctx, McpCallHandler(inner))  # type: ignore[no-any-return]
+            result: dict[str, Any] = await ic.intercept(exec_ctx, McpCallHandler(inner))
+            return result
 
         current_fn = _make_next
 
@@ -674,22 +675,21 @@ def _coerce_tool_result(result: Any, meta: McpToolMeta) -> dict[str, Any]:
     return out
 
 
-def _validate_output(structured: dict[str, Any] | None, meta: McpToolMeta) -> None:
-    """Validate structured content against the declared output schema.
-
-    Only the cheap top-level checks are done in-process (type/object,
-    required keys) -- full JSON Schema validation would need an extra
-    dependency.
-    """
+def _validate_output(structured: Any, meta: McpToolMeta) -> None:
+    """Validate structured content against the complete declared JSON Schema."""
     schema = meta.output_schema
-    if schema is None or structured is None:
+    if schema is None:
         return
-    for key in schema.get("required", []):
-        if key not in structured:
-            raise ValueError(
-                f"Tool {meta.name!r} structured output is missing required "
-                f"key {key!r} declared in its outputSchema"
-            )
+    if structured is None:
+        raise ValueError(
+            f"Tool {meta.name!r} declared an outputSchema but returned no structuredContent"
+        )
+    if not isinstance(structured, dict):
+        raise ValueError(f"Tool {meta.name!r} structuredContent must be a JSON object")
+
+    from lauren_mcp._schema_validation import validate_output
+
+    validate_output(structured, schema, meta.name)
 
 
 def _serialize_chunk(chunk: Any) -> str:
