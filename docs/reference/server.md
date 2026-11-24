@@ -48,6 +48,9 @@ class MyService:
 
 ## `McpToolContext` capability methods
 
+`ElicitParams` and `ElicitResult` are the typed request and result models for
+elicitation. `ElicitParams.to_dict()` serializes the MCP wire field names.
+
 `ctx.list_roots() -> list[Root]` requests the current roots from a peer that
 advertised the `roots` capability. It raises `McpRootsNotAvailable` when the
 peer or transport does not support the request. Returned roots are untrusted
