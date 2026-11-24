@@ -20,6 +20,7 @@ from lauren_mcp._server._binding import CURRENT_BINDING, TransportBinding
 from lauren_mcp._server._dispatcher import McpDispatcher
 from lauren_mcp._server._propagate import _apply_server_metadata
 from lauren_mcp._server._registry import McpConnectionRegistry
+from lauren_mcp._server._subscriptions import ResourceSubscriptionManager
 from lauren_mcp._types import (
     ClientCapabilities,
     JsonRpcErrorResponse,
@@ -113,9 +114,11 @@ def mcp_ws_controller(
             self,
             dispatcher: McpDispatcher,
             registry: McpConnectionRegistry,
+            subscriptions: ResourceSubscriptionManager,
         ) -> None:
             self._dispatcher = dispatcher
             self._registry = registry
+            self._subscriptions = subscriptions
             # Per-connection state: True once the client has sent
             # ``notifications/initialized`` after the handshake.
             self._initialized: bool = False
@@ -152,6 +155,7 @@ def mcp_ws_controller(
                 headers=getattr(ws, "headers", None),
                 execution_context=None,  # WS is per-connection, not per-frame
                 session_id=None,
+                subscription_key=self._registry_key,
                 send_notification=_send_notification,
                 client_rpc=self._make_client_rpc(ws),
                 client_capabilities=None,  # filled in at initialize
@@ -162,6 +166,14 @@ def mcp_ws_controller(
                 await self._message_loop(ws)
             finally:
                 CURRENT_BINDING.reset(token)
+                self._cleanup_connection()
+
+        def _cleanup_connection(self) -> None:
+            """Release connection registrations and all resource subscriptions."""
+            if self._registry_key is not None:
+                self._subscriptions.unsubscribe_all(self._registry_key)
+                self._registry.unregister(self._registry_key)
+                self._registry_key = None
 
         def _make_client_rpc(self, ws: Any) -> Any:
             """Build the server-to-client request callable for this connection."""
@@ -305,9 +317,7 @@ def mcp_ws_controller(
         @on_disconnect
         async def handle_disconnect(self, ws: WebSocket) -> None:
             """Perform cleanup when the WebSocket connection closes."""
-            if self._registry_key is not None:
-                self._registry.unregister(self._registry_key)
-                self._registry_key = None
+            self._cleanup_connection()
             for fut in self._pending_client_rpcs.values():
                 if not fut.done():
                     fut.set_exception(RuntimeError("Connection closed"))
