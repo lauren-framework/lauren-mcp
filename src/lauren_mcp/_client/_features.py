@@ -150,6 +150,16 @@ class _ClientFeaturesMixin:
         return lambda: self._discard(self._resource_updated_handlers, handler)
 
     @staticmethod
+    def _invoke_all_no_args(handlers: list[Callable[[], Any]]) -> None:
+        for handler in list(handlers):
+            try:
+                result = handler()
+                if inspect.isawaitable(result):
+                    asyncio.ensure_future(result)
+            except Exception:
+                _logger.exception("MCP client: roots-change handler error")
+
+    @staticmethod
     def _discard(handlers: list[Any], handler: Any) -> None:
         import contextlib
 
@@ -186,7 +196,7 @@ class _ClientFeaturesMixin:
             uri = params.get("uri", "")
             self._invoke_all(self._resource_updated_handlers, uri)
         elif msg.method == "notifications/roots/list_changed":
-            self._invoke_all(self._roots_changed_handlers, None)
+            self._invoke_all_no_args(self._roots_changed_handlers)
 
     @staticmethod
     def _invoke_all(handlers: list[Any], arg: Any) -> None:
