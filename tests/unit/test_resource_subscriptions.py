@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 
 import pytest
@@ -124,3 +125,76 @@ async def test_unsubscribe_cleans_up_empty_uri(manager: ResourceSubscriptionMana
     assert manager.subscription_count == 0
     # URI should be completely gone
     assert manager.get_subscribers("file:///sole.txt") == {}
+
+
+
+async def test_notifications_are_scoped_to_the_subscribed_uri(
+    manager: ResourceSubscriptionManager,
+) -> None:
+    received_one: list[str] = []
+    received_two: list[str] = []
+
+    async def send_one(raw: str) -> None:
+        received_one.append(raw)
+
+    async def send_two(raw: str) -> None:
+        received_two.append(raw)
+
+    manager.subscribe("file:///one.txt", "session-one", send_one)
+    manager.subscribe("file:///two.txt", "session-two", send_two)
+
+    await manager.notify_updated("file:///one.txt")
+
+    assert len(received_one) == 1
+    assert received_two == []
+
+
+async def test_each_update_call_delivers_one_notification(
+    manager: ResourceSubscriptionManager,
+) -> None:
+    received: list[str] = []
+
+    async def send(raw: str) -> None:
+        received.append(raw)
+
+    manager.subscribe("file:///a.txt", "sess-1", send)
+    await manager.notify_updated("file:///a.txt")
+    await manager.notify_updated("file:///a.txt")
+
+    assert len(received) == 2
+
+
+async def test_concurrent_updates_for_same_uri_are_ordered(
+    manager: ResourceSubscriptionManager,
+) -> None:
+    first_send_started = asyncio.Event()
+    release_first_send = asyncio.Event()
+    events: list[str] = []
+
+    async def send(raw: str) -> None:
+        if not events:
+            events.append("first-start")
+            first_send_started.set()
+            await release_first_send.wait()
+            events.append("first-end")
+        else:
+            events.append("second-start")
+            events.append("second-end")
+
+    manager.subscribe("file:///ordered.txt", "sess-1", send)
+    first = asyncio.create_task(manager.notify_updated("file:///ordered.txt"))
+    await asyncio.wait_for(first_send_started.wait(), timeout=1.0)
+    second = asyncio.create_task(manager.notify_updated("file:///ordered.txt"))
+    await asyncio.sleep(0)
+
+    assert events == ["first-start"]
+
+    release_first_send.set()
+    await asyncio.gather(first, second)
+
+    assert events == [
+        "first-start",
+        "first-end",
+        "second-start",
+        "second-end",
+    ]
