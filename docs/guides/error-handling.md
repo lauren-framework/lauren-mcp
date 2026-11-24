@@ -251,9 +251,10 @@ client = McpServer.stdio(["python", "server.py"], max_retries=5)
 
 ## 9. Resource not found
 
-`read_resource()` passes the URI to the server. If no resource template matches,
-the server raises `ValueError` which becomes an `INTERNAL_ERROR` response. Some
-servers may also return a descriptive text payload rather than an error:
+`read_resource()` passes the URI to the server. If no registered resource URI or
+template matches, Lauren MCP returns the MCP `RESOURCE_NOT_FOUND` error (`-32002`).
+Applications can catch the internal `McpResourceNotFoundError` when adding custom
+transport-level handling:
 
 ```python
 try:
