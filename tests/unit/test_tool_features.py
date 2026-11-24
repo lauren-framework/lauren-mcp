@@ -16,7 +16,7 @@ from lauren_mcp import (
     mcp_resource,
     mcp_tool,
 )
-from lauren_mcp._types import JsonRpcRequest
+from lauren_mcp._types import JsonRpcRequest, ToolStream
 from lauren_mcp.server._handlers import (
     make_resources_read_handler,
     make_tools_call_handler,
@@ -239,6 +239,18 @@ class TestStructuredOutput:
             @mcp_tool(output_schema={"type": "not-a-json-schema-type"})
             async def invalid(self) -> dict:
                 return {}
+
+    def test_tool_stream_does_not_infer_output_schema(self):
+        class Server:
+            @mcp_tool()
+            async def stream(self) -> ToolStream[str]:
+                async def chunks():
+                    yield "token"
+
+                return ToolStream(generator=chunks())
+
+        meta = getattr(Server.stream, MCP_TOOL_META)
+        assert meta.output_schema is None
 
 
 class TestBinaryResources:
