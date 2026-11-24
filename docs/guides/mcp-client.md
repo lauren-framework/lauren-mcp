@@ -205,7 +205,8 @@ client = McpServer.ws(
 ### Dynamic registration
 
 Handlers registered after `connect()` can be removed by calling the returned
-unsubscribe function:
+unsubscribe function. The roots-change callback is invoked when the peer sends a
+`notifications/roots/list_changed` notification:
 
 ```python
 unsubscribe = client.on_progress(lambda p: ...)
@@ -213,6 +214,7 @@ unsubscribe()  # remove this handler
 
 client.on_log(my_log_handler)
 client.on_list_changed(my_cache_invalidator)
+client.on_roots_changed(refresh_roots_cache)
 ```
 
 All handler callbacks may be sync or async. Async callbacks are scheduled as
@@ -248,6 +250,9 @@ async def get_roots():
 client = McpServer.ws(url, roots=get_roots)
 # ... later, after paths change:
 await client.notify_roots_changed()
+
+# Optional callback for a roots-change notification received from the peer.
+unsubscribe = client.on_roots_changed(refresh_roots_cache)
 ```
 
 ---
