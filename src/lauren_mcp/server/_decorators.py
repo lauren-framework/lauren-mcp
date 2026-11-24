@@ -10,7 +10,7 @@ from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
 from lauren_mcp._server._context import McpToolContext
-from lauren_mcp._types import ToolAnnotations
+from lauren_mcp._types import ToolAnnotations, ToolStream
 
 from ._docstring import parse_docstring
 from ._meta import (
@@ -702,6 +702,11 @@ def _auto_output_schema(
         return None
 
     if annotation is None or annotation is inspect.Parameter.empty:
+        return None
+
+    # ToolStream's yielded chunks are progress updates; its final display result
+    # is not necessarily structuredContent and must not receive an inferred schema.
+    if annotation is ToolStream or typing.get_origin(annotation) is ToolStream:
         return None
 
     # Resolve string annotations (from __future__ import annotations)
