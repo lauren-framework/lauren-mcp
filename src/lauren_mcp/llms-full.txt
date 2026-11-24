@@ -1006,6 +1006,70 @@ as a list of role-tagged content blocks, ready to prepend to an LLM conversation
 
 ---
 
+
+---
+
+## Roots, logging, elicitation and sampling policy types
+
+### LogLevel
+
+```python
+LogLevel = Literal[
+    "debug", "info", "notice", "warning",
+    "error", "critical", "alert", "emergency",
+]
+```
+
+Typed severity accepted by `McpToolContext.log()`. The MCP level is retained on
+Python log records as `mcp_level` while mapping to Python logging numeric levels.
+
+### McpRootsNotAvailable
+
+Raised by `McpToolContext.list_roots()` when the peer did not advertise roots or
+the active transport cannot send server-initiated requests. Returned `Root` values
+are untrusted context, not filesystem authorization.
+
+### McpElicitationPolicyError
+
+Raised when an application policy rejects an elicitation request before it is sent
+to the connected MCP client.
+
+### McpSamplingPolicyError
+
+Raised when an application policy rejects a sampling request before it is sent
+to the connected MCP client.
+
+### SamplingEvent
+
+```python
+@dataclass(frozen=True)
+class SamplingEvent:
+    status: Literal["requested", "completed", "rejected", "failed"]
+    max_tokens: int
+    message_count: int
+    tool_count: int
+    elapsed_ms: float
+    model: str | None = None
+    error_type: str | None = None
+```
+
+Content-redacted sampling lifecycle event. It intentionally contains no prompt or
+response text; use it for metrics and audit metadata without capturing sensitive
+model input by default.
+
+### Capability policy hooks
+
+- `ctx.list_roots() -> list[Root]` requests client-provided roots after checking
+  negotiated capability support.
+- `ctx.elicit(message, response_type, policy=, validator=, timeout=)` supports
+  application policy, JSON Schema validation, custom result validation and timeout.
+  Do not use elicitation to request passwords, API keys or other credentials.
+- `ctx.sample(messages, policy=, observer=, timeout=)` lets an application inspect
+  typed `CreateMessageParams` before the client-mediated model request and observe
+  content-redacted `SamplingEvent` outcomes. Sampling is not a direct provider call.
+- `client.on_roots_changed(handler)` registers a callback for roots-change
+  notifications and returns an unsubscribe callable.
+
 ## Exceptions
 
 These exceptions are not in `__all__` but are commonly caught by callers:
