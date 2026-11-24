@@ -143,16 +143,19 @@ def mcp_resource(
     *,
     name: str | None = None,
     description: str | None = None,
+    title: str | None = None,
     mime_type: str | None = None,
-) -> Callable[[Callable], Callable]:
+    annotations: ResourceAnnotations | None = None,
+) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
 ```
 
 Method decorator that exposes a URI-addressable resource.
 
-URI template variables (`{item_id}`) are extracted and passed as string
-keyword arguments. URI variables are **always strings** — cast inside the
-method. Supports `{+param}` / `{param*}` multi-segment placeholders and a
-`{?p1,p2}` optional query-parameter suffix.
+A template without variables declares a static resource URI. URI template
+variables (`{item_id}`) are extracted and passed as keyword arguments after
+type coercion based on the method's annotations. Supports `{+param}` /
+`{param*}` multi-segment placeholders and a `{?p1,p2}` optional query-parameter
+suffix. `title` and `annotations` are included in `resources/list`.
 
 **Parameters**
 
@@ -161,7 +164,9 @@ method. Supports `{+param}` / `{param*}` multi-segment placeholders and a
 | `uri_template` | `str` | required | URI template (e.g. `"/items/{item_id}"`) |
 | `name` | `str \| None` | `None` | Resource name; defaults to method name |
 | `description` | `str \| None` | `None` | Description; defaults to docstring |
+| `title` | `str \| None` | `None` | Human-readable display title |
 | `mime_type` | `str \| None` | `None` | MIME type hint (e.g. `"application/json"`) |
+| `annotations` | `ResourceAnnotations \| None` | `None` | Resource audience and priority hints |
 
 **Return value conventions**
 
@@ -177,12 +182,30 @@ method. Supports `{+param}` / `{param*}` multi-segment placeholders and a
 ```python
 from lauren_mcp import mcp_resource
 
-@mcp_resource("/orders/{order_id}", mime_type="application/json")
+@mcp_resource(
+    "catalogue://summary",
+    name="catalogue_summary",
+    title="Catalogue summary",
+    description="A short overview of the catalogue.",
+    mime_type="text/plain",
+)
+async def catalogue_summary(self) -> str:
+    return "42 items are available."
+
+@mcp_resource(
+    "catalogue://orders/{order_id}",
+    name="get_order",
+    title="Order",
+    description="Return an order as JSON.",
+    mime_type="application/json",
+)
 async def get_order(self, order_id: str) -> str:
     """Return an order as a JSON string."""
     import json
     return json.dumps({"id": int(order_id), "status": "open"})
 ```
+
+An unknown URI returns the MCP `RESOURCE_NOT_FOUND` error (`-32002`).
 
 ---
 
