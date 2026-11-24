@@ -771,7 +771,10 @@ def make_tools_call_handler(
     get_tools = tools if callable(tools) else (lambda: tools)
 
     async def handler(req: JsonRpcRequest) -> dict[str, Any]:
-        from lauren_mcp._server._dispatcher import McpInvalidParamsError, McpResourceNotFoundError  # noqa: PLC0415
+        from lauren_mcp._server._dispatcher import (  # noqa: PLC0415
+            McpInvalidParamsError,
+            McpResourceNotFoundError,
+        )
 
         params: dict[str, Any] = req.params if isinstance(req.params, dict) else {}
         name = params.get("name")
