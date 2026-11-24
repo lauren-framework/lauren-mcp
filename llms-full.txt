@@ -1577,6 +1577,20 @@ validate_sampling_messages(msgs)  # passes — no tool use blocks
 
 ---
 
+### ElicitParams
+
+```python
+@dataclass
+class ElicitParams:
+    message: str
+    requested_schema: dict[str, Any] | None = None
+    requested_url: str | None = None
+    elicitation_id: str | None = None
+```
+
+Typed payload for `elicitation/create`; `to_dict()` maps snake_case attributes
+to MCP wire field names and rejects incompatible schema/URL requests.
+
 ### ElicitResult
 
 ```python
