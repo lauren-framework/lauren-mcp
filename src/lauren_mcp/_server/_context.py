@@ -17,6 +17,7 @@ from lauren_mcp._types import (
     ClientCapabilities,
     CreateMessageParams,
     CreateMessageResult,
+    ElicitParams,
     ElicitResult,
     McpElicitationNotAvailable,
     McpElicitationPolicyError,
@@ -502,6 +503,9 @@ class McpToolContext:
         max_tool_iterations: int = 10,
         policy: Callable[[CreateMessageParams], bool | Awaitable[bool]] | None = None,
         observer: Callable[[SamplingEvent], Any] | None = None,
+        response_policy: Callable[
+            [CreateMessageResult], bool | Awaitable[bool]
+        ] | None = None,
         timeout: float | None = None,
     ) -> Any:
         """Ask the connected MCP client to run an LLM call on our behalf.
@@ -626,6 +630,14 @@ class McpToolContext:
                 else await request
             )
             result = CreateMessageResult.from_dict(raw if isinstance(raw, dict) else {})
+            if response_policy is not None:
+                accepted = response_policy(result)
+                if inspect.isawaitable(accepted):
+                    accepted = await accepted
+                if accepted is False:
+                    raise McpSamplingPolicyError(
+                        "Sampling response rejected by application policy"
+                    )
             await emit("completed", model=result.model)
         except McpSamplingPolicyError as exc:
             await emit("rejected", error=exc)
@@ -677,10 +689,8 @@ class McpToolContext:
                 "The connected client did not advertise the 'elicitation' capability"
             )
 
-        params: dict[str, Any] = {"message": message}
         schema = build_elicitation_schema(response_type)
-        if schema is not None:
-            params["requestedSchema"] = schema
+        params = ElicitParams(message=message, requested_schema=schema).to_dict()
         if policy is not None:
             allowed = policy(message, schema)
             if inspect.isawaitable(allowed):
@@ -771,10 +781,10 @@ class McpToolContext:
 
         eid = elicitation_id if elicitation_id is not None else uuid.uuid4().hex
 
-        rpc_params: dict[str, Any] = {
-            "message": message,
-            "requestedUrl": url,
-            "elicitationId": eid,
-        }
+        rpc_params = ElicitParams(
+            message=message,
+            requested_url=url,
+            elicitation_id=eid,
+        ).to_dict()
         raw = await self._client_rpc("elicitation/create", rpc_params)
         return UrlElicitResult.from_dict(raw if isinstance(raw, dict) else {})
