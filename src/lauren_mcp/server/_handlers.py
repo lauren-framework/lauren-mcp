@@ -1119,7 +1119,10 @@ def make_resources_read_handler(
     get_resources = resources if callable(resources) else (lambda: resources)
 
     async def handler(req: JsonRpcRequest) -> dict[str, Any]:
-        from lauren_mcp._server._dispatcher import McpInvalidParamsError  # noqa: PLC0415
+        from lauren_mcp._server._dispatcher import (  # noqa: PLC0415
+            McpInvalidParamsError,
+            McpResourceNotFoundError,
+        )
 
         params: dict[str, Any] = req.params if isinstance(req.params, dict) else {}
         uri = params.get("uri", "")
