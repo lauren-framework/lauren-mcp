@@ -82,6 +82,7 @@ class _ClientFeaturesMixin:
         self._resource_updated_handlers: list[ResourceUpdatedHandler] = (
             [resource_updated_handler] if resource_updated_handler else []
         )
+        self._roots_changed_handlers: list[Callable[[], Awaitable[None] | None]] = []
         self._sampling_handler = sampling_handler
         self._elicitation_handler = elicitation_handler
         self._sampling_tools: bool = sampling_tools
@@ -128,6 +129,11 @@ class _ClientFeaturesMixin:
         """Register a handler for tool/resource/prompt ``list_changed``."""
         self._list_changed_handlers.append(handler)
         return lambda: self._discard(self._list_changed_handlers, handler)
+
+    def on_roots_changed(self, handler: Callable[[], Awaitable[None] | None]) -> Unsubscribe:
+        """Register a callback for roots/list_changed notifications."""
+        self._roots_changed_handlers.append(handler)
+        return lambda: self._discard(self._roots_changed_handlers, handler)
 
     def on_resource_updated(self, handler: ResourceUpdatedHandler) -> Unsubscribe:
         """Register a handler for ``notifications/resources/updated``.
@@ -179,6 +185,8 @@ class _ClientFeaturesMixin:
         elif msg.method == "notifications/resources/updated":
             uri = params.get("uri", "")
             self._invoke_all(self._resource_updated_handlers, uri)
+        elif msg.method == "notifications/roots/list_changed":
+            self._invoke_all(self._roots_changed_handlers, None)
 
     @staticmethod
     def _invoke_all(handlers: list[Any], arg: Any) -> None:
