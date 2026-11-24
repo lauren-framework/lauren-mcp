@@ -13,6 +13,7 @@ from typing import Any
 
 from lauren_mcp._server._binding import CURRENT_BINDING
 from lauren_mcp._server._context import LogLevelState, McpToolContext
+from lauren_mcp._server._dispatcher import McpInvalidParamsError, McpResourceNotFoundError
 from lauren_mcp._types import (
     BlobResource,
     EmbeddedResource,
@@ -771,11 +772,6 @@ def make_tools_call_handler(
     get_tools = tools if callable(tools) else (lambda: tools)
 
     async def handler(req: JsonRpcRequest) -> dict[str, Any]:
-        from lauren_mcp._server._dispatcher import (  # noqa: PLC0415
-            McpInvalidParamsError,
-            McpResourceNotFoundError,
-        )
-
         params: dict[str, Any] = req.params if isinstance(req.params, dict) else {}
         name = params.get("name")
         arguments = params.get("arguments") or {}
