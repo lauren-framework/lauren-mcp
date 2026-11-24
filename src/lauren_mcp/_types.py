@@ -118,6 +118,7 @@ class McpErrorCode(IntEnum):
     INTERNAL_ERROR = -32603
     REQUEST_CANCELLED = -32800
     CONTENT_TOO_LARGE = -32801
+    RESOURCE_NOT_FOUND = -32002
 
 
 # ---------------------------------------------------------------------------
