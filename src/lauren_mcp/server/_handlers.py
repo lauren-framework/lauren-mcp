@@ -388,9 +388,10 @@ async def _execute_with_interceptors(
             ic: Any = _ic,
             inner: Callable[[], Any] = _inner,
         ) -> dict[str, Any]:
-            return await ic.intercept(
+            result: dict[str, Any] = await ic.intercept(
                 exec_ctx, McpCallHandler(inner)
-            )  # type: ignore[no-any-return]
+            )
+            return result
 
         current_fn = _make_next
 
