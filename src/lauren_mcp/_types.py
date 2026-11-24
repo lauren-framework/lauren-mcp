@@ -268,6 +268,16 @@ class ToolAnnotations:
     idempotentHint: bool = False
     openWorldHint: bool = True
 
+    def __post_init__(self) -> None:
+        for name in (
+            "readOnlyHint",
+            "destructiveHint",
+            "idempotentHint",
+            "openWorldHint",
+        ):
+            if type(getattr(self, name)) is not bool:
+                raise TypeError(f"{name} must be a bool")
+
     def to_dict(self) -> dict[str, bool]:
         return {
             "readOnlyHint": self.readOnlyHint,
