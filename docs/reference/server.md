@@ -46,6 +46,29 @@ class MyService:
 
 ---
 
+## `McpToolContext` capability methods
+
+`ctx.list_roots() -> list[Root]` requests the current roots from a peer that
+advertised the `roots` capability. It raises `McpRootsNotAvailable` when the
+peer or transport does not support the request. Returned roots are untrusted
+context and never grant filesystem authorization.
+
+`ctx.log(level: LogLevel, message: str, data: dict[str, Any] | None = None)`
+emits an MCP `notifications/message` notification and a Python log record.
+`LogLevel` is the eight-value MCP severity literal: `debug`, `info`,
+`notice`, `warning`, `error`, `critical`, `alert`, or `emergency`.
+
+`ctx.elicit(message, response_type=None, *, policy=None, validator=None,
+timeout=None)` supports application policy checks, JSON Schema response
+validation, custom value validation and an optional RPC timeout.
+
+`ctx.sample(messages, *, policy=None, observer=None, timeout=None, ...)`
+supports an application policy over typed `CreateMessageParams`, optional
+content-redacted `SamplingEvent` lifecycle callbacks and an RPC timeout.
+Sampling remains a request to the connected MCP client, not a direct provider call.
+
+---
+
 ## `mcp_tool`
 
 ```python
