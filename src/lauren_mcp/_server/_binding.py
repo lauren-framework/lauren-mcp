@@ -1,7 +1,7 @@
 """Per-call transport binding — bridges transports and the singleton dispatcher.
 
 The :class:`McpDispatcher` is a SINGLETON shared by every connection, but tool
-context (headers, session id, notification channel, client RPC channel) is
+context (headers, session ID, subscription identity, notification channel, client RPC channel) is
 per-connection or per-request.  Transports set :data:`CURRENT_BINDING` before
 calling ``dispatcher.dispatch()``; because ``contextvars`` values propagate
 into tasks created afterwards, the handler task sees the right binding without
@@ -31,7 +31,7 @@ class TransportBinding:
     headers: Any = None
     execution_context: Any = None
     session_id: str | None = None
-    # Stable, unique identity used to scope subscriptions to a live connection/session.
+    # Opaque connection/session identity used only for subscription scoping.
     subscription_key: str | None = None
     send_notification: SendNotification | None = None
     client_rpc: ClientRpc | None = None
