@@ -485,6 +485,7 @@ class McpToolContext:
     # ------------------------------------------------------------------
 
     # Policies are supplied per call so each tool can enforce its own trust boundary.
+    # The response policy is evaluated before returning the client's completion.
 
     async def sample(
         self,
