@@ -2,13 +2,18 @@
 
 from __future__ import annotations
 
+import asyncio
+import logging
 from typing import Any
 
 import pytest
 
 from lauren_mcp import (
     McpElicitationNotAvailable,
+    McpElicitationPolicyError,
+    McpRootsNotAvailable,
     McpSamplingNotAvailable,
+    McpSamplingPolicyError,
     McpToolContext,
     mcp_tool,
 )
@@ -17,7 +22,7 @@ from lauren_mcp._server._context import (
     LogLevelState,
     build_elicitation_schema,
 )
-from lauren_mcp._types import ClientCapabilities, JsonRpcRequest
+from lauren_mcp._types import ClientCapabilities, JsonRpcRequest, Root
 from lauren_mcp.server._handlers import (
     make_context_factory,
     make_tools_call_handler,
@@ -186,6 +191,21 @@ class TestLogging:
         await ctx.info("nothing happens")  # must not raise
 
 
+    @pytest.mark.parametrize(
+        ("mcp_level", "python_level"),
+        [("debug", 10), ("info", 20), ("notice", 25), ("warning", 30),
+         ("error", 40), ("critical", 50), ("alert", 60), ("emergency", 70)],
+    )
+    async def test_mcp_levels_map_to_python_logging(self, caplog, mcp_level, python_level):
+        ctx = McpToolContext(tool_name="audit")
+        with caplog.at_level(1):
+            await ctx.log(mcp_level, "mapped")
+        record = next(record for record in caplog.records if record.message == "mapped")
+        assert record.levelno == python_level
+        assert record.mcp_level == mcp_level
+        assert record.mcp_logger == "audit"
+
+
 class TestSampling:
     async def test_sample_requires_client_rpc(self):
         ctx = McpToolContext(tool_name="t")
@@ -230,6 +250,42 @@ class TestSampling:
         assert params["messages"][0]["content"]["text"] == "Summarise this"
 
 
+    async def test_sampling_policy_allows_and_observer_is_redacted(self):
+        events = []
+        seen = []
+
+        async def rpc(method: str, params: dict) -> Any:
+            seen.append(params)
+            return {"role": "assistant", "content": {"type": "text", "text": "ok"}, "model": "test"}
+
+        def policy(params):
+            assert params.maxTokens == 32
+            assert params.messages[0].content.text == "private prompt"
+            return True
+
+        ctx = McpToolContext(
+            tool_name="t", _client_rpc=rpc,
+            _client_capabilities=ClientCapabilities(sampling={}),
+        )
+        result = await ctx.sample("private prompt", max_tokens=32, policy=policy, observer=events.append)
+        assert result.text == "ok"
+        assert [event.status for event in events] == ["requested", "completed"]
+        assert events[-1].model == "test"
+        assert not hasattr(events[-1], "prompt")
+        assert "private prompt" not in repr(events)
+
+    async def test_sampling_policy_rejects_before_client_rpc(self):
+        async def rpc(method: str, params: dict) -> Any:
+            raise AssertionError("policy must reject before RPC")
+
+        ctx = McpToolContext(
+            tool_name="t", _client_rpc=rpc,
+            _client_capabilities=ClientCapabilities(sampling={}),
+        )
+        with pytest.raises(McpSamplingPolicyError):
+            await ctx.sample("hello", max_tokens=10000, policy=lambda params: False)
+
+
 class TestElicitation:
     async def test_elicit_requires_capability(self):
         async def rpc(method: str, params: dict) -> Any:
@@ -262,6 +318,62 @@ class TestElicitation:
         assert calls[0][1]["requestedSchema"]["properties"]["value"] == {"type": "string"}
 
 
+    @pytest.mark.parametrize("action", ["decline", "cancel"])
+    async def test_elicitation_decline_and_cancel_are_typed(self, action):
+        async def rpc(method: str, params: dict) -> Any:
+            return {"action": action}
+
+        ctx = McpToolContext(
+            tool_name="t", _client_rpc=rpc,
+            _client_capabilities=ClientCapabilities(elicitation={}),
+        )
+        assert (await ctx.elicit("Continue?", bool)).action == action
+
+    async def test_elicitation_rejects_malformed_action(self):
+        async def rpc(method: str, params: dict) -> Any:
+            return {"action": "maybe"}
+
+        ctx = McpToolContext(
+            tool_name="t", _client_rpc=rpc,
+            _client_capabilities=ClientCapabilities(elicitation={}),
+        )
+        with pytest.raises(ValueError, match="action"):
+            await ctx.elicit("Continue?", bool)
+
+    async def test_elicitation_validates_returned_content(self):
+        async def rpc(method: str, params: dict) -> Any:
+            return {"action": "accept", "content": {"value": "not-bool"}}
+
+        ctx = McpToolContext(
+            tool_name="t", _client_rpc=rpc,
+            _client_capabilities=ClientCapabilities(elicitation={}),
+        )
+        with pytest.raises(Exception):
+            await ctx.elicit("Continue?", bool)
+
+    async def test_elicitation_policy_rejects(self):
+        async def rpc(method: str, params: dict) -> Any:
+            raise AssertionError("policy must reject before RPC")
+
+        ctx = McpToolContext(
+            tool_name="t", _client_rpc=rpc,
+            _client_capabilities=ClientCapabilities(elicitation={}),
+        )
+        with pytest.raises(McpElicitationPolicyError):
+            await ctx.elicit("Enter password", str, policy=lambda message, schema: False)
+
+    async def test_elicitation_timeout(self):
+        async def rpc(method: str, params: dict) -> Any:
+            await asyncio.Event().wait()
+
+        ctx = McpToolContext(
+            tool_name="t", _client_rpc=rpc,
+            _client_capabilities=ClientCapabilities(elicitation={}),
+        )
+        with pytest.raises(TimeoutError):
+            await ctx.elicit("Continue?", bool, timeout=0.01)
+
+
 class TestElicitationSchema:
     def test_none_means_approval_only(self):
         assert build_elicitation_schema(None) is None
@@ -279,3 +391,36 @@ class TestElicitationSchema:
     def test_unsupported_type_raises(self):
         with pytest.raises(ValueError, match="Unsupported"):
             build_elicitation_schema(list)
+
+
+class TestRoots:
+    async def test_list_roots_from_supported_peer(self):
+        async def rpc(method: str, params: dict) -> Any:
+            assert method == "roots/list"
+            assert params == {}
+            return {"roots": [{"uri": "file:///workspace", "name": "Workspace"}]}
+
+        ctx = McpToolContext(
+            tool_name="t", _client_rpc=rpc,
+            _client_capabilities=ClientCapabilities(roots={"listChanged": True}),
+        )
+        assert await ctx.list_roots() == [Root("file:///workspace", "Workspace")]
+
+    async def test_list_roots_rejects_unsupported_peer(self):
+        async def rpc(method: str, params: dict) -> Any:
+            return {"roots": []}
+
+        ctx = McpToolContext(tool_name="t", _client_rpc=rpc, _client_capabilities=ClientCapabilities())
+        with pytest.raises(McpRootsNotAvailable):
+            await ctx.list_roots()
+
+    async def test_list_roots_rejects_malformed_response(self):
+        async def rpc(method: str, params: dict) -> Any:
+            return {"roots": [{"name": "missing-uri"}]}
+
+        ctx = McpToolContext(
+            tool_name="t", _client_rpc=rpc,
+            _client_capabilities=ClientCapabilities(roots={}),
+        )
+        with pytest.raises(ValueError, match="Root.uri"):
+            await ctx.list_roots()
