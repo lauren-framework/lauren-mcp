@@ -514,7 +514,11 @@ class McpServerModule:
                     if not uri:
                         raise ValueError("resources/unsubscribe requires 'uri'")
                     binding = CURRENT_BINDING.get()
-                    session_key = (binding.session_id or "unknown") if binding else "unknown"
+                    session_key = binding.subscription_key if binding else None
+                    if session_key is None:
+                        raise ValueError(
+                            "resources/unsubscribe requires a connection-scoped push-capable transport"
+                        )
                     sub_mgr.unsubscribe(uri, session_key)
                     return {}
 
