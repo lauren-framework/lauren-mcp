@@ -680,7 +680,7 @@ class McpToolContext:
             params["requestedSchema"] = schema
         if policy is not None:
             allowed = policy(message, schema)
-            if asyncio.iscoroutine(allowed):
+            if inspect.isawaitable(allowed):
                 allowed = await allowed
             if allowed is False:
                 raise McpElicitationPolicyError("Elicitation rejected by application policy")
