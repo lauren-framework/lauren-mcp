@@ -31,6 +31,8 @@ class TransportBinding:
     headers: Any = None
     execution_context: Any = None
     session_id: str | None = None
+    # Stable, unique identity used to scope subscriptions to a live connection/session.
+    subscription_key: str | None = None
     send_notification: SendNotification | None = None
     client_rpc: ClientRpc | None = None
     client_capabilities: ClientCapabilities | None = None
