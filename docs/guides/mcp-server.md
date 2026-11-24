@@ -505,12 +505,13 @@ A static resource uses an exact URI. A templated resource extracts URI variables
 and passes them to the decorated method as keyword arguments.
 
 ```python
-from lauren_mcp import mcp_resource
+from lauren_mcp import mcp_resource, ResourceAnnotations
 
 @mcp_server("/mcp")
 class CatalogueServer:
     @mcp_resource(
         "catalogue://summary",
+        annotations=ResourceAnnotations(audience=["user"], priority=0.8),
         name="catalogue_summary",
         title="Catalogue summary",
         description="A concise overview of the current catalogue.",
