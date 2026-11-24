@@ -508,5 +508,5 @@ class TestStructuredOutputValidation:
         )
         server = FakeStructuredServer()
         handler = make_tools_call_handler(server, [meta])
-        with pytest.raises(ValueError, match="missing required key"):
+        with pytest.raises(ValueError, match="does not satisfy"):
             await handler(_req("tools/call", {"name": "missing_key_tool", "arguments": {}}))
