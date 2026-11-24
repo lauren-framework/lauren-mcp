@@ -63,6 +63,18 @@ class TestToolAnnotations:
         assert a.idempotentHint is False
         assert a.openWorldHint is True
 
+    @pytest.mark.parametrize(
+        "field",
+        ["readOnlyHint", "destructiveHint", "idempotentHint", "openWorldHint"],
+    )
+    def test_annotation_hints_require_booleans(self, field):
+        with pytest.raises(TypeError, match=f"{field} must be a bool"):
+            ToolAnnotations(**{field: "yes"})
+
+    def test_decorator_rejects_untyped_annotations(self):
+        with pytest.raises(TypeError, match="ToolAnnotations"):
+            mcp_tool(annotations={"readOnlyHint": True})
+
 
 class TestTagsAndMeta:
     async def test_tags_and_meta_in_list(self):
