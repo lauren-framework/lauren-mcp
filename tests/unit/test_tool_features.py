@@ -73,7 +73,6 @@ class TestToolAnnotations:
 
     def test_decorator_rejects_untyped_annotations(self):
         with pytest.raises(TypeError, match="ToolAnnotations"):
-
             @mcp_tool(annotations={"readOnlyHint": True})
             async def invalid(self) -> str:
                 return "invalid"
