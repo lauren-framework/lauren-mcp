@@ -185,9 +185,13 @@ class TestLogging:
         await ctx.error("kept")
         assert [p["params"]["level"] for p in sent] == ["warning", "error"]
 
-    async def test_no_transport_is_noop(self):
+    async def test_no_transport_logs_locally_without_protocol_notification(self, caplog):
         ctx = McpToolContext(tool_name="t")
-        await ctx.info("nothing happens")  # must not raise
+        with caplog.at_level(1):
+            await ctx.info("local-only message")
+        record = next(r for r in caplog.records if r.message == "local-only message")
+        assert record.mcp_level == "info"
+        assert record.mcp_logger == "t"
 
 
     @pytest.mark.parametrize(
@@ -272,6 +276,28 @@ class TestSampling:
         assert events[-1].model == "test"
         assert not hasattr(events[-1], "prompt")
         assert "private prompt" not in repr(events)
+
+    async def test_sampling_response_policy_rejects_and_observes(self):
+        events = []
+
+        async def rpc(method: str, params: dict) -> Any:
+            return {
+                "role": "assistant",
+                "content": {"type": "text", "text": "unsafe response"},
+                "model": "unapproved-model",
+            }
+
+        ctx = McpToolContext(
+            tool_name="t", _client_rpc=rpc,
+            _client_capabilities=ClientCapabilities(sampling={}),
+        )
+        with pytest.raises(McpSamplingPolicyError, match="response"):
+            await ctx.sample(
+                "hello",
+                response_policy=lambda result: result.model != "unapproved-model",
+                observer=events.append,
+            )
+        assert [event.status for event in events] == ["requested", "rejected"]
 
     async def test_sampling_policy_rejects_before_client_rpc(self):
         async def rpc(method: str, params: dict) -> Any:
