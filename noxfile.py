@@ -46,14 +46,14 @@ def tests(session: nox.Session) -> None:
     session.run("uv", "run", "--dev", "pytest", "-W", "ignore", *session.posargs, external=True)
 
 
-@nox.session(python=PRIMARY_PYTHON, name="tests_unit")
+@nox.session(python=False, name="tests_unit")
 def tests_unit(session: nox.Session) -> None:
     """Run only unit tests on the primary Python version."""
     _install_dev(session)
     session.run("uv", "run", "--dev", "pytest", "tests/unit", *session.posargs, external=True)
 
 
-@nox.session(python=PRIMARY_PYTHON, name="tests_integration")
+@nox.session(python=False, name="tests_integration")
 def tests_integration(session: nox.Session) -> None:
     """Run integration tests (installs 'all' extra)."""
     _install_all(session)
