@@ -596,7 +596,8 @@ class McpToolContext:
             if observer is None:
                 return
             event = SamplingEvent(
-                status=status, **event_base,
+                status=status,
+                **event_base,
                 elapsed_ms=(asyncio.get_running_loop().time() - started) * 1000,
                 model=model,
                 error_type=type(error).__name__ if error else None,
