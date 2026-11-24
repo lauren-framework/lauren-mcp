@@ -304,11 +304,23 @@ class McpConnectionRegistry:
 class ResourceSubscriptionManager:
     def subscribe(self, uri, session_key, send_fn) -> None: ...
     def unsubscribe(self, uri, session_key) -> None: ...
-    def unsubscribe_all(self, session_key) -> None: ...   # on disconnect
+    def unsubscribe_all(self, session_key) -> None: ...   # on disconnect/session termination
     def get_subscribers(self, uri) -> dict[str, SendFn]: ...
     async def notify_updated(self, uri: str) -> None: ...
-    # broadcasts notifications/resources/updated to all subscribers of uri
+    # one best-effort send attempt per subscriber; same-URI updates serialize
 ```
+
+
+Lifecycle rules:
+- WebSocket uses a unique connection key; disconnect removes every subscription.
+- Legacy SSE uses its session ID; closing the stream removes the session's subscriptions.
+- Streamable HTTP uses the MCP session ID; GET event-stream reconnects preserve subscriptions,
+  while DELETE terminates the session and removes them.
+- Stateless HTTP and stdio cannot subscribe because they have no persistent push channel.
+- Delivery is in-memory and best-effort: no retry, durable replay, or deduplication. Calls for
+  the same URI are serialized; repeated calls intentionally produce repeated notifications.
+- Keep the protocol `session_id` separate from the internal `subscription_key`; WebSocket
+  connections have no MCP HTTP session ID but still need a unique subscription identity.
 
 Trigger update notifications from within your server logic:
 
