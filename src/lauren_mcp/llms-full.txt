@@ -1070,6 +1070,32 @@ model input by default.
 - `client.on_roots_changed(handler)` registers a callback for roots-change
   notifications and returns an unsubscribe callable.
 
+### ElicitParams
+
+```python
+@dataclass
+class ElicitParams:
+    message: str
+    requested_schema: dict[str, Any] | None = None
+    requested_url: str | None = None
+    elicitation_id: str | None = None
+```
+
+Typed request payload for `elicitation/create`. Its `to_dict()` method maps
+Python attributes to MCP wire names and enforces schema/URL request exclusivity.
+
+### ElicitResult
+
+```python
+@dataclass
+class ElicitResult:
+    action: Literal["accept", "decline", "cancel"]
+    content: dict[str, Any] | None = None
+```
+
+Validated result for `elicitation/create`; malformed actions and non-object
+content are rejected.
+
 ## Exceptions
 
 These exceptions are not in `__all__` but are commonly caught by callers:
