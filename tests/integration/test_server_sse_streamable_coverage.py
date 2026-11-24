@@ -1546,6 +1546,7 @@ async def test_sse_stream_disconnect_cleans_resource_subscriptions() -> None:
 
     result = await ctrl.open_stream(_make_mock_request())
     session_id = next(iter(ctrl._sessions._sessions))
+
     async def send(raw: str) -> None:
         pass
 
