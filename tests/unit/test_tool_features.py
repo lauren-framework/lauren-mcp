@@ -184,8 +184,58 @@ class TestStructuredOutput:
         entry = (await make_tools_list_handler([meta])(req("tools/list")))["tools"][0]
         assert entry["outputSchema"] == schema
 
-        with pytest.raises(ValueError, match="missing required"):
+        with pytest.raises(ValueError, match="does not satisfy"):
             await make_tools_call_handler(Server(), [meta])(req("tools/call", name="stats"))
+
+    async def test_nested_schema_constraints_are_enforced(self):
+        schema = {
+            "type": "object",
+            "properties": {
+                "profile": {
+                    "type": "object",
+                    "properties": {
+                        "email": {"type": "string", "format": "email"},
+                        "age": {"type": "integer", "minimum": 18},
+                    },
+                    "required": ["email", "age"],
+                },
+                "roles": {"type": "array", "items": {"type": "string"}},
+            },
+            "required": ["profile", "roles"],
+            "additionalProperties": False,
+        }
+
+        class Server:
+            @mcp_tool(output_schema=schema)
+            async def profile(self) -> dict:
+                return {
+                    "profile": {"email": "not-an-email", "age": 17},
+                    "roles": ["admin"],
+                }
+
+        meta = getattr(Server.profile, MCP_TOOL_META)
+        with pytest.raises(ValueError, match="does not satisfy"):
+            await make_tools_call_handler(Server(), [meta])(
+                req("tools/call", name="profile")
+            )
+
+    async def test_declared_schema_requires_structured_content(self):
+        class Server:
+            @mcp_tool(output_schema={"type": "object", "properties": {}})
+            async def plain_text(self) -> str:
+                return "not structured"
+
+        meta = getattr(Server.plain_text, MCP_TOOL_META)
+        with pytest.raises(ValueError, match="no structuredContent"):
+            await make_tools_call_handler(Server(), [meta])(
+                req("tools/call", name="plain_text")
+            )
+
+    def test_invalid_output_schema_rejected_at_decoration(self):
+        with pytest.raises(ValueError, match="Invalid output_schema"):
+            @mcp_tool(output_schema={"type": "not-a-json-schema-type"})
+            async def invalid(self) -> dict:
+                return {}
 
 
 class TestBinaryResources:
