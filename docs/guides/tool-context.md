@@ -179,7 +179,9 @@ messages are delivered to the client as `notifications/message` JSON-RPC
 notifications in real time. Each MCP severity is also mapped to Python logging
 (`debug` 10, `info` 20, `notice` 25, `warning` 30, `error` 40,
 `critical` 50, `alert` 60, `emergency` 70). The original protocol severity
-remains available as the log record's `mcp_level` attribute.
+remains available as the log record's `mcp_level` attribute. If the active
+transport has no client-notification channel, the message is still written to
+Python logging and no MCP notification is attempted.
 
 ```python
 await ctx.debug(msg, *args)
@@ -251,8 +253,9 @@ typed `CreateMessageParams` before the request is sent. Reject by returning
 `False` or raising an application exception. Use it to cap `maxTokens`, allow-list
 model preferences, and inspect permitted message content.
 
-An optional `observer` receives `SamplingEvent` values for requested, completed,
-rejected, and failed outcomes. Events contain counts, token limits, elapsed time,
+An optional `response_policy(result)` validates the typed `CreateMessageResult`
+before it is returned to the tool. An optional `observer` receives `SamplingEvent`
+values for requested, completed, rejected, and failed outcomes. Events contain counts, token limits, elapsed time,
 model name and error type — **not prompt or response content**. Sampling is always
 mediated by the connected MCP client; Lauren does not call a model provider directly.
 
@@ -263,10 +266,14 @@ def allow_sampling(request) -> bool:
 async def record_sampling(event):
     metrics.increment("mcp.sampling", tags={"status": event.status})
 
+def allow_response(result) -> bool:
+    return result.model in APPROVED_MODELS
+
 result = await ctx.sample(
     "Summarise this document",
     max_tokens=512,
     policy=allow_sampling,
+    response_policy=allow_response,
     observer=record_sampling,
     timeout=30,
 )
