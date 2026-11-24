@@ -246,6 +246,22 @@ presumed destructive and open-world.
     confirmation flows, or guards. A tool marked `readOnlyHint=True` can still mutate
     state if its implementation does so.
 
+Use explicit metadata for destructive operations as well:
+
+```python
+@mcp_tool(
+    annotations=ToolAnnotations(
+        readOnlyHint=False,
+        destructiveHint=True,
+        idempotentHint=False,
+        openWorldHint=False,
+    ),
+)
+async def delete_item(self, item_id: str) -> dict:
+    """Permanently delete an item."""
+    ...
+```
+
 ### Return value coercion
 
 The handler normalises any return value into the `tools/call` wire format automatically:
