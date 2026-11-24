@@ -840,6 +840,34 @@ def validate_sampling_messages(messages: list[SamplingMessage]) -> None:
 
 
 @dataclass
+class ElicitParams:
+    """Typed request payload for standard and URL elicitation."""
+
+    message: str
+    requested_schema: dict[str, Any] | None = None
+    requested_url: str | None = None
+    elicitation_id: str | None = None
+
+    def __post_init__(self) -> None:
+        if not self.message:
+            raise ValueError("ElicitParams.message must be non-empty")
+        if self.requested_schema is not None and self.requested_url is not None:
+            raise ValueError("Elicitation cannot request both a schema and a URL")
+        if self.requested_url is not None and not self.elicitation_id:
+            raise ValueError("URL elicitation requires an elicitation_id")
+
+    def to_dict(self) -> dict[str, Any]:
+        params: dict[str, Any] = {"message": self.message}
+        if self.requested_schema is not None:
+            params["requestedSchema"] = self.requested_schema
+        if self.requested_url is not None:
+            params["requestedUrl"] = self.requested_url
+        if self.elicitation_id is not None:
+            params["elicitationId"] = self.elicitation_id
+        return params
+
+
+@dataclass
 class ElicitResult:
     """Result of an ``elicitation/create`` request."""
 
@@ -1093,6 +1121,7 @@ __all__ = [
     "McpSamplingPolicyError",
     "SamplingEvent",
     "validate_sampling_messages",
+    "ElicitParams",
     "ElicitResult",
     "McpElicitationNotAvailable",
     "McpElicitationPolicyError",
