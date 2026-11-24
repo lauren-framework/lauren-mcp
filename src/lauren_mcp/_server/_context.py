@@ -503,9 +503,7 @@ class McpToolContext:
         max_tool_iterations: int = 10,
         policy: Callable[[CreateMessageParams], bool | Awaitable[bool]] | None = None,
         observer: Callable[[SamplingEvent], Any] | None = None,
-        response_policy: Callable[
-            [CreateMessageResult], bool | Awaitable[bool]
-        ] | None = None,
+        response_policy: Callable[[CreateMessageResult], bool | Awaitable[bool]] | None = None,
         timeout: float | None = None,
     ) -> Any:
         """Ask the connected MCP client to run an LLM call on our behalf.
