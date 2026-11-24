@@ -75,7 +75,7 @@ schema.
 |---|---|---|---|
 | `name` | `str \| None` | `None` | Override tool name; defaults to method name |
 | `description` | `str \| None` | `None` | Override description; defaults to docstring |
-| `annotations` | `ToolAnnotations \| None` | `None` | Behavioural hints transmitted to clients |
+| `annotations` | `ToolAnnotations \| None` | `None` | Behavioural hints transmitted to clients; not an authorization boundary |
 | `timeout` | `float \| None` | `None` | Per-call deadline in seconds; exceeded calls fail with internal error |
 | `tags` | `frozenset[str] \| set[str] \| None` | `None` | Categorical tags in `tools/list` |
 | `meta` | `dict[str, Any] \| None` | `None` | Opaque metadata forwarded under `_meta` in `tools/list` |
