@@ -531,8 +531,17 @@ class McpToolContext:
         tool_choice:
             Forwarded to the client as-is.  ``None`` omits the field (client default).
         max_tool_iterations:
-            Advisory upper bound on agentic loop iterations passed to the client
-            in ``CreateMessageParams.metadata["max_tool_iterations"]``.  Default: 10.
+            Advisory upper bound on agentic loop iterations passed to the client.
+        policy:
+            Optional sync/async request policy over typed CreateMessageParams.
+            Return False to reject before sending the request.
+        response_policy:
+            Optional sync/async validator over the typed CreateMessageResult.
+            Return False to reject the response before returning it to the tool.
+        observer:
+            Optional callback receiving content-redacted SamplingEvent lifecycle data.
+        timeout:
+            Optional timeout in seconds for the client RPC.
 
         Raises
         ------
@@ -677,7 +686,9 @@ class McpToolContext:
 
         Raises :class:`McpElicitationNotAvailable` when the client did not
         advertise the ``elicitation`` capability or the transport cannot carry
-        server-to-client requests (legacy SSE).
+        server-to-client requests (legacy SSE). The optional policy runs before the
+        request; accepted content is checked against the generated JSON Schema and
+        then passed to the optional application validator. *timeout* bounds the RPC.
         """
         if self._client_rpc is None:
             raise McpElicitationNotAvailable(
