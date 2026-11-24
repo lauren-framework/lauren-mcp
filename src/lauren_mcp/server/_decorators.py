@@ -834,9 +834,7 @@ def mcp_tool(
             try:
                 validate_schema(resolved_output_schema)
             except Exception as exc:
-                raise ValueError(
-                    f"Invalid output_schema for tool {resolved_name!r}: {exc}"
-                ) from exc
+                raise ValueError(f"Invalid output_schema for tool {resolved_name!r}: {exc}") from exc
 
         # Backward-compat: also populate param_specs with raw FieldDescriptor /
         # _ParamSpec objects for code that still accesses meta.param_specs.
