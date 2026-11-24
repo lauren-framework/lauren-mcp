@@ -62,9 +62,11 @@ emits an MCP `notifications/message` notification and a Python log record.
 timeout=None)` supports application policy checks, JSON Schema response
 validation, custom value validation and an optional RPC timeout.
 
-`ctx.sample(messages, *, policy=None, observer=None, timeout=None, ...)`
-supports an application policy over typed `CreateMessageParams`, optional
+`ctx.sample(messages, *, policy=None, response_policy=None, observer=None,
+timeout=None, ...)` supports an application policy over typed
+`CreateMessageParams`, response validation over `CreateMessageResult`,
 content-redacted `SamplingEvent` lifecycle callbacks and an RPC timeout.
+`ElicitParams` and `ElicitResult` are the typed elicitation request/result models.
 Sampling remains a request to the connected MCP client, not a direct provider call.
 
 ---
