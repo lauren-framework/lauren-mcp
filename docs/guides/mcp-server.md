@@ -240,6 +240,12 @@ ToolAnnotations(
 Defaults follow the MCP specification's conservative assumptions: unknown tools are
 presumed destructive and open-world.
 
+!!! warning "Annotations are hints, not access control"
+    These values help clients and agents reason about tool behaviour. They do not
+    enforce permissions, prevent side effects, or replace server-side authorization,
+    confirmation flows, or guards. A tool marked `readOnlyHint=True` can still mutate
+    state if its implementation does so.
+
 ### Return value coercion
 
 The handler normalises any return value into the `tools/call` wire format automatically:
