@@ -26,7 +26,11 @@ def _cached_validator(schema_json: str) -> Any:
 
 
 def validate_schema(schema: dict[str, Any]) -> None:
-    """Validate a schema declaration, raising jsonschema.SchemaError if invalid."""
+    """Validate a schema declaration, raising when it is invalid or not JSON data."""
+    try:
+        json.dumps(schema, allow_nan=False)
+    except (TypeError, ValueError) as exc:
+        raise TypeError(f"output_schema must be JSON-serialisable: {exc}") from exc
     _build_validator(schema)
 
 
