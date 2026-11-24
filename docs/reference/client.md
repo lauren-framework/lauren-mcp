@@ -24,6 +24,11 @@ own parameters:
 | `sampling_handler` | `Callable[[dict], dict \| Awaitable[dict]] \| None` | `None` | Answers server-initiated `sampling/createMessage` requests; advertises `sampling` capability |
 | `elicitation_handler` | `Callable[[dict], dict \| Awaitable[dict]] \| None` | `None` | Answers server-initiated `elicitation/create` requests; advertises `elicitation` capability |
 
+After connecting, `client.on_roots_changed(handler)` registers a zero-argument
+callback for `notifications/roots/list_changed`. It returns an unsubscribe
+callable. The client-side `roots=` provider is queried when the server sends
+`roots/list`; it may be a static list or a sync/async provider.
+
 ---
 
 ### `McpServer.stdio`
