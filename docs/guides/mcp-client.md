@@ -246,11 +246,15 @@ Pass a callable (sync or async). Call `notify_roots_changed()` when the set
 changes so the server knows to re-fetch:
 
 ```python
+# Keep an explicit allow-list; do not publish the entire host filesystem.
+allowed_roots = [Root("file:///srv/app/workspaces/acme", name="Acme workspace")]
+
 async def get_roots():
-    return [Root(f"file://{path}") for path in await discover_paths()]
+    return list(allowed_roots)
 
 client = McpServer.ws(url, roots=get_roots)
-# ... later, after paths change:
+# ... after the authorized workspace set changes:
+allowed_roots[:] = [Root("file:///srv/app/workspaces/contoso", name="Contoso")]
 await client.notify_roots_changed()
 
 # Optional callback for a roots-change notification received from the peer.
