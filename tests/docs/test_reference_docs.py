@@ -434,11 +434,11 @@ class TestTypesReference:
         assert McpErrorCode.INTERNAL_ERROR == -32603
         assert McpErrorCode.REQUEST_CANCELLED == -32800
         assert McpErrorCode.CONTENT_TOO_LARGE == -32801
+        assert McpErrorCode.RESOURCE_NOT_FOUND == -32002
 
     def test_mcp_error_code_no_fictional_values(self):
         code_names = {e.name for e in McpErrorCode}
         assert "TOOL_NOT_FOUND" not in code_names
-        assert "RESOURCE_NOT_FOUND" not in code_names
 
     def test_parse_message_request(self):
         raw = '{"jsonrpc":"2.0","id":1,"method":"tools/list"}'
