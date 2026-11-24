@@ -19,10 +19,8 @@ SendFn = Callable[[str], Awaitable[None]]
 class ResourceSubscriptionManager:
     """SINGLETON that tracks per-URI subscriptions and broadcasts update events.
 
-    Session keys come from :class:`~lauren_mcp._server._registry.McpConnectionRegistry`
-    (WS transport) or the ``session_id`` allocated by
-    :class:`~lauren_mcp._server._session.SseSessionStore` /
-    :class:`~lauren_mcp._server._streamable.StreamableSessionStore`.
+    Session keys are opaque ``TransportBinding.subscription_key`` values:
+    connection-registry keys for WebSocket and protocol session IDs for HTTP.
     """
 
     def __init__(self) -> None:
