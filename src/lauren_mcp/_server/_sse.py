@@ -24,6 +24,7 @@ from lauren_mcp._server._dispatcher import McpDispatcher
 from lauren_mcp._server._propagate import _apply_server_metadata
 from lauren_mcp._server._registry import McpConnectionRegistry
 from lauren_mcp._server._session import SseSessionStore
+from lauren_mcp._server._subscriptions import ResourceSubscriptionManager
 from lauren_mcp._server._transport_security import (
     McpTransportSecurityGuard,
     TransportSecuritySettings,
@@ -100,10 +101,12 @@ def mcp_http_sse_controller(
             dispatcher: McpDispatcher,
             sessions: SseSessionStore,
             registry: McpConnectionRegistry,
+            subscriptions: ResourceSubscriptionManager,
         ) -> None:
             self._dispatcher = dispatcher
             self._sessions = sessions
             self._registry = registry
+            self._subscriptions = subscriptions
 
         @get("/sse")
         async def open_stream(self, request: Request) -> EventStream:
@@ -132,6 +135,7 @@ def mcp_http_sse_controller(
                         yield ServerSentEvent(event="message", data=payload)
                 finally:
                     self._registry.unregister(registry_key)
+                    self._subscriptions.unsubscribe_all(session_id)
                     self._sessions.remove(session_id)
 
             return EventStream(_generator())
@@ -209,6 +213,7 @@ def mcp_http_sse_controller(
                     headers=request.headers,
                     execution_context=execution_context,
                     session_id=session_id,
+                    subscription_key=session_id,
                     send_notification=_send_notification,
                     # Legacy SSE cannot carry server-to-client requests, so
                     # sampling / elicitation are unavailable on this transport.
