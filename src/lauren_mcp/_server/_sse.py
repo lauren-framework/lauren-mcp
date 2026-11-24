@@ -120,13 +120,13 @@ def mcp_http_sse_controller(
             registry_key = self._registry.register(_push)
 
             async def _generator() -> AsyncGenerator[ServerSentEvent, None]:
-                # First event: tell the client its session id so it can
-                # address subsequent POST requests.
-                yield ServerSentEvent(
-                    event="endpoint",
-                    data=json.dumps({"session_id": session_id}),
-                )
                 try:
+                    # First event: tell the client its session id so it can
+                    # address subsequent POST requests.
+                    yield ServerSentEvent(
+                        event="endpoint",
+                        data=json.dumps({"session_id": session_id}),
+                    )
                     while True:
                         payload = await queue.get()
                         if payload is None:
