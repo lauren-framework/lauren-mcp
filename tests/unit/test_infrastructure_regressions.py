@@ -24,6 +24,12 @@ class _RemoteClient(_McpBaseRemoteClient):
     async def _close_connection(self) -> None:
         return None
 
+    async def connect(self) -> None:
+        return None
+
+    async def close(self) -> None:
+        return None
+
 
 class TestRemotePendingRequests:
     def test_fail_all_pending_clears_registry(self) -> None:
