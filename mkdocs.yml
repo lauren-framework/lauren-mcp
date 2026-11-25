@@ -96,6 +96,7 @@ nav:
     - Tool Context: guides/tool-context.md
     - Per-Tool Decorators: guides/per-tool-decorators.md
     - Lauren Parameters: guides/tool-lauren-params.md
+  - Deployment: deployment.md
   - API Reference:
     - reference/index.md
     - Server API: reference/server.md

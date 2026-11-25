@@ -127,6 +127,11 @@ from lauren_mcp.server import build_openapi_server_class, RouteEntry
 Generates an `@mcp_server` class from an OpenAPI spec so any REST API becomes an MCP server
 without manual decoration.
 
+## Deployment
+
+See the [deployment guide](deployment.md) for Docker, Kubernetes, serverless and
+production security recommendations.
+
 ## Quick links
 
 - [Getting Started](getting-started/index.md)
