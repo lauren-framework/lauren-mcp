@@ -4,6 +4,7 @@
 **Date:** 2026-11-26
 **Scope:** `pyproject.toml`, `src/lauren_mcp/py.typed`, `src/lauren_mcp/**` (annotations), `CHANGELOG.md`, `README.md:84-95`, `docs/getting-started/installation.md`, `.github/workflows/tests.yml`, `noxfile.py`, `SECURITY.md` (new)
 **Priority:** P3 — nothing here breaks a fielded client or a live handshake, but two extras defects turn a modern-era onboarding step into a dead end, and the competitive claim in §8 stays unverifiable until this ships.
+**Issue:** _pending_
 
 ---
 

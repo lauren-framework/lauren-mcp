@@ -4,7 +4,7 @@
 **Date:** 2026-11-26
 **Scope:** `src/lauren_mcp/_client/` — `_protocol.py`, `_base_remote.py`, `_stdio.py`, `_streamable.py`, `_features.py`, `_factory.py`, plus a new `_cache.py`
 **Priority:** P2
-**Issue:** (filled in later by the index step — leave the line as is)
+**Issue:** _pending_
 
 ---
 

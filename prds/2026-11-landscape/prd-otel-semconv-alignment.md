@@ -3,6 +3,7 @@
 **Status:** Draft
 **Date:** 2026-11-26
 **Priority:** **P2**
+**Issue:** _pending_
 **Scope:** `src/lauren_mcp/_server/_otel.py` (whole module), `instrument_otel` in
 `src/lauren_mcp/server/_module.py`, the four server transports, the three remote clients
 under `src/lauren_mcp/_client/`, and the missing `otel` extra in `pyproject.toml`.

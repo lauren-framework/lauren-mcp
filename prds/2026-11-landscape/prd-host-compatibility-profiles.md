@@ -4,7 +4,7 @@
 **Date:** 2026-11-26
 **Scope:** `lauren-mcp` CLI (`cli/_commands.py`, `cli/__init__.py`), new `src/lauren_mcp/_hosts.py` registry, `docs/guides/host-profiles.md`, `mkdocs.yml`
 **Priority:** **P2** — this is tooling and documentation. It changes **no wire behaviour**: no MCP method, no capability default, no transport byte. A server already running behaves identically whether or not this ships. It is P2 rather than P1 because a wrong profile makes a host fail to *launch* the server (loud, one config file, diagnosable), whereas a wrong wire assumption — the P1 class in this set — fails *silently mid-session*. It is not P3 because all ten verified hosts differ structurally in filename, top-level key or transport, and those differences cannot be fixed by prose alone.
-**Issue:** (filled in later by the index script)
+**Issue:** _pending_
 
 ---
 
