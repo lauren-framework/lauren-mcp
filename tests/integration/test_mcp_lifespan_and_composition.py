@@ -82,6 +82,35 @@ class TestLifespan:
             resp = await _ws_call(ws, 1, "tools/call", {"name": "use_resource", "arguments": {}})
         assert resp["result"]["content"][0]["text"] == "shared-handle"
 
+        await app.shutdown()
+        await app.shutdown()
+        assert _lifespan_events == ["startup", "shutdown"]
+
+    async def test_invalid_context_rolls_back_lifespan_startup(self):
+        events: list[str] = []
+
+        @mcp_server("/mcp-invalid-lifespan")
+        class InvalidContextServer:
+            @mcp_lifespan
+            async def lifespan(self):
+                try:
+                    events.append("startup")
+                    yield "not-a-context-dict"
+                finally:
+                    events.append("shutdown")
+
+        @module(imports=[McpServerModule.for_root(InvalidContextServer, transport="ws")])
+        class InvalidContextApp:
+            pass
+
+        app = LaurenFactory.create(InvalidContextApp)
+        with pytest.raises(TypeError, match="must yield a dict"):
+            TestClient(app)
+
+        assert events == ["startup", "shutdown"]
+        await app.shutdown()
+        assert events == ["startup", "shutdown"]
+
     def test_decorator_rejects_non_generator(self):
         with pytest.raises(TypeError, match="async generator"):
 
