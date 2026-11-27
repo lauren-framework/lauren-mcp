@@ -1355,6 +1355,52 @@ async def test_search_handler():
 
 ---
 
+## Server resource lifecycle
+
+Use `@mcp_lifespan` for resources whose lifetime should match the MCP server, such as
+connection pools, SDK clients, or background workers. The hook is transport-independent:
+Lauren starts it after the MCP handlers and transport routes have been wired, and its
+context is made available to every tool through `McpToolContext.lifespan_context`.
+
+```python
+from lauren import LaurenFactory, module
+from lauren_mcp import McpServerModule, McpToolContext, mcp_server, mcp_tool
+from lauren_mcp.server import mcp_lifespan
+
+@mcp_server("/mcp")
+class CatalogueServer:
+    @mcp_lifespan
+    async def lifespan(self):
+        pool = await create_database_pool()
+        try:
+            yield {"pool": pool}
+        finally:
+            await pool.close()
+
+    @mcp_tool()
+    async def search(self, query: str, ctx: McpToolContext) -> list[dict]:
+        """Search the catalogue."""
+        return await ctx.lifespan_context["pool"].search(query)
+
+@module(imports=[McpServerModule.for_root(CatalogueServer, transport="streamable")])
+class AppModule:
+    pass
+
+app = LaurenFactory.create(AppModule)
+```
+
+The generator's code before `yield` is startup; the `finally` block is shutdown. Yield a
+dictionary (or `None`) to provide shared context. Startup runs only after MCP setup succeeds.
+If startup raises or yields an invalid context, the generator is closed immediately so
+partially acquired resources can be released. On normal shutdown, Lauren runs the
+registrar's `@pre_destruct` hook; repeated shutdown calls do not close the generator twice.
+
+For tests or an application managed manually, start the app through its normal lifecycle
+(e.g. the first `TestClient` request), then call `await app.shutdown()` during teardown.
+When hosted by an ASGI server, let the server's lifespan handling start and stop the app.
+
+---
+
 ## Common errors
 
 | Error | Cause | Fix |

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 
 from lauren import Scope, injectable, module, post_construct, pre_destruct
@@ -311,6 +312,37 @@ class McpServerModule:
                 self._log_state = LogLevelState(_log_level)
                 self._container: Any = None  # populated at @post_construct time via gc
 
+            async def _start_lifespan(self) -> None:
+                """Start the user lifespan hook, rolling back an invalid startup."""
+                if _lifespan_meta is None:
+                    return
+
+                gen = getattr(self._server_instance, _lifespan_meta.method_name)()
+                try:
+                    ctx = await gen.__anext__()
+                    if ctx is None:
+                        ctx = {}
+                    if not isinstance(ctx, dict):
+                        raise TypeError(
+                            "@mcp_lifespan generator must yield a dict (or None), "
+                            f"got {type(ctx).__name__}"
+                        )
+                except BaseException as startup_error:
+                    # A generator that yielded an invalid context is suspended
+                    # at its yield point. Close it before propagating the startup
+                    # error so resources acquired before yield cannot leak.
+                    try:
+                        await asyncio.shield(gen.aclose())
+                    except BaseException as cleanup_error:
+                        startup_error.add_note(
+                            "@mcp_lifespan cleanup also failed: "
+                            f"{type(cleanup_error).__name__}: {cleanup_error}"
+                        )
+                    raise
+
+                self._lifespan_gen = gen
+                self._lifespan_ctx = ctx
+
             @post_construct
             async def _register_handlers(self) -> None:
                 """Run the lifespan hook and wire all MCP handlers."""
@@ -336,20 +368,6 @@ class McpServerModule:
                             break
                 except Exception:  # noqa: BLE001
                     pass  # Container discovery failed — guards will be skipped
-
-                # --- lifespan ---
-                if _lifespan_meta is not None:
-                    gen = getattr(srv, _lifespan_meta.method_name)()
-                    ctx = await gen.__anext__()
-                    if ctx is None:
-                        ctx = {}
-                    if not isinstance(ctx, dict):
-                        raise TypeError(
-                            "@mcp_lifespan generator must yield a dict (or None), "
-                            f"got {type(ctx).__name__}"
-                        )
-                    self._lifespan_gen = gen
-                    self._lifespan_ctx = ctx
 
                 # --- catalog seeding (silent: broadcast fn not yet attached) ---
                 for t in _tools:
@@ -569,11 +587,16 @@ class McpServerModule:
                         )
                     instrument_dispatcher(dispatcher)
 
+                # Start user resources only after the MCP graph is fully wired.
+                # No later setup step can fail and strand a yielded generator.
+                await self._start_lifespan()
+
             @pre_destruct
             async def _shutdown(self) -> None:
                 """Close the lifespan generator at server shutdown."""
                 gen = self._lifespan_gen
                 self._lifespan_gen = None
+                self._lifespan_ctx = {}
                 if gen is not None:
                     await gen.aclose()
 
