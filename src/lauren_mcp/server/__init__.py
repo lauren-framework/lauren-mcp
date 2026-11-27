@@ -19,6 +19,7 @@ from ._decorators import (
     mcp_server,
     mcp_tool,
 )
+from ._health import HealthCheckResult, HealthStatus, McpHealthModule
 from ._memory_server import LaurenMcpMemoryServer
 from ._module import McpServerModule
 from ._openapi import RouteEntry, build_openapi_server_class
@@ -31,6 +32,9 @@ __all__ = [
     "mcp_lifespan",
     "mcp_completion",
     "McpServerModule",
+    "McpHealthModule",
+    "HealthCheckResult",
+    "HealthStatus",
     "McpToolNameCollision",
     "make_mount_binder",
     "make_proxy_binder",
