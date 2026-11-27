@@ -4,7 +4,7 @@
 **Date:** 2026-11-26
 **Scope:** `lauren-mcp` server layer (`server/_presentation.py` (new), `server/_meta.py`, `server/_decorators.py`, `server/_handlers.py`, `server/_module.py`), CLI (`cli/_commands.py`, `cli/__init__.py`), docs (`docs/guides/decorators.md`, `mkdocs.yml`), `llms-full.txt`
 **Priority:** P2 — not a conformance blocker. A server shipping today is *correct*; it is simply **invisible** to a host that budgets tool text, and it can hand a host 300 KB of output with no marker saying so. The wire stays byte-identical for existing clients unless a policy is declared, so regression risk is near zero — while the cost of doing nothing is slow and silent: a host-side heuristic summarises our tools for us, or drops them from its searchable set.
-**Cross-references:** `prd-host-compatibility-profiles.md` (host identity), `prd-result-envelope-caching.md` (list-result `_meta`), `prd-tool-transport-security.md` (shares §4.6's digest).
+**Cross-references:** `prd-host-compatibility-profiles.md` (host identity), `prd-result-envelope-caching.md` (list-result `_meta`), `prd-transport-security-hardening.md` (shares §4.4's digest).
 
 ---
 
@@ -179,7 +179,7 @@ def toolset_digest(entries: list[dict[str, Any]]) -> str:
 
 Emitted once on the result: `_meta["lauren-mcp/toolset"] = {"digest": "sha256:9c1f…", "count": 12, "bytes": 18422, "estTokens": 5120, "mode": "compact", "policy": "description_max_tokens=800;drop_parameter_descriptions=true"}`, plus `_meta["lauren-mcp/tools"]` mapping each name to its own digest.
 
-Three properties, each a test: **(i) the digest covers post-presentation bytes** — what the host receives, not what the author wrote. A pre-projection digest would stay constant while the compact rendering changed: exactly the substitution an attacker wants. This is the shared hook with `prd-tool-transport-security.md` — that PRD pins a description hash out-of-band, this one guarantees it is computed over the emitted projection; if the two land with different helper names, `toolset_digest` is canonical. **(ii) Per-tool digests** let a host invalidate one entry without discarding the other 39. **(iii) `policy` is inside the digest input**, so a policy change forces a re-fetch while a no-op redeploy does not.
+Three properties, each a test: **(i) the digest covers post-presentation bytes** — what the host receives, not what the author wrote. A pre-projection digest would stay constant while the compact rendering changed: exactly the substitution an attacker wants. This is the shared hook with `prd-transport-security-hardening.md` — that PRD pins a description hash out-of-band, this one guarantees it is computed over the emitted projection; if the two land with different helper names, `toolset_digest` is canonical. **(ii) Per-tool digests** let a host invalidate one entry without discarding the other 39. **(iii) `policy` is inside the digest input**, so a policy change forces a re-fetch while a no-op redeploy does not.
 
 ### 4.7 Truncating output — with a marker, and one class of bytes we never touch
 
@@ -276,4 +276,4 @@ footnote: est_tokens is chars/3.6 - approximate, +/-20% on mixed prose/JSON.
 
 **Inventory and source.** `_research/lauren-mcp-inventory.md` §6.1 (`:221-241`, `mcp_tool` surface `:225-226`). Verified lines: `server/_decorators.py:758-769`, `:782`, `:843-856`; `server/_meta.py:49-62`; `server/_handlers.py:563-577`, `:591`, `:627`, `:670-673`; `server/_docstring.py:144`; `server/_module.py:169-176`, `:367-386`, `:409`, `:440-441`; `_server/_binding.py:33`, `:36`, `:37`, `:40`; `cli/_commands.py:71-79`, `:95`, `:99-101`; `mkdocs.yml:97-98`.
 
-**Siblings.** `prd-host-compatibility-profiles.md`, `prd-result-envelope-caching.md`, `prd-tool-transport-security.md`. **Measurements** in §1.3 come from `uv run python` against `_decorators.mcp_tool`, `_handlers._tool_list_entry` and `_docstring.parse_docstring` on this worktree (compact JSON, `separators=(",", ":")`).
+**Siblings.** `prd-host-compatibility-profiles.md`, `prd-result-envelope-caching.md`, `prd-transport-security-hardening.md`. **Measurements** in §1.3 come from `uv run python` against `_decorators.mcp_tool`, `_handlers._tool_list_entry` and `_docstring.parse_docstring` on this worktree (compact JSON, `separators=(",", ":")`).
