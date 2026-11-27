@@ -1,0 +1,102 @@
+{
+  "1": {
+    "number": 61,
+    "title": "[P1] Dual-era protocol core",
+    "url": "https://github.com/lauren-framework/lauren-mcp/issues/61"
+  },
+  "2": {
+    "number": 62,
+    "title": "[P1] Modern-era discovery: `server/discover` and the per-request `_meta` envelope",
+    "url": "https://github.com/lauren-framework/lauren-mcp/issues/62"
+  },
+  "3": {
+    "number": 63,
+    "title": "[P1] Result envelope and list-result caching for `2026-07-28`",
+    "url": "https://github.com/lauren-framework/lauren-mcp/issues/63"
+  },
+  "4": {
+    "number": 64,
+    "title": "[P1] Multi Round-Trip Requests (`input_required`) for `tools/call`",
+    "url": "https://github.com/lauren-framework/lauren-mcp/issues/64"
+  },
+  "5": {
+    "number": 65,
+    "title": "[P1] Cancellation Conformance: Accept `notifications/cancelled`",
+    "url": "https://github.com/lauren-framework/lauren-mcp/issues/65"
+  },
+  "6": {
+    "number": 66,
+    "title": "[P1] Transport security hardening for HTTP and WebSocket MCP paths",
+    "url": "https://github.com/lauren-framework/lauren-mcp/issues/66"
+  },
+  "7": {
+    "number": 67,
+    "title": "[P2] Client-side feature parity across the four transports",
+    "url": "https://github.com/lauren-framework/lauren-mcp/issues/67"
+  },
+  "8": {
+    "number": 68,
+    "title": "[P2] Feature deprecation lifecycle registry",
+    "url": "https://github.com/lauren-framework/lauren-mcp/issues/68"
+  },
+  "9": {
+    "number": 69,
+    "title": "[P2] Sessionless Streamable HTTP transport",
+    "url": "https://github.com/lauren-framework/lauren-mcp/issues/69"
+  },
+  "10": {
+    "number": 70,
+    "title": "[P2] Authorization hardening: RFC 8707 resource indicators and CIMD registration",
+    "url": "https://github.com/lauren-framework/lauren-mcp/issues/70"
+  },
+  "11": {
+    "number": 71,
+    "title": "[P2] Multiplexed change notifications via `subscriptions/listen`",
+    "url": "https://github.com/lauren-framework/lauren-mcp/issues/71"
+  },
+  "12": {
+    "number": 72,
+    "title": "[P2] Tasks extension and the generic extension negotiation it rides on",
+    "url": "https://github.com/lauren-framework/lauren-mcp/issues/72"
+  },
+  "13": {
+    "number": 73,
+    "title": "[P2] JSON Schema 2020-12 alignment for emitted schemas",
+    "url": "https://github.com/lauren-framework/lauren-mcp/issues/73"
+  },
+  "14": {
+    "number": 74,
+    "title": "[P2] Tool presentation and the context budget",
+    "url": "https://github.com/lauren-framework/lauren-mcp/issues/74"
+  },
+  "15": {
+    "number": 75,
+    "title": "[P2] A conformance harness in CI, so protocol claims are measured rather than argued",
+    "url": "https://github.com/lauren-framework/lauren-mcp/issues/75"
+  },
+  "16": {
+    "number": 76,
+    "title": "[P2] Per-host MCP compatibility profiles",
+    "url": "https://github.com/lauren-framework/lauren-mcp/issues/76"
+  },
+  "17": {
+    "number": 77,
+    "title": "[P2] Publishing to the official MCP Registry",
+    "url": "https://github.com/lauren-framework/lauren-mcp/issues/77"
+  },
+  "18": {
+    "number": 78,
+    "title": "[P2] Align lauren-mcp's OpenTelemetry Output with the Current MCP Semantic Conventions",
+    "url": "https://github.com/lauren-framework/lauren-mcp/issues/78"
+  },
+  "19": {
+    "number": 79,
+    "title": "[P3] Packaging, typing and dependency-advice parity",
+    "url": "https://github.com/lauren-framework/lauren-mcp/issues/79"
+  },
+  "20": {
+    "number": 80,
+    "title": "[P3] Developer tooling on `lmcp inspect`: transcripts, scenarios, non-interactive runs",
+    "url": "https://github.com/lauren-framework/lauren-mcp/issues/80"
+  }
+}

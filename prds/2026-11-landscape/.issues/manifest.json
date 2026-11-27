@@ -1,0 +1,242 @@
+[
+  {
+    "n": 1,
+    "priority": "P1",
+    "prd": "prd-dual-era-protocol-core.md",
+    "title": "[P1] Dual-era protocol core",
+    "body_file": ".issues/drafts/01-dual-era-protocol-core.md",
+    "labels": [
+      "prd",
+      "p1"
+    ],
+    "bytes": 4332
+  },
+  {
+    "n": 2,
+    "priority": "P1",
+    "prd": "prd-server-discover-request-meta.md",
+    "title": "[P1] Modern-era discovery: `server/discover` and the per-request `_meta` envelope",
+    "body_file": ".issues/drafts/02-server-discover-request-meta.md",
+    "labels": [
+      "prd",
+      "p1"
+    ],
+    "bytes": 4096
+  },
+  {
+    "n": 3,
+    "priority": "P1",
+    "prd": "prd-result-envelope-caching.md",
+    "title": "[P1] Result envelope and list-result caching for `2026-07-28`",
+    "body_file": ".issues/drafts/03-result-envelope-caching.md",
+    "labels": [
+      "prd",
+      "p1"
+    ],
+    "bytes": 3597
+  },
+  {
+    "n": 4,
+    "priority": "P1",
+    "prd": "prd-mrtr-input-required.md",
+    "title": "[P1] Multi Round-Trip Requests (`input_required`) for `tools/call`",
+    "body_file": ".issues/drafts/04-mrtr-input-required.md",
+    "labels": [
+      "prd",
+      "p1"
+    ],
+    "bytes": 4637
+  },
+  {
+    "n": 5,
+    "priority": "P1",
+    "prd": "prd-cancellation-conformance.md",
+    "title": "[P1] Cancellation Conformance: Accept `notifications/cancelled`",
+    "body_file": ".issues/drafts/05-cancellation-conformance.md",
+    "labels": [
+      "prd",
+      "p1"
+    ],
+    "bytes": 4934
+  },
+  {
+    "n": 6,
+    "priority": "P1",
+    "prd": "prd-transport-security-hardening.md",
+    "title": "[P1] Transport security hardening for HTTP and WebSocket MCP paths",
+    "body_file": ".issues/drafts/06-transport-security-hardening.md",
+    "labels": [
+      "prd",
+      "p1"
+    ],
+    "bytes": 3817
+  },
+  {
+    "n": 7,
+    "priority": "P2",
+    "prd": "prd-client-parity.md",
+    "title": "[P2] Client-side feature parity across the four transports",
+    "body_file": ".issues/drafts/07-client-parity.md",
+    "labels": [
+      "prd",
+      "p2"
+    ],
+    "bytes": 6318
+  },
+  {
+    "n": 8,
+    "priority": "P2",
+    "prd": "prd-deprecation-lifecycle.md",
+    "title": "[P2] Feature deprecation lifecycle registry",
+    "body_file": ".issues/drafts/08-deprecation-lifecycle.md",
+    "labels": [
+      "prd",
+      "p2"
+    ],
+    "bytes": 4236
+  },
+  {
+    "n": 9,
+    "priority": "P2",
+    "prd": "prd-sessionless-http-transport.md",
+    "title": "[P2] Sessionless Streamable HTTP transport",
+    "body_file": ".issues/drafts/09-sessionless-http-transport.md",
+    "labels": [
+      "prd",
+      "p2"
+    ],
+    "bytes": 6008
+  },
+  {
+    "n": 10,
+    "priority": "P2",
+    "prd": "prd-oauth-resource-indicators-cimd.md",
+    "title": "[P2] Authorization hardening: RFC 8707 resource indicators and CIMD registration",
+    "body_file": ".issues/drafts/10-oauth-resource-indicators-cimd.md",
+    "labels": [
+      "prd",
+      "p2"
+    ],
+    "bytes": 5707
+  },
+  {
+    "n": 11,
+    "priority": "P2",
+    "prd": "prd-subscriptions-listen.md",
+    "title": "[P2] Multiplexed change notifications via `subscriptions/listen`",
+    "body_file": ".issues/drafts/11-subscriptions-listen.md",
+    "labels": [
+      "prd",
+      "p2"
+    ],
+    "bytes": 5072
+  },
+  {
+    "n": 12,
+    "priority": "P2",
+    "prd": "prd-tasks-extension.md",
+    "title": "[P2] Tasks extension and the generic extension negotiation it rides on",
+    "body_file": ".issues/drafts/12-tasks-extension.md",
+    "labels": [
+      "prd",
+      "p2"
+    ],
+    "bytes": 2671
+  },
+  {
+    "n": 13,
+    "priority": "P2",
+    "prd": "prd-json-schema-2020-12.md",
+    "title": "[P2] JSON Schema 2020-12 alignment for emitted schemas",
+    "body_file": ".issues/drafts/13-json-schema-2020-12.md",
+    "labels": [
+      "prd",
+      "p2"
+    ],
+    "bytes": 5811
+  },
+  {
+    "n": 14,
+    "priority": "P2",
+    "prd": "prd-tool-presentation-budget.md",
+    "title": "[P2] Tool presentation and the context budget",
+    "body_file": ".issues/drafts/14-tool-presentation-budget.md",
+    "labels": [
+      "prd",
+      "p2"
+    ],
+    "bytes": 5128
+  },
+  {
+    "n": 15,
+    "priority": "P2",
+    "prd": "prd-conformance-ci.md",
+    "title": "[P2] A conformance harness in CI, so protocol claims are measured rather than argued",
+    "body_file": ".issues/drafts/15-conformance-ci.md",
+    "labels": [
+      "prd",
+      "p2"
+    ],
+    "bytes": 5459
+  },
+  {
+    "n": 16,
+    "priority": "P2",
+    "prd": "prd-host-compatibility-profiles.md",
+    "title": "[P2] Per-host MCP compatibility profiles",
+    "body_file": ".issues/drafts/16-host-compatibility-profiles.md",
+    "labels": [
+      "prd",
+      "p2"
+    ],
+    "bytes": 5656
+  },
+  {
+    "n": 17,
+    "priority": "P2",
+    "prd": "prd-registry-publishing.md",
+    "title": "[P2] Publishing to the official MCP Registry",
+    "body_file": ".issues/drafts/17-registry-publishing.md",
+    "labels": [
+      "prd",
+      "p2"
+    ],
+    "bytes": 5583
+  },
+  {
+    "n": 18,
+    "priority": "P2",
+    "prd": "prd-otel-semconv-alignment.md",
+    "title": "[P2] Align lauren-mcp's OpenTelemetry Output with the Current MCP Semantic Conventions",
+    "body_file": ".issues/drafts/18-otel-semconv-alignment.md",
+    "labels": [
+      "prd",
+      "p2"
+    ],
+    "bytes": 2273
+  },
+  {
+    "n": 19,
+    "priority": "P3",
+    "prd": "prd-packaging-typing-parity.md",
+    "title": "[P3] Packaging, typing and dependency-advice parity",
+    "body_file": ".issues/drafts/19-packaging-typing-parity.md",
+    "labels": [
+      "prd",
+      "p3"
+    ],
+    "bytes": 7466
+  },
+  {
+    "n": 20,
+    "priority": "P3",
+    "prd": "prd-inspector-dev-tooling.md",
+    "title": "[P3] Developer tooling on `lmcp inspect`: transcripts, scenarios, non-interactive runs",
+    "body_file": ".issues/drafts/20-inspector-dev-tooling.md",
+    "labels": [
+      "prd",
+      "p3"
+    ],
+    "bytes": 4486
+  }
+]
