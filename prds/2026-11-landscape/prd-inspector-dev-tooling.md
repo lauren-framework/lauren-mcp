@@ -4,7 +4,7 @@
 **Date:** 2026-11-26
 **Scope:** `src/lauren_mcp/cli/_commands.py` (`inspect_cmd`), new `src/lauren_mcp/cli/_inspect/` package, `src/lauren_mcp/_client/` frame sink, `docs/reference/cli.md`
 **Priority:** P3
-**Issue:** _pending_
+**Issue:** [#80](https://github.com/lauren-framework/lauren-mcp/issues/80)
 
 ---
 

@@ -4,7 +4,7 @@
 **Date:** 2026-11-26  
 **Scope:** `src/lauren_mcp/_mcp_version.py`, `src/lauren_mcp/_era.py` (new), `src/lauren_mcp/_server/_handshake.py`, `src/lauren_mcp/_server/_dispatcher.py`, `src/lauren_mcp/_server/_streamable.py`, `src/lauren_mcp/server/_module.py`  
 **Priority:** P1 — `2026-07-28` makes `server/discover` a MUST (E-21) and removes `initialize` for modern peers, so a fielded modern client cannot complete one request against `lauren-mcp` 1.0.0.  
-**Issue:** _pending_
+**Issue:** [#61](https://github.com/lauren-framework/lauren-mcp/issues/61)
 
 ---
 

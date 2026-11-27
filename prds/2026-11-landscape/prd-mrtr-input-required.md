@@ -4,7 +4,7 @@
 **Date:** 2026-11-26
 **Scope:** `src/lauren_mcp/_server/_mrtr.py` (new), `_server/_context.py`, `_server/_binding.py`, `_server/_dispatcher.py`, `server/_handlers.py`, `_client/_factory.py`, `__init__.py`
 **Priority:** P1
-**Issue:** _pending_
+**Issue:** [#64](https://github.com/lauren-framework/lauren-mcp/issues/64)
 
 ---
 

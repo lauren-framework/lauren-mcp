@@ -4,7 +4,7 @@
 **Date:** 2026-11-26  
 **Scope:** `_server/_subscriptions.py`, `_server/_listen.py` (new), `_server/_streamable.py`, `_server/_dispatcher.py`, `_types.py`, `server/_module.py`, `_client/_base_remote.py`  
 **Priority:** P2  
-**Issue:** _pending_
+**Issue:** [#71](https://github.com/lauren-framework/lauren-mcp/issues/71)
 
 ---
 

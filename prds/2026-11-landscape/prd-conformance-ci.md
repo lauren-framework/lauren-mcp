@@ -4,7 +4,7 @@
 **Date:** 2026-11-26
 **Scope:** `tests/conformance/` (new), `src/lauren_mcp/conformance/` (new), `src/lauren_mcp/cli/{__init__,_commands}.py`, `noxfile.py`, `.github/workflows/tests.yml`, `pyproject.toml`, `docs/reference/cli.md`
 **Priority:** P2
-**Issue:** _pending_
+**Issue:** [#75](https://github.com/lauren-framework/lauren-mcp/issues/75)
 
 ---
 

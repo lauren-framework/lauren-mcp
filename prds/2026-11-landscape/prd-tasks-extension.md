@@ -4,7 +4,7 @@
 **Date:** 2026-11-26
 **Scope:** `_types.py` (capability maps), new `_extensions.py`, new `_server/_tasks.py`, `_server/_dispatcher.py`, `_server/_context.py`, `server/_handlers.py`, `server/_module.py`, `server/_decorators.py`
 **Priority:** P2
-**Issue:** _pending_
+**Issue:** [#72](https://github.com/lauren-framework/lauren-mcp/issues/72)
 
 ---
 

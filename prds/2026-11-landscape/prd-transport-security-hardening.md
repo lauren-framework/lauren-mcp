@@ -4,7 +4,7 @@
 **Date:** 2026-11-26  
 **Scope:** `_server/_transport_security.py`, `_server/_streamable.py`, `_server/_sse.py`, `_server/_ws.py`, `server/_module.py`, `server/_handlers.py`, `_server/_catalog.py`, `_client/_streamable.py`  
 **Priority:** P1 — the Streamable HTTP transport document carries a **MUST** for `Origin` validation (E-169b), and this repo ships the guard without attaching it: `TransportSecuritySettings` (`_transport_security.py:16`) and `McpTransportSecurityGuard` (`:77`) exist, but `grep -c transport_security src/lauren_mcp/server/_module.py` returns **0** and `mcp_ws_controller` has no such parameter. A mandated control is present in the tree and absent at runtime.  
-**Issue:** _pending_
+**Issue:** [#66](https://github.com/lauren-framework/lauren-mcp/issues/66)
 
 ---
 

@@ -4,7 +4,7 @@
 **Date:** 2026-11-26
 **Scope:** `lauren-mcp` server transports (`_server/_ws.py`, `_server/_stdio.py`, `_server/_streamable.py`), `_server/_dispatcher.py`, `_server/_context.py`, and `docs/guides/tool-context.md`
 **Priority:** P1
-**Issue:** _pending_
+**Issue:** [#65](https://github.com/lauren-framework/lauren-mcp/issues/65)
 
 ---
 

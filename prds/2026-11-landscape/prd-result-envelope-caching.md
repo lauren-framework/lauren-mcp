@@ -4,7 +4,7 @@
 **Date:** 2026-11-26  
 **Scope:** `_types.py`, `_server/_dispatcher.py`, `_server/_envelope.py` (new), `server/_decorators.py`, `server/_meta.py`, `server/_module.py`, `_client/_cache.py` (new), `_client/_base_remote.py`, `_client/_stdio.py`, `_client/_protocol.py`  
 **Priority:** P1 — `resultType` is a MUST on every `2026-07-28` result (E-27, E-232; VERSIONS-MATRIX §2 row `resultType`), so a modern client reads a key we never emit. That is the P1 test in the brief §4 — "we are non-conformant today" — not a missing nicety.  
-**Issue:** _pending_
+**Issue:** [#63](https://github.com/lauren-framework/lauren-mcp/issues/63)
 
 ---
 

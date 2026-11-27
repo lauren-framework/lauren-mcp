@@ -4,7 +4,7 @@
 **Date:** 2026-11-26  
 **Scope:** new `src/lauren_mcp/lifecycle.py`, `_server/_context.py`, `_server/_sse.py`, `_server/_streamable.py`, `server/_module.py`, `server/_handlers.py`, `_client/_features.py`, `_client/_factory.py`, `cli/_commands.py`, `scripts/generate_deprecation_table.py` (new), `docs/reference/deprecation-lifecycle.md` (generated)  
 **Priority:** P2 — no host stops talking to us and no MUST is violated; the cost is that users of `logging`, `roots`, `sampling`, `elicitation` and HTTP+SSE have no clock on their features and learn the `2026-07-28` deprecation from a blog post instead of from us (E-30, E-42).  
-**Issue:** _pending_
+**Issue:** [#68](https://github.com/lauren-framework/lauren-mcp/issues/68)
 
 ---
 

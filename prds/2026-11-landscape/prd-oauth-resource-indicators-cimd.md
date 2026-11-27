@@ -5,7 +5,7 @@
 **Scope:** `_client/_oauth.py`, `_client/_factory.py`, `_client/_cimd.py` (new), `_server/_streamable.py`,
 `_server/_auth.py` (new), `_client/__init__.py`, `_server/__init__.py`, `README.md`
 **Priority:** P2 — the audience-binding half is a security fix that applies today, but the exposure is conditional
-**Issue:** _pending_
+**Issue:** [#70](https://github.com/lauren-framework/lauren-mcp/issues/70)
 on deployment topology and no fielded peer breaks; the CIMD/DCR half is modern-era feature work (§1.4).
 **Era split:** one requirement is era-independent (§1.3.1); three are `2026-07-28`-only (§1.3.2).
 

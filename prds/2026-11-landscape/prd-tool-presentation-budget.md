@@ -4,7 +4,7 @@
 **Date:** 2026-11-26
 **Scope:** `lauren-mcp` server layer (`server/_presentation.py` (new), `server/_meta.py`, `server/_decorators.py`, `server/_handlers.py`, `server/_module.py`), CLI (`cli/_commands.py`, `cli/__init__.py`), docs (`docs/guides/decorators.md`, `mkdocs.yml`), `llms-full.txt`
 **Priority:** P2 — not a conformance blocker. A server shipping today is *correct*; it is simply **invisible** to a host that budgets tool text, and it can hand a host 300 KB of output with no marker saying so. The wire stays byte-identical for existing clients unless a policy is declared, so regression risk is near zero — while the cost of doing nothing is slow and silent: a host-side heuristic summarises our tools for us, or drops them from its searchable set.
-**Issue:** _pending_
+**Issue:** [#74](https://github.com/lauren-framework/lauren-mcp/issues/74)
 **Cross-references:** `prd-host-compatibility-profiles.md` (host identity), `prd-result-envelope-caching.md` (list-result `_meta`), `prd-transport-security-hardening.md` (shares §4.4's digest).
 
 ---

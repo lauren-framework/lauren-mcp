@@ -3,7 +3,7 @@
 **Status:** Draft
 **Date:** 2026-11-26
 **Priority:** **P2**
-**Issue:** _pending_
+**Issue:** [#73](https://github.com/lauren-framework/lauren-mcp/issues/73)
 **Scope:** `server/_schema.py`, the schema-emitting sites in `server/_decorators.py`, `_server/_context.py`, `server/_handlers.py`; new `server/_dialect.py`, `server/_validate.py`, public `schema.py`; the `jsonschema` extra in `pyproject.toml`
 
 ---

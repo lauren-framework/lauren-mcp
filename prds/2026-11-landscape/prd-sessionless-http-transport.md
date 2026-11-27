@@ -4,7 +4,7 @@
 **Date:** 2026-11-26
 **Scope:** `src/lauren_mcp/_server/_streamable.py`, `src/lauren_mcp/_server/_dispatcher.py`, `src/lauren_mcp/_server/_handshake.py`, `src/lauren_mcp/server/_module.py`, `src/lauren_mcp/_server/_event_store.py`
 **Priority:** P2
-**Issue:** _pending_
+**Issue:** [#69](https://github.com/lauren-framework/lauren-mcp/issues/69)
 
 ---
 

@@ -4,7 +4,7 @@
 **Date:** 2026-11-26
 **Scope:** `_mcp_version.py`, `_types.py`, `_server/{_dispatcher,_handshake,_context,_meta_envelope,_discover}.py`, `server/{_module,_handlers}.py`
 **Priority:** P1
-**Issue:** _pending_
+**Issue:** [#62](https://github.com/lauren-framework/lauren-mcp/issues/62)
 
 ---
 

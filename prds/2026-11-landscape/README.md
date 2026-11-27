@@ -22,38 +22,38 @@ Priority is the cost of *not* doing the work, not the size of the change. P1: a 
 
 ### 2.1 P1 - a peer cannot complete the conversation
 
-| # | Priority | PRD | Theme | Gap in one line | Key evidence |
+| # | Priority | PRD | Theme | Gap in one line | Key evidence · issue |
 |---|---|---|---|---|---|
-| 1 | P1 | [`prd-dual-era-protocol-core.md`](./prd-dual-era-protocol-core.md) | Protocol core | Only the legacy era is served: `initialize`-only handshake, closed version list, session-bound state, so a `2026-07-28` peer cannot connect | E-20, E-21, E-22 |
-| 2 | P1 | [`prd-server-discover-request-meta.md`](./prd-server-discover-request-meta.md) | Protocol core | No `server/discover` and no per-request `_meta` envelope, so a modern peer has nothing to negotiate against | E-20, E-21, E-30 |
-| 3 | P1 | [`prd-result-envelope-caching.md`](./prd-result-envelope-caching.md) | Protocol core | No `resultType`, `ttlMs` or `cacheScope` in any result (`grep -ril resultType src/` returns 0, E-232), so hosts cannot cache or date one | E-20, E-21, E-26 |
-| 4 | P1 | [`prd-mrtr-input-required.md`](./prd-mrtr-input-required.md) | Protocol core | `tools/call` is one-shot: a tool needing input mid-call cannot return `input_required` and resume | E-14, E-20, E-21 |
-| 5 | P1 | [`prd-cancellation-conformance.md`](./prd-cancellation-conformance.md) | Transports | `notifications/cancelled` has existed since the first schema, but the read loop is blocked by the call it should cancel, so no handler sees it | E-08, E-09, E-237 |
-| 6 | P1 | [`prd-transport-security-hardening.md`](./prd-transport-security-hardening.md) | Transports | `transport_security` is an opt-in keyword and nothing attaches it to the generated HTTP/SSE controllers | E-169b, E-169, E-160 |
+| 1 | P1 | [`prd-dual-era-protocol-core.md`](./prd-dual-era-protocol-core.md) | Protocol core | Only the legacy era is served: `initialize`-only handshake, closed version list, session-bound state, so a `2026-07-28` peer cannot connect | E-20, E-21, E-22 · [#61](https://github.com/lauren-framework/lauren-mcp/issues/61) |
+| 2 | P1 | [`prd-server-discover-request-meta.md`](./prd-server-discover-request-meta.md) | Protocol core | No `server/discover` and no per-request `_meta` envelope, so a modern peer has nothing to negotiate against | E-20, E-21, E-30 · [#62](https://github.com/lauren-framework/lauren-mcp/issues/62) |
+| 3 | P1 | [`prd-result-envelope-caching.md`](./prd-result-envelope-caching.md) | Protocol core | No `resultType`, `ttlMs` or `cacheScope` in any result (`grep -ril resultType src/` returns 0, E-232), so hosts cannot cache or date one | E-20, E-21, E-26 · [#63](https://github.com/lauren-framework/lauren-mcp/issues/63) |
+| 4 | P1 | [`prd-mrtr-input-required.md`](./prd-mrtr-input-required.md) | Protocol core | `tools/call` is one-shot: a tool needing input mid-call cannot return `input_required` and resume | E-14, E-20, E-21 · [#64](https://github.com/lauren-framework/lauren-mcp/issues/64) |
+| 5 | P1 | [`prd-cancellation-conformance.md`](./prd-cancellation-conformance.md) | Transports | `notifications/cancelled` has existed since the first schema, but the read loop is blocked by the call it should cancel, so no handler sees it | E-08, E-09, E-237 · [#65](https://github.com/lauren-framework/lauren-mcp/issues/65) |
+| 6 | P1 | [`prd-transport-security-hardening.md`](./prd-transport-security-hardening.md) | Transports | `transport_security` is an opt-in keyword and nothing attaches it to the generated HTTP/SSE controllers | E-169b, E-169, E-160 · [#66](https://github.com/lauren-framework/lauren-mcp/issues/66) |
 
 ### 2.2 P2 - conformance, parity and reach
 
-| # | Priority | PRD | Theme | Gap in one line | Key evidence |
+| # | Priority | PRD | Theme | Gap in one line | Key evidence · issue |
 |---|---|---|---|---|---|
-| 7 | P2 | [`prd-client-parity.md`](./prd-client-parity.md) | Protocol core | Event store, subscriptions and cancellation exist server-side, but the four client transports expose no matching surface | E-81, E-200, E-201 |
-| 8 | P2 | [`prd-deprecation-lifecycle.md`](./prd-deprecation-lifecycle.md) | Protocol core | Five of the six features `2026-07-28` deprecates ship with no signal, no sunset revision, no removal path | E-30, E-41, E-42 |
-| 9 | P2 | [`prd-sessionless-http-transport.md`](./prd-sessionless-http-transport.md) | Transports | Streamable HTTP still mints a session at `initialize`; there is no sessionless shape for deployments that need one | E-20, E-22, E-23 |
-| 10 | P2 | [`prd-oauth-resource-indicators-cimd.md`](./prd-oauth-resource-indicators-cimd.md) | Transports | OAuth is hand-rolled in two places, with no resource indicators and no client-ID metadata | E-170, E-171, E-172 |
-| 11 | P2 | [`prd-subscriptions-listen.md`](./prd-subscriptions-listen.md) | Notifications | The GET stream and `resources/subscribe` are legacy-era; the modern era replaces both with `subscriptions/listen` | E-23, E-28, E-41 |
-| 12 | P2 | [`prd-tasks-extension.md`](./prd-tasks-extension.md) | Notifications | An eight-minute tool runs inside one JSON-RPC request with nowhere to report progress and no task handle | E-25, E-53, E-30 |
-| 13 | P2 | [`prd-json-schema-2020-12.md`](./prd-json-schema-2020-12.md) | Schemas and tools | JSON Schema is built by hand rather than asked of Pydantic, so `2020-12` keywords and `$ref` handling drift from what a host validates | E-13, E-30, E-223 |
-| 14 | P2 | [`prd-tool-presentation-budget.md`](./prd-tool-presentation-budget.md) | Schemas and tools | The host now decides how much tool text exists (deferred search, 16,384-char descriptions, 10,000/25,000-token caps); we have no budget-aware presentation | E-191a, E-191b, E-191c |
-| 15 | P2 | [`prd-conformance-ci.md`](./prd-conformance-ci.md) | Tooling and conformance | No conformance measurement of any kind: every claim about our own protocol behaviour is an assertion with no number attached | E-75, E-76, E-55 |
-| 16 | P2 | [`prd-host-compatibility-profiles.md`](./prd-host-compatibility-profiles.md) | Ecosystem | `lmcp install` writes one config shape for ten hosts, and the server cannot ask what a host cannot do | E-191, E-195, E-198 |
-| 17 | P2 | [`prd-registry-publishing.md`](./prd-registry-publishing.md) | Ecosystem | The registry is live at 1.8.16 and everything consumes one `server.json` shape; we publish none | E-120, E-121, E-122 |
-| 18 | P2 | [`prd-otel-semconv-alignment.md`](./prd-otel-semconv-alignment.md) | Ecosystem | Traces are emitted, but attribute names predate the current MCP semantic conventions, so our spans do not group with others | E-180, E-181, E-182 |
+| 7 | P2 | [`prd-client-parity.md`](./prd-client-parity.md) | Protocol core | Event store, subscriptions and cancellation exist server-side, but the four client transports expose no matching surface | E-81, E-200, E-201 · [#67](https://github.com/lauren-framework/lauren-mcp/issues/67) |
+| 8 | P2 | [`prd-deprecation-lifecycle.md`](./prd-deprecation-lifecycle.md) | Protocol core | Five of the six features `2026-07-28` deprecates ship with no signal, no sunset revision, no removal path | E-30, E-41, E-42 · [#68](https://github.com/lauren-framework/lauren-mcp/issues/68) |
+| 9 | P2 | [`prd-sessionless-http-transport.md`](./prd-sessionless-http-transport.md) | Transports | Streamable HTTP still mints a session at `initialize`; there is no sessionless shape for deployments that need one | E-20, E-22, E-23 · [#69](https://github.com/lauren-framework/lauren-mcp/issues/69) |
+| 10 | P2 | [`prd-oauth-resource-indicators-cimd.md`](./prd-oauth-resource-indicators-cimd.md) | Transports | OAuth is hand-rolled in two places, with no resource indicators and no client-ID metadata | E-170, E-171, E-172 · [#70](https://github.com/lauren-framework/lauren-mcp/issues/70) |
+| 11 | P2 | [`prd-subscriptions-listen.md`](./prd-subscriptions-listen.md) | Notifications | The GET stream and `resources/subscribe` are legacy-era; the modern era replaces both with `subscriptions/listen` | E-23, E-28, E-41 · [#71](https://github.com/lauren-framework/lauren-mcp/issues/71) |
+| 12 | P2 | [`prd-tasks-extension.md`](./prd-tasks-extension.md) | Notifications | An eight-minute tool runs inside one JSON-RPC request with nowhere to report progress and no task handle | E-25, E-53, E-30 · [#72](https://github.com/lauren-framework/lauren-mcp/issues/72) |
+| 13 | P2 | [`prd-json-schema-2020-12.md`](./prd-json-schema-2020-12.md) | Schemas and tools | JSON Schema is built by hand rather than asked of Pydantic, so `2020-12` keywords and `$ref` handling drift from what a host validates | E-13, E-30, E-223 · [#73](https://github.com/lauren-framework/lauren-mcp/issues/73) |
+| 14 | P2 | [`prd-tool-presentation-budget.md`](./prd-tool-presentation-budget.md) | Schemas and tools | The host now decides how much tool text exists (deferred search, 16,384-char descriptions, 10,000/25,000-token caps); we have no budget-aware presentation | E-191a, E-191b, E-191c · [#74](https://github.com/lauren-framework/lauren-mcp/issues/74) |
+| 15 | P2 | [`prd-conformance-ci.md`](./prd-conformance-ci.md) | Tooling and conformance | No conformance measurement of any kind: every claim about our own protocol behaviour is an assertion with no number attached | E-75, E-76, E-55 · [#75](https://github.com/lauren-framework/lauren-mcp/issues/75) |
+| 16 | P2 | [`prd-host-compatibility-profiles.md`](./prd-host-compatibility-profiles.md) | Ecosystem | `lmcp install` writes one config shape for ten hosts, and the server cannot ask what a host cannot do | E-191, E-195, E-198 · [#76](https://github.com/lauren-framework/lauren-mcp/issues/76) |
+| 17 | P2 | [`prd-registry-publishing.md`](./prd-registry-publishing.md) | Ecosystem | The registry is live at 1.8.16 and everything consumes one `server.json` shape; we publish none | E-120, E-121, E-122 · [#77](https://github.com/lauren-framework/lauren-mcp/issues/77) |
+| 18 | P2 | [`prd-otel-semconv-alignment.md`](./prd-otel-semconv-alignment.md) | Ecosystem | Traces are emitted, but attribute names predate the current MCP semantic conventions, so our spans do not group with others | E-180, E-181, E-182 · [#78](https://github.com/lauren-framework/lauren-mcp/issues/78) |
 
 ### 2.3 P3 - differentiators that need P1 and P2 first
 
-| # | Priority | PRD | Theme | Gap in one line | Key evidence |
+| # | Priority | PRD | Theme | Gap in one line | Key evidence · issue |
 |---|---|---|---|---|---|
-| 19 | P3 | [`prd-packaging-typing-parity.md`](./prd-packaging-typing-parity.md) | Ecosystem | The differentiator is supply chain - two runtime dependencies, a Python floor matching CI, no upstream `mcp` dependency - and our own metadata fails that scrutiny in five places | E-105, E-106, E-109 |
-| 20 | P3 | [`prd-inspector-dev-tooling.md`](./prd-inspector-dev-tooling.md) | Tooling and conformance | `lmcp inspect` is a thin positional command; Inspector is at 2.16.0 with capabilities we neither drive nor test | E-165, E-166, E-222 |
+| 19 | P3 | [`prd-packaging-typing-parity.md`](./prd-packaging-typing-parity.md) | Ecosystem | The differentiator is supply chain - two runtime dependencies, a Python floor matching CI, no upstream `mcp` dependency - and our own metadata fails that scrutiny in five places | E-105, E-106, E-109 · [#79](https://github.com/lauren-framework/lauren-mcp/issues/79) |
+| 20 | P3 | [`prd-inspector-dev-tooling.md`](./prd-inspector-dev-tooling.md) | Tooling and conformance | `lmcp inspect` is a thin positional command; Inspector is at 2.16.0 with capabilities we neither drive nor test | E-165, E-166, E-222 · [#80](https://github.com/lauren-framework/lauren-mcp/issues/80) |
 
 ## 3. Theme to PRD map
 
@@ -132,4 +132,4 @@ Four tracks, one question each. Numbers are summary-table rows.
 - **Hosts are unverified.** Host behaviour comes from published documentation and configuration defaults, not from executing each host against this server. Where a PRD says a host defers tool definitions or caps a description length, read that as documented behaviour of a version, not a measured result. This is the weakest link; 16 is where it closes.
 - **Counts are dated, not given.** Numbers are attributed to `E-xxx` rows and should not be quoted without them. Where a June 2026 gap analysis disagrees, the register wins: it carries the citation.
 - **The PRDs are drafts.** All 20 carry `**Status:** Draft`; none is accepted, sequenced or costed.
-- **Issue:** _pending_ backfill later.
+- **Tracking.** Each PRD has exactly one issue on `lauren-framework/lauren-mcp`, labelled `prd` plus its priority (`p1`/`p2`/`p3`): #61-#80, one per summary row. The PRD header carries the link and section 2 repeats it next to the evidence IDs, so a requirement can be argued here and tracked there.

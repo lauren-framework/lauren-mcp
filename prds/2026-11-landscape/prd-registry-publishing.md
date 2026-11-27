@@ -4,7 +4,7 @@
 **Date:** 2026-11-26
 **Scope:** `src/lauren_mcp/cli/` (`__init__.py`, new `_registry.py`), `src/lauren_mcp/server/` (new `_manifest.py`), `pyproject.toml`
 **Priority:** P2
-**Issue:** _pending_
+**Issue:** [#77](https://github.com/lauren-framework/lauren-mcp/issues/77)
 
 ---
 
