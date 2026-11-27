@@ -72,7 +72,10 @@ from ._types import (
     validate_sampling_messages,
 )
 from .server import (
+    HealthCheckResult,
+    HealthStatus,
     LaurenMcpMemoryServer,
+    McpHealthModule,
     McpServerModule,
     McpToolNameCollision,
     RouteEntry,
@@ -92,6 +95,9 @@ __all__ = [
     "mcp_prompt",
     "mcp_lifespan",
     "McpServerModule",
+    "McpHealthModule",
+    "HealthCheckResult",
+    "HealthStatus",
     "McpServer",
     "McpClientProtocol",
     "McpCallError",
