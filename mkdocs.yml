@@ -89,6 +89,7 @@ nav:
     - Decorators in Depth: guides/decorators.md
     - Multiple Servers: guides/multiple-servers.md
     - Error Handling: guides/error-handling.md
+    - Health Checks: guides/health-checks.md
     - Testing: guides/testing.md
     - MCP Server (full): guides/mcp-server.md
     - MCP Client (full): guides/mcp-client.md
