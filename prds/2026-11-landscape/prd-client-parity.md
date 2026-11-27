@@ -114,7 +114,7 @@ Anchors: `M` = `server/_module.py`, `B` = `_client/_base_remote.py`, `S` = `_cli
 | **`notifications/cancelled`** | **no** | matches `$/cancelRequest`: `_server/_stdio.py:76`, `_server/_ws.py:39` | **no** | — (`E-237`, `N-10`) |
 | **`server/discover`** | **no** | — (`E-230`) | **no** | — |
 | **`subscriptions/listen`** | **no** | — (`E-231`) | **no** | — |
-| **`tasks/list|get|cancel|result`** | **no** | — (`E-235`) | **no** | — |
+| **`tasks/{list,get,cancel,result}`** | **no** | — (`E-235`) | **no** | — |
 | **`resultType`/`ttlMs`/`cacheScope`** | **no** | — (`E-232`…`E-234`) | **no** | — |
 | **`input_required` (MRTR)** | **no** | — (`E-236`) | **no** | — |
 | **SSE resumption (`last-event-id`)** | yes | `_server/_streamable.py`, `_server/_event_store.py` | **no** | — |

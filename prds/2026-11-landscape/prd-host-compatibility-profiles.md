@@ -363,20 +363,20 @@ under `src/lauren_mcp/_server/`, asserted in §2.
 
 | # | File:line | Change |
 |---|---|---|
-| 1 | `src/lauren_mcp/cli/_commands.py:283` | delegate to `_hosts.path_for(profile, scope)`; keep as legacy shim | |
-| 2 | `src/lauren_mcp/cli/_commands.py:288` | map to profile `claude-desktop` | |
-| 3 | `src/lauren_mcp/cli/_commands.py:298` | map to profile `cursor` | |
-| 4 | `src/lauren_mcp/cli/_commands.py:307` | error text generated from the registry | |
-| 5 | `src/lauren_mcp/cli/_commands.py:311` | `def _write_mcp_config(path, profile, document)`, merge logic unchanged | |
-| 6 | `src/lauren_mcp/cli/_commands.py:326` | `setdefault(profile.top_level_key, {})` | |
-| 7 | `src/lauren_mcp/cli/_commands.py:329-331` | `_hosts.stdio_block(spec)` so Zed/VS Code variants share one source | |
-| 8 | `src/lauren_mcp/cli/_commands.py:26` | unchanged; add sibling `--host-profile` | |
-| 9 | `src/lauren_mcp/cli/__init__.py:22` | add `app.command("hosts")(hosts)` and `app.command("init")(init_cmd)` after it | |
-| 10 | `src/lauren_mcp/server/_module.py:232-237` | apply `p.resources` / `p.prompts` / `p.resources_subscribe` when a profile is supplied | |
-| 11 | `src/lauren_mcp/server/_module.py:65` | unchanged; `host_profile` added as a sibling kwarg | |
-| 12 | `docs/reference/cli.md:70` | ten-host matrix pointer + legacy aliases | |
-| 13 | `examples/filesystem/README.md:126` | `lmcp init examples/filesystem/server.py --host <host>` + link | |
-| 14 | `mkdocs.yml:98` | insert `    - Agent Host Profiles: guides/host-profiles.md` before line 99 (`  - API Reference:`) | |
+| 1 | `src/lauren_mcp/cli/_commands.py:283` | delegate to `_hosts.path_for(profile, scope)`; keep as legacy shim |
+| 2 | `src/lauren_mcp/cli/_commands.py:288` | map to profile `claude-desktop` |
+| 3 | `src/lauren_mcp/cli/_commands.py:298` | map to profile `cursor` |
+| 4 | `src/lauren_mcp/cli/_commands.py:307` | error text generated from the registry |
+| 5 | `src/lauren_mcp/cli/_commands.py:311` | `def _write_mcp_config(path, profile, document)`, merge logic unchanged |
+| 6 | `src/lauren_mcp/cli/_commands.py:326` | `setdefault(profile.top_level_key, {})` |
+| 7 | `src/lauren_mcp/cli/_commands.py:329-331` | `_hosts.stdio_block(spec)` so Zed/VS Code variants share one source |
+| 8 | `src/lauren_mcp/cli/_commands.py:26` | unchanged; add sibling `--host-profile` |
+| 9 | `src/lauren_mcp/cli/__init__.py:22` | add `app.command("hosts")(hosts)` and `app.command("init")(init_cmd)` after it |
+| 10 | `src/lauren_mcp/server/_module.py:232-237` | apply `p.resources` / `p.prompts` / `p.resources_subscribe` when a profile is supplied |
+| 11 | `src/lauren_mcp/server/_module.py:65` | unchanged; `host_profile` added as a sibling kwarg |
+| 12 | `docs/reference/cli.md:70` | ten-host matrix pointer + legacy aliases |
+| 13 | `examples/filesystem/README.md:126` | `lmcp init examples/filesystem/server.py --host <host>` + link |
+| 14 | `mkdocs.yml:98` | insert `    - Agent Host Profiles: guides/host-profiles.md` before line 99 (`  - API Reference:`) |
 
 ---
 

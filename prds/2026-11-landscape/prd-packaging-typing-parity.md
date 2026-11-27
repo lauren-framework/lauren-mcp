@@ -256,15 +256,14 @@ missing is the dependency dimension:
 |---|---|---|---|
 | `floor` | py3.11 | `lauren==1.7.0`, `anyio==4.0` | unit suite passes → declared floors are real (§4.1) |
 | `ceiling` | py3.14 | unpinned latest | unit suite passes → "no upper bound" is a tested claim |
-
 | `prerelease` | py3.13 | `--pre` for both | non-blocking early warning — the substitute for an upper bound |
 | `extras` | py3.12 | each extra in isolation + import probe | no `does not provide the extra`; each guard raises when its dep is absent |
 | `typing` | py3.12 | wheel + `mypy --strict tests/typing/` | §4.2 holds for a consumer, not just for us |
 | `wheel-contents` | py3.12 | `nox -s build` + zipfile assertions | `py.typed`, `llms-full.txt` in; `prds/`, `llms.txt` out |
 
-The `extras` job would have caught §1.2 on the day it landed:
-
-```
+The `extras` job would have caught §1.2 on the day it landed: it installs each extra in
+isolation and then asserts that the guarded import succeeds, so an extra with no matching entry in
+`[project.optional-dependencies]` fails the job instead of failing a user's first `pip install`.
 
 ### 4.5 Changelog and versioning policy, tied to the protocol-era work
 

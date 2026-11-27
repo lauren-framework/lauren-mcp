@@ -9,16 +9,6 @@ Today a tool that needs something from the user **blocks inside a single `tools/
 nested server→client JSON-RPC request. The two entry points are `McpToolContext.sample()` and
 `McpToolContext.elicit()`, and both refuse to run without a handshake-era capability map:
 
-```python
-# src/lauren_mcp/_server/_context.py  lines 486-492
-        if self._client_rpc is None:
-            raise McpSamplingNotAvailable("This transport cannot deliver server-to-client requests")
-        caps = self._client_capabilities
-        if caps is None or caps.sampling is None:
-            raise McpSamplingNotAvailable(
-                "The connected client did not advertise the 'sampling' capability"
-            )
-
 ## Goals
 
 1. A tool can declare "I need input" and return a protocol-valid `tools/call` result containing
@@ -58,6 +48,8 @@ the definition, not an interpretation.
       `requestState` the next `tools/call` accepts (`test_result_shape_matches_schema`).
 - [ ] `python -c "from lauren_mcp import McpInputRequired, MrtrStateCodec"` exits 0.
 - [ ] `pytest tests/ -q` shows no new failures against the pre-change baseline.
+
+---
 
 ## Acceptance criteria
 
